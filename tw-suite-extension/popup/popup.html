@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>TW Suite</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <div class="title">TW Suite (PT)</div>
+      <div class="badge" id="enabledBadge">0 enabled</div>
+    </header>
+
+    <div class="actions">
+      <button id="enableAll">Enable all</button>
+      <button id="disableAll">Disable all</button>
+      <button id="reloadTab">Reload tab</button>
+    </div>
+
+    <div id="list" class="list"></div>
+
+    <footer>
+      <div class="hint">Toggles apply on reload (simple & robust).</div>
+    </footer>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

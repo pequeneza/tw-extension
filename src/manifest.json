@@ -18,7 +18,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["modules/*.js"],
+      "resources": ["modules/*.js", "content/overlay.js"],
       "matches": ["https://*.tribalwars.com.pt/*"]
     }
   ]

@@ -61,11 +61,13 @@ export default defineConfig({
     rollupOptions: {
       input: {
         popup: resolve(__dirname, "src/popup/popup.html"),
-        router: resolve(__dirname, "src/content/router.ts")
+        router: resolve(__dirname, "src/content/router.ts"),
+        overlay: resolve(__dirname, "src/content/overlay.entry.tsx")
       },
       output: {
         entryFileNames: (chunk) => {
           if (chunk.name === "router") return "content/router.js";
+          if (chunk.name === "overlay") return "content/overlay.js";
           return "assets/[name]-[hash].js";
         },
         chunkFileNames: "assets/[name]-[hash].js",

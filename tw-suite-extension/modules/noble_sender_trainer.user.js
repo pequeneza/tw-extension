@@ -34,6 +34,42 @@
     st.textContent = cssText;
     document.head.appendChild(st);
   }
+    // ────────────────────────────────────────────────
+  // Integration: WH Balancer manual locks (coords)
+  // Reads: localStorage["tm_whbalancer_manual_locks_coords_v1"]
+  // ────────────────────────────────────────────────
+  const WH_LOCKS_KEY = "tm_whbalancer_manual_locks_coords_v1";
+
+  function whLoadCoordLocks() {
+    try {
+      const raw = localStorage.getItem(WH_LOCKS_KEY);
+      if (!raw) return {};
+      const obj = JSON.parse(raw);
+      return obj && typeof obj === "object" ? obj : {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function whNormalizeCoord(input) {
+    const m = String(input || "").match(/(\d{1,3})\|(\d{1,3})/);
+    if (!m) return null;
+    return `${parseInt(m[1], 10)}|${parseInt(m[2], 10)}`;
+  }
+
+  // Returns { wood:boolean, stone:boolean, iron:boolean } or null
+  function whGetLockForCoord(coord) {
+    const key = whNormalizeCoord(coord);
+    if (!key) return null;
+    const locks = whLoadCoordLocks();
+    const lock = locks[key];
+    if (!lock) return null;
+    return {
+      wood: !!lock.wood,
+      stone: !!lock.stone, // WH "stone" == Noble "clay"
+      iron: !!lock.iron
+    };
+  }
 
   const LANG = {
     title: "Recrutar Nobres",
@@ -438,8 +474,27 @@
       let sendC = Math.min(src.clay, remainingC, capacity - sendW);
       let sendI = Math.min(src.iron, remainingI, capacity - sendW - sendC);
 
-      const total = sendW + sendC + sendI;
-      if (total < 800) continue;
+      // WH Balancer manual locks apply to OUTPUT (source), not INPUT (target).
+      // Mapping: WH "stone" == Noble "clay"
+      const srcLock = whGetLockForCoord(src.coord);
+
+      if (srcLock) {
+        log(
+          `[WH Lock] source.coord=${src.coord} | wood=${srcLock.wood ? "LOCK" : "ok"} | clay=${srcLock.stone ? "LOCK" : "ok"} | iron=${srcLock.iron ? "LOCK" : "ok"}`,
+          "warn"
+        );
+      }
+
+      if (srcLock?.wood) sendW = 0;
+      if (srcLock?.stone) sendC = 0;
+      if (srcLock?.iron) sendI = 0;
+
+      // Recompute total after locks
+      const totalAfterLock = sendW + sendC + sendI;
+      if (totalAfterLock < 800) {
+        log(`WH lock (ou pouco recurso) em ${src.coord} → skip (total=${totalAfterLock})`, "warn");
+        continue;
+      }
 
       log(`Tentando enviar de ${src.name} (${src.coord}): ${formatNum(sendW)}/${formatNum(sendC)}/${formatNum(sendI)}`, "info");
 

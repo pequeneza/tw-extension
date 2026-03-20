@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "xBot 1.0",
+  "version": "1.0.0",
+  "description": "Bundle of TribalWars PT helpers with per-module toggles (popup). Injects scripts into page context to preserve original logic.",
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "xBot"
+  },
+  "permissions": ["storage", "tabs"],
+  "host_permissions": ["https://*.tribalwars.com.pt/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://*.tribalwars.com.pt/*"],
+      "js": ["content/router.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["modules/*.js", "content/overlay.js"],
+      "matches": ["https://*.tribalwars.com.pt/*"]
+    }
+  ]
+}

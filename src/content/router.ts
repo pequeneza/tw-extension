@@ -43,6 +43,7 @@ function getUrlFlags() {
     hasTryConfirm: qs.includes("try=confirm"),
     hasScreenSnob: qs.includes("screen=snob"),
     hasModeCoin: qs.includes("mode=coin"),
+    hasScreenOverview: new URLSearchParams(qs).get("screen") === "overview",
     hasMarketExchange: qs.includes("screen=market") && qs.includes("mode=exchange"),
     hasInfoPlayer: qs.includes("screen=info_player"),
     hasIncomingsOverview:
@@ -86,7 +87,7 @@ function shouldInject(moduleId: ModuleId, flags: ReturnType<typeof getUrlFlags>)
     case "auto_mint":
       return flags.hasScreenSnob && !flags.hasModeCoin;
     case "noble_sender_trainer":
-      return flags.hasScreenSnob && !flags.hasModeCoin;
+      return (flags.hasScreenSnob && !flags.hasModeCoin) || flags.hasScreenOverview;
     case "tw_snipe_scheduler":
       return (
         (flags.isGamePhp && location.search.includes("screen=overview")) ||
@@ -103,9 +104,24 @@ async function injectModule(moduleFile: string) {
   await injectPageScript(srcUrl);
 }
 
+async function ensureOverlayLoaded() {
+  const overlayUrl = chrome.runtime.getURL("content/overlay.js");
+  await import(/* @vite-ignore */ overlayUrl);
+}
+
 (async () => {
-  const settings = await loadSettings();
   const flags = getUrlFlags();
+
+  if (flags.isGamePhp) {
+    try {
+      await ensureOverlayLoaded();
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("[TW Suite] Failed to load overlay:", e);
+    }
+  }
+
+  const settings = await loadSettings();
 
   const modules: Array<{ id: ModuleId; file: string }> = [
     { id: "cmdsender", file: "mano_de_deus.user.js" },

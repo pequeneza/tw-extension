@@ -41,7 +41,26 @@
   align-items:center;
 }
 #tm_whbalancer_btn{ margin-left:0 !important; }
-
+/* PP rows highlight */
+.tmWH tr.tmPpHeader td{
+  background:#c7e3ff !important;
+  border:1px solid #2a5d8a !important;
+  color:#000;
+  font-weight:bold;
+}
+.tmWH tr.tmPpRow td{
+  background:#e7f3ff !important;
+  border:1px solid #2a5d8a !important;
+}
+.tmWH .tmBadgePP{
+  display:inline-block;
+  padding:1px 6px;
+  border:1px solid #2a5d8a;
+  background:#ffffff;
+  border-radius:3px;
+  font-size:12px;
+  margin-right:6px;
+}
 .tmWH { color:#000; font-family: Verdana, Arial, sans-serif; }
 .tmWH .twbox { background:#f3e6c1; border:1px solid #7b5b2b; padding:8px; margin-bottom:10px; }
 .tmWH .twbox .title { background:#d2b47a; border:1px solid #7b5b2b; padding:6px 8px; font-weight:bold; margin:-8px -8px 8px -8px; }
@@ -922,6 +941,31 @@
       }
       return sum;
     }
+    function getPlanMovedAmount(plan) {
+      const moved = sumShipments(plan);
+      return plan.payRes === "wood" ? (moved.wood || 0)
+        : plan.payRes === "stone" ? (moved.stone || 0)
+        : (moved.iron || 0);
+    }
+
+    // Decide if a persisted plan is valid under CURRENT settings
+    function validatePpPlanUnderCurrentSettings(plan) {
+      const s = state?.settings || loadSettings();
+      const movedAmount = getPlanMovedAmount(plan);
+
+      const reasons = [];
+
+      if (!s.premiumInstantEnabled) reasons.push("Premium is disabled");
+
+      const minTrade = (s.premiumMinTradeAmount || 0);
+      if (movedAmount < minTrade) reasons.push(`Moved amount ${numberWithCommasDots(movedAmount)} < Min trade ${numberWithCommasDots(minTrade)}`);
+
+      // Optional: if you want Threshold to also act as “minimum plan size”
+      const threshold = (s.premiumThreshold || 0);
+      if (movedAmount < threshold) reasons.push(`Moved amount ${numberWithCommasDots(movedAmount)} < Threshold ${numberWithCommasDots(threshold)}`);
+
+      return { ok: reasons.length === 0, reasons, movedAmount };
+    }
 
     // ---------------- Ex/Short ----------------
     function computeExcessShortage(villagesData, incomingRes, averages) {
@@ -1317,7 +1361,9 @@
       }
 
       const shippedTotal = shipments.reduce((sum, sh) => sum + sh.wood + sh.stone + sh.iron, 0);
-      if (shippedTotal < minTrade) return null;
+        if (shippedTotal < minTrade) return null;
+      const threshold = (s.premiumThreshold || 0);
+        if (shippedTotal < threshold) return null;
 
       const plan = {
         id: "",
@@ -1411,6 +1457,25 @@
     function renderTimerBoxForPlan(plan, modeText, countdown, etaInfo) {
       const etaLine = etaInfo ? `<div class="line twmuted">${etaInfo}</div>` : "";
 
+      const moved = sumShipments(plan);
+      const movedAmount =
+        plan.payRes === "wood" ? moved.wood :
+        plan.payRes === "stone" ? moved.stone :
+        moved.iron;
+
+      const totalsLine = `
+        <div class="line twmuted">
+          Shipments total: <b>${numberWithCommasDots(movedAmount || 0)}</b> ${resourceLabel(plan.payRes)}
+        </div>
+      `;
+
+      const v = validatePpPlanUnderCurrentSettings(plan);
+      const invalidLine = !v.ok
+        ? `<div class="line" style="color:#a40000; font-weight:bold">
+            ⚠ Invalid under current settings: ${v.reasons.join(" | ")}
+          </div>`
+        : "";
+
       const byId = new Map((state?.villagesData || []).map(v => [String(v.id), v]));
       const tgt = byId.get(String(plan.targetVillageId));
 
@@ -1435,6 +1500,8 @@
           <div class="tm-flex">
             <div>
               <div class="line"><b>PP route:</b> ${resourceLabel(plan.payRes)} → ${resourceLabel(plan.neededRes)} @ <b>${plan.targetVillageName}</b></div>
+              ${totalsLine}
+              ${invalidLine}
               <div class="line twmuted">${modeText}</div>
               ${etaLine}
             </div>
@@ -1446,7 +1513,8 @@
           <table class="tmPpMiniTable">
             <thead>
               <tr>
-                <th>From</th><th>To</th><th>Dist</th><th>${resIconHtml("wood")}</th><th>${resIconHtml("stone")}</th><th>${resIconHtml("iron")}</th>
+                <th>From</th><th>To</th><th>Dist</th>
+                <th>${resIconHtml("wood")}</th><th>${resIconHtml("stone")}</th><th>${resIconHtml("iron")}</th>
               </tr>
             </thead>
             <tbody>
@@ -1800,41 +1868,42 @@
           <label>Enable</label>
           <input type="checkbox" id="tmwh_premiumEnabled" ${s.premiumInstantEnabled ? "checked" : ""}>
 
-          <label>Staging strategy</label>
-          <select id="tmwh_premiumStagingStrategy">
+        <label>Routing Strategy <a href="#" class="tmLink tmHelp" data-tip="tipStrategy">?</a></label>
+        <select id="tmwh_premiumStagingStrategy">
+
             <option value="weighted" ${s.premiumStagingStrategy === "weighted" ? "selected" : ""}>Weighted donors</option>
             <option value="largest" ${s.premiumStagingStrategy === "largest" ? "selected" : ""}>Largest donor</option>
           </select>
 
-          <label>Threshold</label>
+          <label>Threshold <a href="#" class="tmLink tmHelp" data-tip="pp_threshold">?</a></label>
           <input type="number" id="tmwh_premiumThreshold" value="${s.premiumThreshold}">
 
-          <label>Min trade amount</label>
+          <label>Min trade amount <a href="#" class="tmLink tmHelp" data-tip="pp_min_trade">?</a></label>
           <input type="number" id="tmwh_premiumMinTradeAmount" value="${s.premiumMinTradeAmount}">
 
-          <label>Move amount</label>
+          <label>Move amount <a href="#" class="tmLink tmHelp" data-tip="pp_move_amount">?</a></label>
           <input type="number" id="tmwh_premiumMoveAmount" value="${s.premiumMoveAmount}">
 
-          <label>Max distance (ETA)</label>
+          <label>Max distance <a href="#" class="tmLink tmHelp" data-tip="pp_max_distance">?</a></label>
           <input type="number" id="tmwh_premiumMaxDistance" value="${s.premiumMaxDistance}">
 
-          <label>Max target fill (%)</label>
+          <label>Max target fill (%) <a href="#" class="tmLink tmHelp" data-tip="pp_max_fill">?</a></label>
           <input type="number" step="0.01" min="0.1" max="0.98" id="tmwh_premiumMaxTargetFillPct" value="${s.premiumMaxTargetFillPct}">
 
-          <label>Max plans (safety)</label>
+          <label>Max plans  <a href="#" class="tmLink tmHelp" data-tip="pp_max_plans">?</a></label>
           <input type="number" id="tmwh_premiumMaxPlansHardCap" value="${s.premiumMaxPlansHardCap}">
         </div>
 
         <hr/>
 
         <div class="tm-grid">
-          <label>Donor keep (%)</label>
+          <label>Donor keep (%) <a href="#" class="tmLink tmHelp" data-tip="pp_donor_keep_pct">?</a></label>
           <input type="number" step="0.01" min="0" max="0.95" id="tmwh_premiumDonorKeepPct" value="${s.premiumDonorKeepPct}">
 
-          <label>Donor keep min</label>
+          <label>Donor keep min <a href="#" class="tmLink tmHelp" data-tip="pp_donor_keep_min">?</a></label>
           <input type="number" id="tmwh_premiumDonorKeepMin" value="${s.premiumDonorKeepMin}">
 
-          <label>Donor min excess</label>
+          <label>Donor min excess <a href="#" class="tmLink tmHelp" data-tip="pp_donor_min_excess">?</a></label>
           <input type="number" id="tmwh_premiumDonorMinExcess" value="${s.premiumDonorMinExcess}">
         </div>
 
@@ -1927,6 +1996,105 @@
 </div>`;
 
       Dialog.show("content", html);
+
+      // Bind all Premium tooltips (including strategy) using .tmHelp anchors
+      (function bindPremiumTooltips() {
+        const tips = {
+          tipStrategy: `
+            <div style="font-weight:bold; margin-bottom:6px">Staging strategy</div>
+            <div class="twmuted">
+              <b>Weighted donors</b>: splits the required amount across multiple donor villages,
+              prioritizing closer donors. More reliable when merchants are spread out.<br/><br/>
+              <b>Largest donor</b>: tries to use the biggest single donor first.
+              Fewer shipments, but can fail if that donor has low merchants or is far away.
+            </div>
+          `,
+          pp_threshold: `
+            <div style="font-weight:bold; margin-bottom:6px">Threshold</div>
+            <div class="twmuted">
+              Minimum global imbalance (most abundant resource minus least abundant resource)
+              required before the script will attempt to create a PP (Merchant Exchange) plan.
+            </div>
+          `,
+          pp_min_trade: `
+            <div style="font-weight:bold; margin-bottom:6px">Min trade amount</div>
+            <div class="twmuted">
+              Minimum amount (in the <b>paying</b> resource) that must be staged via shipments
+              before a PP plan is accepted. If the plan can’t reach this, no PP route is suggested.
+            </div>
+          `,
+          pp_move_amount: `
+            <div style="font-weight:bold; margin-bottom:6px">Move amount</div>
+            <div class="twmuted">
+              Upper cap for how much the planner will try to move for a single PP route.
+              The actual amount may be lower due to merchants, donor excess, target capacity, or distance limits.
+            </div>
+          `,
+          pp_max_distance: `
+            <div style="font-weight:bold; margin-bottom:6px">Max distance (ETA)</div>
+            <div class="twmuted">
+              Maximum distance (in fields) allowed between a donor village and the target village
+              for PP shipments. Lower values reduce travel time but may prevent plans if donors are far away.
+            </div>
+          `,
+          pp_max_fill: `
+            <div style="font-weight:bold; margin-bottom:6px">Max target fill (%)</div>
+            <div class="twmuted">
+              Prevents overfilling the target village with the paying resource.
+              Example: 0.90 means the target won’t be planned above ~90% of warehouse capacity (for that resource).
+            </div>
+          `,
+          pp_max_plans: `
+            <div style="font-weight:bold; margin-bottom:6px">Max plans (safety)</div>
+            <div class="twmuted">
+              Hard limit of how many PP routes the script can generate in one run.
+              Helps avoid accidental large PP spending and excessive shipments.
+            </div>
+          `,
+          pp_donor_keep_pct: `
+            <div style="font-weight:bold; margin-bottom:6px">Donor keep (%)</div>
+            <div class="twmuted">
+              Donor villages will keep at least this percentage of their warehouse capacity
+              (in the paying resource). Only amounts above that are considered “excess” and can be sent.
+            </div>
+          `,
+          pp_donor_keep_min: `
+            <div style="font-weight:bold; margin-bottom:6px">Donor keep min</div>
+            <div class="twmuted">
+              Minimum amount a donor village will always keep (in the paying resource),
+              regardless of the percentage keep rule.
+            </div>
+          `,
+          pp_donor_min_excess: `
+            <div style="font-weight:bold; margin-bottom:6px">Donor min excess</div>
+            <div class="twmuted">
+              Minimum excess required for a village to be considered a donor at all.
+              Villages with less excess than this are ignored to reduce tiny shipments.
+            </div>
+          `
+        };
+
+        ensureTipPortal();
+
+        // Important: bind within the dialog content only (prevents conflicts)
+        const $root = $(".tmWH");
+        $root.find(".tmHelp").off("mouseover mouseout click");
+
+        $root.find(".tmHelp").on("mouseover", function (e) {
+          e.preventDefault();
+          const key = $(this).attr("data-tip");
+          const tip = tips[key] || `<div class="twmuted">No help available.</div>`;
+          showTipAt(this, tip);
+        });
+
+        $root.find(".tmHelp").on("mouseout", function () {
+          hideTip();
+        });
+
+        $root.find(".tmHelp").on("click", function (e) {
+          e.preventDefault();
+        });
+      })();
 
       renderPpLockStatus();
       renderManualCoordLockList();
@@ -2152,42 +2320,61 @@
         plan.payRes === "stone" ? moved.stone :
         moved.iron;
 
+      const totalAll = (moved.wood || 0) + (moved.stone || 0) + (moved.iron || 0);
+
       $rows.prepend(`
-        <tr>
-          <td colspan="7" style="background:#d2b47a; border:1px solid #7b5b2b; font-weight:bold">
-            PP plan: move ${numberWithCommasDots(movedAmount)} ${resourceLabel(plan.payRes)} → ${plan.targetVillageName}, then instant trade for ${resourceLabel(plan.neededRes)} (10pp).
-            <span class="twmuted">(id: <code>${plan.id}</code>)</span>
+        <tr class="tmPpHeader">
+          <td colspan="7">
+            <span class="tmBadgePP">PP</span>
+            Plan: move <b>${numberWithCommasDots(movedAmount || 0)}</b> ${resourceLabel(plan.payRes)}
+            → <b>${plan.targetVillageName}</b>, then instant trade for ${resourceLabel(plan.neededRes)} (10pp).
+            <span class="twmuted" style="margin-left:10px">
+              Totals:
+              ${resIconHtml("wood")} <b>${numberWithCommasDots(moved.wood || 0)}</b>
+              ${resIconHtml("stone")} <b>${numberWithCommasDots(moved.stone || 0)}</b>
+              ${resIconHtml("iron")} <b>${numberWithCommasDots(moved.iron || 0)}</b>
+              | All: <b>${numberWithCommasDots(totalAll || 0)}</b>
+            </span>
           </td>
         </tr>
       `);
 
-      plan.shipments.forEach((s, i) => {
+      plan.shipments.forEach((s) => {
         const src = byId.get(String(s.source));
         const tgt = byId.get(String(s.target));
-        const cls = i % 2 === 0 ? "tmRowA" : "tmRowB";
+
         $rows.prepend(`
-          <tr class="${cls}">
+          <tr class="tmPpRow">
             <td><a class="tmLink" href="${src?.url || "#"}">${src?.name || s.source}</a></td>
             <td><a class="tmLink" href="${tgt?.url || "#"}">${tgt?.name || s.target}</a></td>
             <td style="text-align:center">${s.distance}</td>
-            <td style="text-align:right">${s.wood}</td>
-            <td style="text-align:right">${s.stone}</td>
-            <td style="text-align:right">${s.iron}</td>
+            <td style="text-align:right">${s.wood || 0}</td>
+            <td style="text-align:right">${s.stone || 0}</td>
+            <td style="text-align:right">${s.iron || 0}</td>
             <td style="text-align:center">
-              <button class="btn btnSophie tmSendSug" data-src="${s.source}" data-tgt="${s.target}" data-wood="${s.wood}" data-stone="${s.stone}" data-iron="${s.iron}" type="button">Send</button>
+              <button
+                class="btn btnSophie tmSendSug"
+                data-src="${s.source}"
+                data-tgt="${s.target}"
+                data-wood="${s.wood || 0}"
+                data-stone="${s.stone || 0}"
+                data-iron="${s.iron || 0}"
+                type="button"
+              >Send</button>
             </td>
           </tr>
         `);
       });
 
-      $(".tmSendSug").off("click").on("click", function () {
+      // Bind within container (safe even if called multiple times)
+      $rows.find(".tmSendSug").off("click").on("click", function () {
         const $b = $(this);
         sendResource(
           $b.attr("data-src"),
           $b.attr("data-tgt"),
-          parseInt($b.attr("data-wood"), 10),
-          parseInt($b.attr("data-stone"), 10),
-          parseInt($b.attr("data-iron"), 10)
+          parseInt($b.attr("data-wood"), 10) || 0,
+          parseInt($b.attr("data-stone"), 10) || 0,
+          parseInt($b.attr("data-iron"), 10) || 0
         );
         $b.closest("tr").remove();
       });
@@ -2227,6 +2414,13 @@
       renderManualCoordLockList();
 
       await resumePersistedPlans();
+
+      const persistedPlans = loadPpPlans();
+      if (persistedPlans.length) {
+        for (const p of persistedPlans) appendSuggestedShipmentsToTable(p);
+        renderPpLockStatus();
+        return;
+      }
 
       if (loadPpPlans().length) {
         renderPpLockStatus();

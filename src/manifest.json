@@ -1,24 +1,50 @@
 {
   "manifest_version": 3,
-  "name": "xBot 1.0",
+  "name": "TW Suite",
   "version": "1.0.0",
-  "description": "Bundle of TribalWars PT helpers with per-module toggles (popup). Injects scripts into page context to preserve original logic.",
+  "description": "TribalWars PT automation suite — 10 modules, in-game overlay.",
+  "permissions": ["storage", "scripting", "activeTab", "tabs", "notifications"],
+  "host_permissions": ["https://*.tribalwars.com.pt/*"],
+
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "xBot"
+    "default_title": "TW Suite",
+    "default_icon": {
+      "16":  "icons/icon16.png",
+      "48":  "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   },
-  "permissions": ["storage", "tabs"],
-  "host_permissions": ["https://*.tribalwars.com.pt/*"],
+
+  "icons": {
+    "16":  "icons/icon16.png",
+    "48":  "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+
   "content_scripts": [
     {
-      "matches": ["https://*.tribalwars.com.pt/*"],
-      "js": ["content/router.js"],
-      "run_at": "document_idle"
+      "matches": ["https://*.tribalwars.com.pt/game.php*"],
+      "js": [
+        "content/router.js",
+        "content/overlay.js"
+      ],
+      "run_at": "document_end",
+      "all_frames": false
     }
   ],
+
   "web_accessible_resources": [
     {
-      "resources": ["modules/*.js", "content/overlay.js"],
+      "resources": [
+        "modules/*.js",
+        "assets/*"
+      ],
       "matches": ["https://*.tribalwars.com.pt/*"]
     }
   ]

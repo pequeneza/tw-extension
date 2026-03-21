@@ -123,13 +123,19 @@
   }
 
   function formatCountdown(diffMs) {
-    const sign = diffMs < 0 ? '-' : '';
-    const abs = Math.abs(diffMs);
-    const s = Math.floor(abs / 1000);
+    // Force integer milliseconds to avoid "355.781982421875"
+    const wholeMs = Math.trunc(diffMs); // or Math.floor(diffMs) if you prefer
+    const sign = wholeMs < 0 ? '-' : '';
+    const abs = Math.abs(wholeMs);
+
+    const totalSeconds = Math.floor(abs / 1000);
     const ms = abs % 1000;
-    const mm = Math.floor(s / 60);
-    const ss = s % 60;
-    return `${sign}${pad2(mm)}:${pad2(ss)}.${String(ms).padStart(3, '0')}`;
+
+    const hh = Math.floor(totalSeconds / 3600);
+    const mm = Math.floor((totalSeconds % 3600) / 60);
+    const ss = totalSeconds % 60;
+
+    return `${sign}${pad2(hh)}:${pad2(mm)}:${pad2(ss)}:${String(ms).padStart(3, '0')}`;
   }
 
   // ---------------- plan storage ----------------
@@ -434,11 +440,13 @@ function ensureOpenIcon() {
 
   $('#twgs_close').on('click', (e) => {
     e.preventDefault();
+    stopAllTimers();
     $ui.hide();
   });
 
   $('#twgs_reload').on('click', (e) => {
     e.preventDefault();
+    stopAllTimers();
     openUI();
   });
 
@@ -454,24 +462,41 @@ function ensureOpenIcon() {
     return { gameSpeed, unitSpeed, speedFactor: 1 / (gameSpeed * unitSpeed) };
   }
 
-  function stopTimer(idx) {
+  function stopAllTimers() {
+    for (const [idx, id] of state.timers.entries()) {
+      clearInterval(id);
+    }
+    state.timers.clear();
+  }
+
+  function stopTimer(idx, $container, $btn) {
     const existing = state.timers.get(idx);
     if (existing) {
       clearInterval(existing);
       state.timers.delete(idx);
     }
+
+    // UI reset (optional but recommended)
+    if ($container && $container.length) $container.text('—');
+    if ($btn && $btn.length) $btn.text('Timer');
   }
 
-  function startTimer(idx, sendMs, $container) {
+  function startTimer(idx, sendMs, $container, $btn) {
+    // don't start twice
     stopTimer(idx);
+
+    // UI state
+    if ($btn && $btn.length) $btn.text('Stop');
 
     const tick = () => {
       const now = getServerNowMs();
       const diff = sendMs - now;
+
+      const txt = formatCountdown(diff);
       if (diff < 0) {
-        $container.html(`<span style="color:#c62828; font-weight:bold;">${formatCountdown(diff)}</span>`);
+        $container.html(`<span style="color:#c62828; font-weight:bold;">${txt}</span>`);
       } else {
-        $container.html(`<span style="color:#1b5e20; font-weight:bold;">${formatCountdown(diff)}</span>`);
+        $container.html(`<span style="color:#1b5e20; font-weight:bold;">${txt}</span>`);
       }
     };
 
@@ -639,11 +664,20 @@ function ensureOpenIcon() {
 
     // timers (multiple)
     $('#twgs_result .twgs_timer').off('click').on('click', (e) => {
-      const $cand = $(e.currentTarget).closest('.twgs_candidate');
+      const $btn = $(e.currentTarget);
+      const $cand = $btn.closest('.twgs_candidate');
       const idx2 = parseInt($cand.attr('data-idx') || '0', 10);
       const c = candidates[idx2];
       if (!c) return;
-      startTimer(idx2, c.sendMs, $cand.find('.twgs_timer_out'));
+
+      const $out = $cand.find('.twgs_timer_out');
+
+      // TOGGLE
+      if (state.timers.has(idx2)) {
+        stopTimer(idx2, $out, $btn);
+      } else {
+        startTimer(idx2, c.sendMs, $out, $btn);
+      }
     });
 
     // open support in NEW TAB

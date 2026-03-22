@@ -38,13 +38,13 @@ function useSettings() {
   }, []);
 
   const toggle = useCallback(async (id: ModuleId) => {
-    const next = !(s[id] !== false);
+    const next = s[id] !== true;  // opt-in: missing/false→enable, true→disable
     const updated = { ...s, [id]: next };
     setS(updated);
     await storageSet({ [STORAGE_KEY]: updated });
   }, [s]);
 
-  const isOn = useCallback((id: ModuleId) => s[id] !== false, [s]);
+  const isOn = useCallback((id: ModuleId) => s[id] === true, [s]);
   return { ready, isOn, toggle };
 }
 
@@ -316,7 +316,7 @@ function Panel({ onClose }: { onClose: () => void }) {
         <div className="panel-header-left">
           <span className="panel-logo">⚡</span>
           <div>
-            <div className="panel-title">TW Suite</div>
+            <div className="panel-title">xBot</div>
             <div className="panel-meta">
               <span className="meta-chip meta-on">{onCount} enabled</span>
               {liveCount > 0 && (
@@ -412,8 +412,8 @@ export function OverlayRoot() {
       <button
         className={`trigger${open ? " trigger--open" : ""}`}
         onClick={() => setOpen((o) => !o)}
-        title="TW Suite"
-        aria-label="TW Suite"
+        title="xBot"
+        aria-label="xBot"
       >⚡</button>
 
       {open && <div className="backdrop" onClick={() => setOpen(false)} />}

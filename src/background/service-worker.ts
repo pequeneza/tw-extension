@@ -1,19 +1,17 @@
 /**
- * Background service worker (MV3).
+ * xBot — Background service worker (MV3).
  *
- * Deliberately has NO fetch handler — MV3 extension service workers don't
- * intercept page fetches and Chrome emits a console warning if you register
- * a no-op fetch listener.
+ * On install: all modules default to DISABLED (opt-in model).
+ * Users explicitly enable what they want — this prevents scripts from
+ * running unintentionally when navigating between TW pages.
  *
- * Responsibilities:
- *  - On install: write default enabled-state for all modules.
- *  - Message bus: GET_ACTIVE_TAB_URL / RELOAD_ACTIVE_TAB for the popup.
+ * On update: any newly added module IDs are written as false (disabled)
+ * so existing users don't get unexpected new scripts running.
  */
 
 import { MODULE_CONFIGS, STORAGE_KEY } from "../types/modules";
 import type { ModuleSettings } from "../types/modules";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
 type BgMessage =
   | { type: "GET_ACTIVE_TAB_URL" }
   | { type: "RELOAD_ACTIVE_TAB" };
@@ -22,16 +20,39 @@ type BgResponse =
   | { type: "ACTIVE_TAB_URL"; url: string | null }
   | { type: "ACK" };
 
-// ─── Install: set defaults ────────────────────────────────────────────────────
+// ─── Install / update ─────────────────────────────────────────────────────────
 chrome.runtime.onInstalled.addListener(({ reason }) => {
-  if (reason !== "install") return;
+  if (reason === "install") {
+    // Fresh install — all modules OFF by default (explicit opt-in)
+    const defaults: ModuleSettings = {};
+    for (const mod of MODULE_CONFIGS) defaults[mod.id] = false;
 
-  const defaults: ModuleSettings = {};
-  for (const mod of MODULE_CONFIGS) defaults[mod.id] = true;
+    chrome.storage.sync.set({ [STORAGE_KEY]: defaults }, () => {
+      console.log("[xBot] Installed — all modules disabled. Enable what you need.");
+    });
+    return;
+  }
 
-  chrome.storage.sync.set({ [STORAGE_KEY]: defaults }, () => {
-    console.log("[TW Suite] First install — all modules enabled by default.");
-  });
+  if (reason === "update") {
+    // Extension updated — keep existing settings, but add any new module IDs as false
+    chrome.storage.sync.get(STORAGE_KEY, (result) => {
+      const existing = (result[STORAGE_KEY] as ModuleSettings) ?? {};
+      let changed = false;
+
+      for (const mod of MODULE_CONFIGS) {
+        if (!(mod.id in existing)) {
+          existing[mod.id] = false; // new module → disabled by default
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        chrome.storage.sync.set({ [STORAGE_KEY]: existing }, () => {
+          console.log("[xBot] Updated — new modules added as disabled.");
+        });
+      }
+    });
+  }
 });
 
 // ─── Message bus ──────────────────────────────────────────────────────────────
@@ -46,7 +67,7 @@ chrome.runtime.onMessage.addListener(
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
           sendResponse({ type: "ACTIVE_TAB_URL", url: tabs[0]?.url ?? null });
         });
-        return true; // keep message channel open for async reply
+        return true;
 
       case "RELOAD_ACTIVE_TAB":
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {

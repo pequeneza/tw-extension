@@ -15,16 +15,17 @@ export function useModuleSettings() {
 
   const toggle = useCallback(
     async (id: ModuleId) => {
-      const current = settings[id] !== false;
-      const next = !current;
+      // Strict opt-in: only === true counts as enabled
+      const next = settings[id] !== true;
       setSettings((prev) => ({ ...prev, [id]: next }));
       await setModuleEnabled(id, next);
     },
     [settings]
   );
 
+  // Strict: missing key or false = disabled
   const isEnabled = useCallback(
-    (id: ModuleId) => settings[id] !== false,
+    (id: ModuleId) => settings[id] === true,
     [settings]
   );
 

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "TW Suite",
+  "name": "xBot",
   "version": "1.0.0",
-  "description": "TribalWars PT automation suite — 10 modules, in-game overlay.",
+  "description": "TribalWars PT automation suite — 10 modules, in-game overlay. Opt-in per module.",
   "permissions": ["storage", "scripting", "activeTab", "tabs", "notifications"],
   "host_permissions": ["https://*.tribalwars.com.pt/*"],
 
@@ -13,7 +13,7 @@
 
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "TW Suite",
+    "default_title": "xBot",
     "default_icon": {
       "16":  "icons/icon16.png",
       "48":  "icons/icon48.png",
@@ -30,10 +30,7 @@
   "content_scripts": [
     {
       "matches": ["https://*.tribalwars.com.pt/game.php*"],
-      "js": [
-        "content/router.js",
-        "content/overlay.js"
-      ],
+      "js": ["content/router.js"],
       "run_at": "document_end",
       "all_frames": false
     }
@@ -43,7 +40,8 @@
     {
       "resources": [
         "modules/*.js",
-        "assets/*"
+        "assets/*",
+        "content/overlay.js"
       ],
       "matches": ["https://*.tribalwars.com.pt/*"]
     }

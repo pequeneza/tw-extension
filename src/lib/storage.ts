@@ -14,15 +14,16 @@ export async function saveSettings(settings: ModuleSettings): Promise<void> {
   });
 }
 
+/**
+ * A module is enabled ONLY when its value is explicitly true.
+ * Missing key = disabled. This is the opt-in model.
+ */
 export async function isModuleEnabled(id: ModuleId): Promise<boolean> {
   const settings = await loadSettings();
-  return settings[id] !== false; // enabled by default
+  return settings[id] === true;
 }
 
-export async function setModuleEnabled(
-  id: ModuleId,
-  enabled: boolean
-): Promise<void> {
+export async function setModuleEnabled(id: ModuleId, enabled: boolean): Promise<void> {
   const settings = await loadSettings();
   settings[id] = enabled;
   await saveSettings(settings);

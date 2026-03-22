@@ -23,7 +23,12 @@ export interface ModuleSettings {
   [key: string]: boolean;
 }
 
-export const STORAGE_KEY = "tw_suite_settings_v1";
+/**
+ * Storage key for the module enabled/disabled map.
+ * NOTE: "false" is now the safe default — modules must be explicitly enabled.
+ * This prevents scripts from running unintentionally on page navigation.
+ */
+export const STORAGE_KEY = "xbot_settings_v1";
 
 export const MODULE_CONFIGS: ModuleConfig[] = [
   {

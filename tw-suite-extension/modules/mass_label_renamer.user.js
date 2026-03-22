@@ -16,7 +16,7 @@
 
   // ── Suite config integration ────────────────────────────────────────────────
   const _cfg = (typeof window.__twSuiteCfg === 'function')
-    ? window.__twSuiteCfg('mass_label_delay')
+    ? window.__twSuiteCfg('mass_label_renamer')
     : {};
 
   // ── User preferences ────────────────────────────────────────────────────────

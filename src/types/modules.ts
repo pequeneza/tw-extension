@@ -65,8 +65,8 @@ export const MODULE_CONFIGS: ModuleConfig[] = [
   {
     id: "mass_label_renamer",
     label: "Mass Label + Renamer",
-    description: "BITO colour buttons on every incoming row + automatic attack tags.",
-    matchPattern: /screen=overview_villages.*mode=incomings|screen=overview(?!_villages)/,
+    description: "BITO colour buttons on every incoming row + floating panel to bulk-apply any tag with a human delay.",
+    matchPattern: /screen=overview_villages.*mode=incomings|screen=overview[^_]/,
     scriptFile: "mass_label_renamer.user.js",
     icon: "🏷️",
   },

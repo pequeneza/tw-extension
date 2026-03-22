@@ -2,13 +2,9 @@
  * tw-suite-config-bridge.js
  *
  * Prepended to every userscript at build time by vite.config.ts.
- * Reads per-module config from sessionStorage["__xbot_cfg__"] and exposes
+ * Reads per-module config from sessionStorage["__xbot_cfg__"] (written by
+ * the content router — CSP-safe, no inline script required) and exposes
  * window.__twSuiteCfg(moduleId) for userscripts to call.
- *
- * Why sessionStorage instead of window.__XBOT_CFG__:
- *   The content script cannot write to page-context globals via inline <script>
- *   because TW's CSP blocks 'unsafe-inline'. sessionStorage is shared between
- *   the content script world and the page, so it works without any CSP exemption.
  *
  * Usage inside a userscript:
  *   const cfg = window.__twSuiteCfg('fakes');

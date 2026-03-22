@@ -1,4 +1,4 @@
-// Generated from overlay.css — edit overlay.css and rebuild
+// Generated from overlay.css
 export const OVERLAY_CSS = `
 /* TW Suite Overlay — control-panel aesthetic, semantic color system */
 

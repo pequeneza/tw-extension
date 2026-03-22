@@ -1,5 +1,5 @@
 import React, {
-  useCallback, useEffect, useRef, useState, createContext, useContext,
+  useCallback, useEffect, useRef, useState,
 } from "react";
 import {
   MODULE_CONFIGS, ModuleId, STORAGE_KEY, ModuleSettings,
@@ -11,25 +11,22 @@ import {
 /* ─── Storage ─────────────────────────────────────────────────────────────── */
 function storageGet(keys: string[]): Promise<Record<string, unknown>> {
   return new Promise((res) =>
-    chrome.storage.sync.get(
-      keys.reduce<Record<string, undefined>>((a, k) => { a[k] = undefined; return a; }, {}),
-      (r) => res(r as Record<string, unknown>)
-    )
+    chrome.storage.sync.get(keys, (r) => res(r as Record<string, unknown>))
   );
 }
 function storageSet(data: Record<string, unknown>): Promise<void> {
   return new Promise((res) => chrome.storage.sync.set(data, res));
 }
 
-/* ─── Types ───────────────────────────────────────────────────────────────── */
 type CfgValues = Record<string, string | number | boolean>;
 type View = { type: "list" } | { type: "config"; id: ModuleId };
 
-/* ─── Hooks ───────────────────────────────────────────────────────────────── */
+/* ─── useSettings — lives in OverlayRoot, never unmounts ─────────────────── */
 function useSettings() {
   const [s, setS] = useState<ModuleSettings>({});
   const [ready, setReady] = useState(false);
 
+  // Load once on mount — never re-runs, so never clobbers state
   useEffect(() => {
     storageGet([STORAGE_KEY]).then((r) => {
       setS((r[STORAGE_KEY] as ModuleSettings) ?? {});
@@ -37,17 +34,26 @@ function useSettings() {
     });
   }, []);
 
-  const toggle = useCallback(async (id: ModuleId) => {
-    const next = s[id] !== true;  // opt-in: missing/false→enable, true→disable
-    const updated = { ...s, [id]: next };
-    setS(updated);
-    await storageSet({ [STORAGE_KEY]: updated });
-  }, [s]);
+  // Ref mirrors state so toggle always writes the latest values,
+  // even if called multiple times before React re-renders
+  const sRef = useRef(s);
+  useEffect(() => { sRef.current = s; }, [s]);
 
+  const toggle = useCallback(async (id: ModuleId) => {
+    const next = sRef.current[id] !== true;
+    const updated = { ...sRef.current, [id]: next };
+    sRef.current = updated;   // update ref immediately so rapid calls stack correctly
+    setS(updated);            // trigger re-render with new state
+    await storageSet({ [STORAGE_KEY]: updated });
+  }, []);
+
+  // isOn reads reactive state s — not the ref — so cards re-render correctly
   const isOn = useCallback((id: ModuleId) => s[id] === true, [s]);
-  return { ready, isOn, toggle };
+
+  return { s, ready, isOn, toggle };
 }
 
+/* ─── useModuleCfg ────────────────────────────────────────────────────────── */
 function useModuleCfg(id: ModuleId | null) {
   const schema: ModuleConfigSchema | undefined = id ? MODULE_CONFIG_SCHEMAS[id] : undefined;
   const [vals, setVals] = useState<CfgValues>({});
@@ -56,7 +62,9 @@ function useModuleCfg(id: ModuleId | null) {
 
   useEffect(() => {
     if (!schema || !id) return;
-    const defs: CfgValues = Object.fromEntries(schema.fields.map((f: FieldDef) => [f.key, f.default]));
+    const defs: CfgValues = Object.fromEntries(
+      schema.fields.map((f: FieldDef) => [f.key, f.default])
+    );
     storageGet([schema.storageKey]).then((r) => {
       setVals({ ...defs, ...((r[schema.storageKey] as CfgValues) ?? {}) });
       setDirty(false); setSaved(false);
@@ -77,7 +85,9 @@ function useModuleCfg(id: ModuleId | null) {
 
   const reset = useCallback(async () => {
     if (!schema || !id) return;
-    const defs: CfgValues = Object.fromEntries(schema.fields.map((f: FieldDef) => [f.key, f.default]));
+    const defs: CfgValues = Object.fromEntries(
+      schema.fields.map((f: FieldDef) => [f.key, f.default])
+    );
     await storageSet({ [schema.storageKey]: defs });
     setVals(defs); setDirty(false);
   }, [schema, id]);
@@ -85,14 +95,17 @@ function useModuleCfg(id: ModuleId | null) {
   return { schema, vals, dirty, saved, set, save, reset };
 }
 
-/* ─── Animated mount helper ──────────────────────────────────────────────── */
-function useMountAnim() {
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => { requestAnimationFrame(() => setMounted(true)); }, []);
-  return mounted;
+/* ─── useMountAnim ────────────────────────────────────────────────────────── */
+function useMountAnim(trigger: boolean) {
+  const [anim, setAnim] = useState(false);
+  useEffect(() => {
+    if (trigger) requestAnimationFrame(() => setAnim(true));
+    else setAnim(false);
+  }, [trigger]);
+  return anim;
 }
 
-/* ─── Config field ────────────────────────────────────────────────────────── */
+/* ─── Field ───────────────────────────────────────────────────────────────── */
 function Field({ f, val, onChange }: {
   f: FieldDef;
   val: unknown;
@@ -137,14 +150,12 @@ function Field({ f, val, onChange }: {
     </div>
   );
 
-  // number / text / time
   const isNum = f.type === "number";
-  const rangeParts: string[] = [];
-  if (isNum && f.min !== undefined) rangeParts.push(`${f.min}–`);
-  if (isNum && f.max !== undefined) rangeParts[0] = rangeParts[0]
-    ? `${f.min}–${f.max}` : `–${f.max}`;
-  if (isNum && f.step !== undefined && f.step !== 1) rangeParts.push(`step ${f.step}`);
-  const rangeHint = rangeParts.filter(Boolean).join(", ");
+  const rangeHint = isNum
+    ? [f.min !== undefined && f.max !== undefined ? `${f.min}–${f.max}` : "",
+       f.step !== undefined && f.step !== 1 ? `step ${f.step}` : ""]
+        .filter(Boolean).join(", ")
+    : "";
 
   return (
     <div className="field">
@@ -165,20 +176,22 @@ function Field({ f, val, onChange }: {
   );
 }
 
-/* ─── Config view ─────────────────────────────────────────────────────────── */
-function ConfigView({ id, onBack }: { id: ModuleId; onBack: () => void }) {
+/* ─── ConfigView ──────────────────────────────────────────────────────────── */
+function ConfigView({ id, visible, onBack }: {
+  id: ModuleId; visible: boolean; onBack: () => void;
+}) {
   const mod = MODULE_CONFIGS.find((m) => m.id === id)!;
-  const { schema, vals, dirty, saved, set, save, reset } = useModuleCfg(id);
-  const mounted = useMountAnim();
+  const { schema, vals, dirty, saved, set, save, reset } = useModuleCfg(visible ? id : null);
+  const anim = useMountAnim(visible);
 
   if (!schema) return null;
 
-  // Group fields: checkboxes at bottom, rest on top
   const checks = schema.fields.filter((f: FieldDef) => f.type === "checkbox");
   const inputs = schema.fields.filter((f: FieldDef) => f.type !== "checkbox");
 
   return (
-    <div className={`cfg-view${mounted ? " in" : ""}`}>
+    <div className={`cfg-view${anim ? " in" : ""}`}
+         style={{ display: visible ? "flex" : "none" }}>
       <div className="cfg-header">
         <button className="back-btn" onClick={onBack}>
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -191,7 +204,8 @@ function ConfigView({ id, onBack }: { id: ModuleId; onBack: () => void }) {
           <span className="cfg-title">{mod.label}</span>
           <span className="cfg-subtitle">{schema.fields.length} settings</span>
         </div>
-        <div className="cfg-status-dot" data-dirty={dirty} data-saved={saved} />
+        <span className="cfg-status-dot"
+          data-dirty={String(dirty)} data-saved={String(saved)} />
       </div>
 
       <div className="cfg-body">
@@ -200,7 +214,6 @@ function ConfigView({ id, onBack }: { id: ModuleId; onBack: () => void }) {
             <Field key={f.key} f={f} val={vals[f.key]} onChange={set} />
           ))}
         </div>
-
         {checks.length > 0 && (
           <div className="cfg-section cfg-section-checks">
             <div className="section-label">Options</div>
@@ -215,36 +228,23 @@ function ConfigView({ id, onBack }: { id: ModuleId; onBack: () => void }) {
         <button className="btn btn-ghost" onClick={reset}>Reset</button>
         <button
           className={`btn btn-save${dirty ? " btn-save--dirty" : ""}${saved ? " btn-save--saved" : ""}`}
-          onClick={save}
-          disabled={!dirty && !saved}
-        >
-          {saved
-            ? <><Checkmark /> Saved</>
-            : dirty ? "Save changes" : "Saved"
-          }
+          onClick={save} disabled={!dirty && !saved}>
+          {saved ? <>✓ Saved</> : dirty ? "Save changes" : "Saved"}
         </button>
       </div>
     </div>
   );
 }
 
-/* ─── Module card ─────────────────────────────────────────────────────────── */
-function ModuleCard({
-  mod, isOn, isLive, hasCfg, onToggle, onCfg, index,
-}: {
+/* ─── ModuleCard ──────────────────────────────────────────────────────────── */
+function ModuleCard({ mod, isOn, isLive, hasCfg, onToggle, onCfg, index }: {
   mod: typeof MODULE_CONFIGS[0];
-  isOn: boolean;
-  isLive: boolean;
-  hasCfg: boolean;
-  onToggle: () => void;
-  onCfg: () => void;
-  index: number;
+  isOn: boolean; isLive: boolean; hasCfg: boolean;
+  onToggle: () => void; onCfg: () => void; index: number;
 }) {
   return (
-    <div
-      className={`card${isOn ? " card--on" : ""}${isLive ? " card--live" : ""}`}
-      style={{ animationDelay: `${index * 28}ms` }}
-    >
+    <div className={`card${isOn ? " card--on" : ""}${isLive ? " card--live" : ""}`}
+         style={{ animationDelay: `${index * 28}ms` }}>
       <div className="card-icon">{mod.icon}</div>
       <div className="card-body" onClick={onToggle}>
         <div className="card-name">{mod.label}</div>
@@ -253,11 +253,13 @@ function ModuleCard({
       <div className="card-actions">
         {isLive && <span className="live-pip" />}
         {hasCfg && (
-          <button className="cfg-btn" onClick={(e) => { e.stopPropagation(); onCfg(); }}
-            title="Configure">
+          <button className="cfg-btn"
+            onClick={(e) => { e.stopPropagation(); onCfg(); }} title="Configure">
             <svg width="13" height="13" viewBox="0 0 20 20" fill="none">
-              <path d="M10 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z" stroke="currentColor" strokeWidth="1.6"/>
-              <path d="M16.2 10c0-.3 0-.6-.1-.9l1.9-1.5-1.8-3.1-2.2.9c-.5-.4-1-.7-1.6-.9L12 2H8l-.4 2.5c-.6.2-1.1.5-1.6.9l-2.2-.9L2 7.6l1.9 1.5c-.1.3-.1.6-.1.9s0 .6.1.9L2 12.4l1.8 3.1 2.2-.9c.5.4 1 .7 1.6.9L8 18h4l.4-2.5c.6-.2 1.1-.5 1.6-.9l2.2.9 1.8-3.1-1.9-1.5c.1-.3.1-.6.1-.9Z" stroke="currentColor" strokeWidth="1.6"/>
+              <path d="M10 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"
+                stroke="currentColor" strokeWidth="1.6"/>
+              <path d="M16.2 10c0-.3 0-.6-.1-.9l1.9-1.5-1.8-3.1-2.2.9c-.5-.4-1-.7-1.6-.9L12 2H8l-.4 2.5c-.6.2-1.1.5-1.6.9l-2.2-.9L2 7.6l1.9 1.5c-.1.3-.1.6-.1.9s0 .6.1.9L2 12.4l1.8 3.1 2.2-.9c.5.4 1 .7 1.6.9L8 18h4l.4-2.5c.6-.2 1.1-.5 1.6-.9l2.2.9 1.8-3.1-1.9-1.5c.1-.3.1-.6.1-.9Z"
+                stroke="currentColor" strokeWidth="1.6"/>
             </svg>
           </button>
         )}
@@ -270,136 +272,142 @@ function ModuleCard({
   );
 }
 
-/* ─── Small icons ─────────────────────────────────────────────────────────── */
-function Checkmark() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{marginRight:4}}>
-      <path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.8"
-        strokeLinecap="round" strokeLinejoin="round"/>
-    </svg>
-  );
-}
-
 /* ─── Panel ───────────────────────────────────────────────────────────────── */
-function Panel({ onClose }: { onClose: () => void }) {
-  const { ready, isOn, toggle } = useSettings();
-  const [view, setView]         = useState<View>({ type: "list" });
-  const [search, setSearch]     = useState("");
-  const searchRef               = useRef<HTMLInputElement>(null);
-  const mounted                 = useMountAnim();
+function Panel({
+  visible, onClose, s, ready, isOn, toggle,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  s: ModuleSettings;
+  ready: boolean;
+  isOn: (id: ModuleId) => boolean;
+  toggle: (id: ModuleId) => void;
+}) {
+  const [view, setView]   = useState<View>({ type: "list" });
+  const [search, setSearch] = useState("");
+  const searchRef           = useRef<HTMLInputElement>(null);
+  const anim                = useMountAnim(visible);
 
   const currentUrl = window.location.href;
-  const liveIds    = new Set(MODULE_CONFIGS.filter((m) => m.matchPattern.test(currentUrl)).map((m) => m.id));
-  const onCount    = MODULE_CONFIGS.filter((m) => isOn(m.id)).length;
-  const liveCount  = liveIds.size;
+  const liveIds    = new Set(
+    MODULE_CONFIGS.filter((m) => m.matchPattern.test(currentUrl)).map((m) => m.id)
+  );
+  // Derive counts directly from reactive s — never stale
+  const onCount   = MODULE_CONFIGS.filter((m) => s[m.id] === true).length;
+  const liveCount = liveIds.size;
 
   const q        = search.toLowerCase();
   const filtered = MODULE_CONFIGS.filter((m) =>
     m.label.toLowerCase().includes(q) || m.description.toLowerCase().includes(q)
   );
 
-  // Focus search on open
+  // Focus search when opening
   useEffect(() => {
-    const t = setTimeout(() => searchRef.current?.focus(), 260);
-    return () => clearTimeout(t);
-  }, []);
+    if (visible) {
+      const t = setTimeout(() => searchRef.current?.focus(), 260);
+      return () => clearTimeout(t);
+    }
+  }, [visible]);
 
-  if (view.type === "config") return (
-    <ConfigView id={view.id} onBack={() => setView({ type: "list" })} />
-  );
+  const cfgId = view.type === "config" ? view.id : null;
 
   return (
-    <div className={`panel${mounted ? " in" : ""}`}>
+    <div className={`panel${anim ? " in" : ""}`}
+         style={{ display: visible ? "flex" : "none" }}>
 
-      {/* Header */}
-      <div className="panel-header">
-        <div className="panel-header-left">
-          <span className="panel-logo">⚡</span>
-          <div>
-            <div className="panel-title">xBot</div>
-            <div className="panel-meta">
-              <span className="meta-chip meta-on">{onCount} enabled</span>
-              {liveCount > 0 && (
-                <span className="meta-chip meta-live">
-                  <span className="live-pip live-pip--sm" />
-                  {liveCount} live
-                </span>
-              )}
+      {/* List view — always rendered, hidden when in config */}
+      <div style={{ display: view.type === "list" ? "contents" : "none" }}>
+        <div className="panel-header">
+          <div className="panel-header-left">
+            <span className="panel-logo">⚡</span>
+            <div>
+              <div className="panel-title">xBot</div>
+              <div className="panel-meta">
+                <span className="meta-chip meta-on">{onCount} enabled</span>
+                {liveCount > 0 && (
+                  <span className="meta-chip meta-live">
+                    <span className="live-pip live-pip--sm" />
+                    {liveCount} live
+                  </span>
+                )}
+              </div>
             </div>
           </div>
+          <button className="close-btn" onClick={onClose} aria-label="Close">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M2 2l10 10M12 2L2 12" stroke="currentColor"
+                strokeWidth="1.8" strokeLinecap="round"/>
+            </svg>
+          </button>
         </div>
-        <button className="close-btn" onClick={onClose} aria-label="Close">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-            <path d="M2 2l10 10M12 2L2 12" stroke="currentColor"
+
+        <div className="search-wrap">
+          <svg className="search-icon" width="14" height="14" viewBox="0 0 20 20" fill="none">
+            <circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" strokeWidth="1.8"/>
+            <path d="M14.5 14.5L18 18" stroke="currentColor"
               strokeWidth="1.8" strokeLinecap="round"/>
           </svg>
-        </button>
-      </div>
-
-      {/* Search */}
-      <div className="search-wrap">
-        <svg className="search-icon" width="14" height="14" viewBox="0 0 20 20" fill="none">
-          <circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" strokeWidth="1.8"/>
-          <path d="M14.5 14.5L18 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
-        </svg>
-        <input ref={searchRef} className="search-input" type="text"
-          placeholder="Search modules…" value={search}
-          onChange={(e) => setSearch(e.target.value)} />
-        {search && (
-          <button className="search-clear" onClick={() => setSearch("")}>×</button>
-        )}
-      </div>
-
-      {/* Live banner */}
-      {liveCount > 0 && !search && (
-        <div className="live-banner">
-          <span className="live-pip" />
-          <span>{liveCount} module{liveCount !== 1 ? "s" : ""} running on this page</span>
+          <input ref={searchRef} className="search-input" type="text"
+            placeholder="Search modules…" value={search}
+            onChange={(e) => setSearch(e.target.value)} />
+          {search && (
+            <button className="search-clear" onClick={() => setSearch("")}>×</button>
+          )}
         </div>
-      )}
 
-      {/* List */}
-      <div className="card-list">
-        {!ready ? (
-          <div className="state-msg">
-            <span className="spinner" />
-            Loading…
+        {liveCount > 0 && !search && (
+          <div className="live-banner">
+            <span className="live-pip" />
+            {liveCount} module{liveCount !== 1 ? "s" : ""} running on this page
           </div>
-        ) : filtered.length === 0 ? (
-          <div className="state-msg">No modules match "{search}"</div>
-        ) : (
-          filtered.map((mod, i) => (
-            <ModuleCard
-              key={mod.id}
-              mod={mod}
-              isOn={isOn(mod.id)}
-              isLive={liveIds.has(mod.id)}
-              hasCfg={Boolean(MODULE_CONFIG_SCHEMAS[mod.id])}
-              onToggle={() => toggle(mod.id)}
-              onCfg={() => setView({ type: "config", id: mod.id })}
-              index={i}
-            />
-          ))
         )}
+
+        <div className="card-list">
+          {!ready ? (
+            <div className="state-msg"><span className="spinner" />Loading…</div>
+          ) : filtered.length === 0 ? (
+            <div className="state-msg">No modules match "{search}"</div>
+          ) : (
+            filtered.map((mod, i) => (
+              <ModuleCard key={mod.id} mod={mod}
+                isOn={isOn(mod.id)} isLive={liveIds.has(mod.id)}
+                hasCfg={Boolean(MODULE_CONFIG_SCHEMAS[mod.id])}
+                onToggle={() => toggle(mod.id)}
+                onCfg={() => setView({ type: "config", id: mod.id })}
+                index={i} />
+            ))
+          )}
+        </div>
+
+        <div className="panel-footer">
+          <button className="footer-btn"
+            onClick={() => MODULE_CONFIGS.forEach((m) => {
+              if (s[m.id] !== true) toggle(m.id);
+            })}>All on</button>
+          <button className="footer-btn footer-btn--danger"
+            onClick={() => MODULE_CONFIGS.forEach((m) => {
+              if (s[m.id] === true) toggle(m.id);
+            })}>All off</button>
+          <span className="footer-ver">v1.0</span>
+        </div>
       </div>
 
-      {/* Footer */}
-      <div className="panel-footer">
-        <button className="footer-btn" onClick={() => {
-          MODULE_CONFIGS.forEach((m) => { if (!isOn(m.id)) toggle(m.id); });
-        }}>All on</button>
-        <button className="footer-btn footer-btn--danger" onClick={() => {
-          MODULE_CONFIGS.forEach((m) => { if (isOn(m.id)) toggle(m.id); });
-        }}>All off</button>
-        <span className="footer-ver">v1.0</span>
-      </div>
+      {/* Config view — one per possible cfgId, shown/hidden */}
+      {MODULE_CONFIGS.filter((m) => Boolean(MODULE_CONFIG_SCHEMAS[m.id])).map((m) => (
+        <ConfigView key={m.id} id={m.id}
+          visible={view.type === "config" && view.id === m.id}
+          onBack={() => setView({ type: "list" })} />
+      ))}
     </div>
   );
 }
 
-/* ─── Root ────────────────────────────────────────────────────────────────── */
+/* ─── OverlayRoot ─────────────────────────────────────────────────────────── */
 export function OverlayRoot() {
   const [open, setOpen] = useState(false);
+
+  // Settings live HERE — never unmount, never reset on close
+  const { s, ready, isOn, toggle } = useSettings();
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
@@ -412,14 +420,19 @@ export function OverlayRoot() {
       <button
         className={`trigger${open ? " trigger--open" : ""}`}
         onClick={() => setOpen((o) => !o)}
-        title="xBot"
-        aria-label="xBot"
-      >⚡</button>
+        title="xBot" aria-label="xBot">⚡</button>
 
-      {open && <div className="backdrop" onClick={() => setOpen(false)} />}
+      {/* Backdrop only shown when open */}
+      <div className="backdrop" style={{ display: open ? "block" : "none" }}
+           onClick={() => setOpen(false)} />
 
+      {/* Drawer always in DOM, shown/hidden via CSS */}
       <div className={`drawer${open ? " drawer--open" : ""}`}>
-        {open && <Panel onClose={() => setOpen(false)} />}
+        <Panel
+          visible={open}
+          onClose={() => setOpen(false)}
+          s={s} ready={ready} isOn={isOn} toggle={toggle}
+        />
       </div>
     </>
   );

@@ -83,7 +83,7 @@ export const MODULE_CONFIGS: ModuleConfig[] = [
     id: "renamer_bito",
     label: "Renamer (BITO Colors)",
     description: "Renames and color-codes incoming attacks for quick triage.",
-    matchPattern: /screen=overview_villages.*mode=incomings|screen=place/,
+    matchPattern: /screen=overview|screen=place/,
     scriptFile: "renamer_bito_merged.user.js",
     icon: "🎨",
   },

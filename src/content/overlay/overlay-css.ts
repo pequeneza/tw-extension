@@ -712,4 +712,27 @@ select.input {
   100% { transform: scale(1); }
 }
 
+/* ── Fake Sender badges ──────────────────────────────────────────────────── */
+.fake-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.fake-badge--ok {
+  background: var(--g-bg);
+  color: var(--g600);
+  border: 1px solid var(--g-br);
+}
+.fake-badge--warn {
+  background: var(--a-bg);
+  color: var(--a500);
+  border: 1px solid var(--a-br);
+}
+
 `;

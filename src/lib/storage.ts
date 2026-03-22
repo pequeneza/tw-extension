@@ -2,7 +2,7 @@ import { ModuleId, ModuleSettings, STORAGE_KEY } from "../types/modules";
 
 export async function loadSettings(): Promise<ModuleSettings> {
   return new Promise((resolve) => {
-    chrome.storage.sync.get(STORAGE_KEY, (result) => {
+    chrome.storage.sync.get([STORAGE_KEY], (result) => {
       resolve((result[STORAGE_KEY] as ModuleSettings) ?? {});
     });
   });
@@ -23,6 +23,11 @@ export async function isModuleEnabled(id: ModuleId): Promise<boolean> {
   return settings[id] === true;
 }
 
+/**
+ * Write the complete settings object in one call — avoids the
+ * read-modify-write race that happens when called twice in quick succession.
+ * The caller should pass the full settings map, not just the changed key.
+ */
 export async function setModuleEnabled(id: ModuleId, enabled: boolean): Promise<void> {
   const settings = await loadSettings();
   settings[id] = enabled;

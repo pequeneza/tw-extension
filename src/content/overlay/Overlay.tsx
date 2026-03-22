@@ -7,6 +7,7 @@ import {
 import {
   MODULE_CONFIG_SCHEMAS, FieldDef, ModuleConfigSchema,
 } from "../../types/config-schemas";
+import { FakeSenderView } from "./FakeSenderView";
 
 /* ─── Storage ─────────────────────────────────────────────────────────────── */
 function storageGet(keys: string[]): Promise<Record<string, unknown>> {
@@ -19,7 +20,7 @@ function storageSet(data: Record<string, unknown>): Promise<void> {
 }
 
 type CfgValues = Record<string, string | number | boolean>;
-type View = { type: "list" } | { type: "config"; id: ModuleId };
+type View = { type: "list" } | { type: "config"; id: ModuleId } | { type: "fakes" };
 
 /* ─── useSettings — lives in OverlayRoot, never unmounts ─────────────────── */
 function useSettings() {
@@ -283,7 +284,16 @@ function Panel({
   isOn: (id: ModuleId) => boolean;
   toggle: (id: ModuleId) => void;
 }) {
-  const [view, setView]   = useState<View>({ type: "list" });
+  // Persist active view across navigations — fakes panel stays open
+  const [view, setView] = useState<View>(() => {
+    const v = sessionStorage.getItem("xbot_panel_view");
+    if (v === "fakes") return { type: "fakes" };
+    return { type: "list" };
+  });
+  const setViewP = (v: View) => {
+    sessionStorage.setItem("xbot_panel_view", v.type);
+    setView(v);
+  };
   const [search, setSearch] = useState("");
   const searchRef           = useRef<HTMLInputElement>(null);
   const anim                = useMountAnim(visible);
@@ -373,7 +383,11 @@ function Panel({
                 isOn={isOn(mod.id)} isLive={liveIds.has(mod.id)}
                 hasCfg={Boolean(MODULE_CONFIG_SCHEMAS[mod.id])}
                 onToggle={() => toggle(mod.id)}
-                onCfg={() => setView({ type: "config", id: mod.id })}
+                onCfg={() =>
+                  mod.id === "fakes"
+                    ? setViewP({ type: "fakes" })
+                    : setViewP({ type: "config", id: mod.id })
+                }
                 index={i} />
             ))
           )}
@@ -393,18 +407,34 @@ function Panel({
       </div>
 
       {/* Config view — one per possible cfgId, shown/hidden */}
-      {MODULE_CONFIGS.filter((m) => Boolean(MODULE_CONFIG_SCHEMAS[m.id])).map((m) => (
+      {MODULE_CONFIGS.filter((m) => Boolean(MODULE_CONFIG_SCHEMAS[m.id]) && m.id !== "fakes").map((m) => (
         <ConfigView key={m.id} id={m.id}
           visible={view.type === "config" && view.id === m.id}
-          onBack={() => setView({ type: "list" })} />
+          onBack={() => setViewP({ type: "list" })} />
       ))}
+
+      {/* Fake Sender — dedicated panel with Status + Settings tabs */}
+      <FakeSenderView
+        visible={view.type === "fakes"}
+        onBack={() => setViewP({ type: "list" })}
+      />
     </div>
   );
 }
 
 /* ─── OverlayRoot ─────────────────────────────────────────────────────────── */
 export function OverlayRoot() {
-  const [open, setOpen] = useState(false);
+  // Persist open/closed across page navigations (place→confirm→place loop)
+  const [open, setOpenRaw] = useState(() =>
+    sessionStorage.getItem("xbot_overlay_open") === "1"
+  );
+  const setOpen = (next: boolean | ((p: boolean) => boolean)) => {
+    setOpenRaw((prev) => {
+      const val = typeof next === "function" ? next(prev) : next;
+      sessionStorage.setItem("xbot_overlay_open", val ? "1" : "0");
+      return val;
+    });
+  };
 
   // Settings live HERE — never unmount, never reset on close
   const { s, ready, isOn, toggle } = useSettings();

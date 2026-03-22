@@ -148,8 +148,6 @@
     if (!raw) return null;
     try {
       const plan = JSON.parse(raw);
-      // Discard plans older than TTL — prevents stale plans from firing on
-      // unrelated place-page visits (e.g. after closing the tab mid-flow).
       if (plan?.createdAt && (Date.now() - plan.createdAt) > PLAN_TTL_MS) {
         localStorage.removeItem(STORAGE_KEY);
         return null;

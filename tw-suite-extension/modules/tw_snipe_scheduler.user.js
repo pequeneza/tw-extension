@@ -141,7 +141,7 @@
   }
 
   // ---------------- plan storage ----------------
-  const PLAN_TTL_MS = 5 * 60 * 1000; // 5 minutes — abandon stale plans
+  const PLAN_TTL_MS = 0.1 * 60 * 1000; // 5 minutes — abandon stale plans
 
   function loadPlan() {
     const raw = localStorage.getItem(STORAGE_KEY);

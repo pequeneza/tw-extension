@@ -19,6 +19,14 @@
 
   const STORAGE_KEY = 'tw_gap_snipe_plan_v12';
 
+  // ── Suite config integration ───────────────────────────────────────────
+  const _suiteCfg = (typeof window.__twSuiteCfg === 'function')
+    ? window.__twSuiteCfg('tw_snipe_scheduler')
+    : {};
+  const _defaultGameSpeed = String(_suiteCfg.gameSpeed ?? 1.4);
+  const _defaultUnitSpeed = String(_suiteCfg.unitSpeed ?? 0.75);
+  // ──────────────────────────────────────────────────────────────────
+
   const UI_ID = 'twgs_ui';
   const BTN_ID = 'twgs_open_btn';
 
@@ -123,26 +131,31 @@
   }
 
   function formatCountdown(diffMs) {
-    // Force integer milliseconds to avoid "355.781982421875"
-    const wholeMs = Math.trunc(diffMs); // or Math.floor(diffMs) if you prefer
-    const sign = wholeMs < 0 ? '-' : '';
-    const abs = Math.abs(wholeMs);
-
-    const totalSeconds = Math.floor(abs / 1000);
+    const sign = diffMs < 0 ? '-' : '';
+    const abs = Math.abs(diffMs);
+    const s = Math.floor(abs / 1000);
     const ms = abs % 1000;
-
-    const hh = Math.floor(totalSeconds / 3600);
-    const mm = Math.floor((totalSeconds % 3600) / 60);
-    const ss = totalSeconds % 60;
-
-    return `${sign}${pad2(hh)}:${pad2(mm)}:${pad2(ss)}:${String(ms).padStart(3, '0')}`;
+    const mm = Math.floor(s / 60);
+    const ss = s % 60;
+    return `${sign}${pad2(mm)}:${pad2(ss)}.${String(ms).padStart(3, '0')}`;
   }
 
   // ---------------- plan storage ----------------
+  const PLAN_TTL_MS = 5 * 60 * 1000; // 5 minutes — abandon stale plans
+
   function loadPlan() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    try { return JSON.parse(raw); } catch { return null; }
+    try {
+      const plan = JSON.parse(raw);
+      // Discard plans older than TTL — prevents stale plans from firing on
+      // unrelated place-page visits (e.g. after closing the tab mid-flow).
+      if (plan?.createdAt && (Date.now() - plan.createdAt) > PLAN_TTL_MS) {
+        localStorage.removeItem(STORAGE_KEY);
+        return null;
+      }
+      return plan;
+    } catch { return null; }
   }
   function clearPlan() { localStorage.removeItem(STORAGE_KEY); }
 
@@ -406,14 +419,14 @@ function ensureOpenIcon() {
             <tr>
               <th>Game speed</th>
               <td>
-                <input id="twgs_gameSpeed" type="number" step="0.01" value="1.4" style="width:80px">
+                <input id="twgs_gameSpeed" type="number" step="0.01" value="' + _defaultGameSpeed + '" style="width:80px">
               </td>
             </tr>
 
             <tr>
               <th>Unit speed</th>
               <td>
-                <input id="twgs_unitSpeed" type="number" step="0.01" value="0.75" style="width:80px">
+                <input id="twgs_unitSpeed" type="number" step="0.01" value="' + _defaultUnitSpeed + '" style="width:80px">
               </td>
             </tr>
           </table>
@@ -440,13 +453,11 @@ function ensureOpenIcon() {
 
   $('#twgs_close').on('click', (e) => {
     e.preventDefault();
-    stopAllTimers();
     $ui.hide();
   });
 
   $('#twgs_reload').on('click', (e) => {
     e.preventDefault();
-    stopAllTimers();
     openUI();
   });
 
@@ -462,41 +473,24 @@ function ensureOpenIcon() {
     return { gameSpeed, unitSpeed, speedFactor: 1 / (gameSpeed * unitSpeed) };
   }
 
-  function stopAllTimers() {
-    for (const [idx, id] of state.timers.entries()) {
-      clearInterval(id);
-    }
-    state.timers.clear();
-  }
-
-  function stopTimer(idx, $container, $btn) {
+  function stopTimer(idx) {
     const existing = state.timers.get(idx);
     if (existing) {
       clearInterval(existing);
       state.timers.delete(idx);
     }
-
-    // UI reset (optional but recommended)
-    if ($container && $container.length) $container.text('—');
-    if ($btn && $btn.length) $btn.text('Timer');
   }
 
-  function startTimer(idx, sendMs, $container, $btn) {
-    // don't start twice
+  function startTimer(idx, sendMs, $container) {
     stopTimer(idx);
-
-    // UI state
-    if ($btn && $btn.length) $btn.text('Stop');
 
     const tick = () => {
       const now = getServerNowMs();
       const diff = sendMs - now;
-
-      const txt = formatCountdown(diff);
       if (diff < 0) {
-        $container.html(`<span style="color:#c62828; font-weight:bold;">${txt}</span>`);
+        $container.html(`<span style="color:#c62828; font-weight:bold;">${formatCountdown(diff)}</span>`);
       } else {
-        $container.html(`<span style="color:#1b5e20; font-weight:bold;">${txt}</span>`);
+        $container.html(`<span style="color:#1b5e20; font-weight:bold;">${formatCountdown(diff)}</span>`);
       }
     };
 
@@ -664,20 +658,11 @@ function ensureOpenIcon() {
 
     // timers (multiple)
     $('#twgs_result .twgs_timer').off('click').on('click', (e) => {
-      const $btn = $(e.currentTarget);
-      const $cand = $btn.closest('.twgs_candidate');
+      const $cand = $(e.currentTarget).closest('.twgs_candidate');
       const idx2 = parseInt($cand.attr('data-idx') || '0', 10);
       const c = candidates[idx2];
       if (!c) return;
-
-      const $out = $cand.find('.twgs_timer_out');
-
-      // TOGGLE
-      if (state.timers.has(idx2)) {
-        stopTimer(idx2, $out, $btn);
-      } else {
-        startTimer(idx2, c.sendMs, $out, $btn);
-      }
+      startTimer(idx2, c.sendMs, $cand.find('.twgs_timer_out'));
     });
 
     // open support in NEW TAB

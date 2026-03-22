@@ -1,6 +1,5 @@
-// Generated from overlay.css
-export const OVERLAY_CSS = `
-/* TW Suite Overlay — control-panel aesthetic, semantic color system */
+// AUTO-GENERATED — do not edit by hand.
+export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, semantic color system */
 
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=DM+Mono:wght@400;500&display=swap');
 
@@ -56,8 +55,15 @@ export const OVERLAY_CSS = `
 
   /* Layout */
   --w: 340px;
+  --w-snipe: 440px;
   --ease: 0.14s ease;
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* Typography */
+  --mono: 'DM Mono', monospace;
+
+  /* Backgrounds */
+  --bg: var(--n0);
 
   /* Elevation */
   --shadow-md: 0 4px 6px -1px rgba(0,0,0,.08), 0 2px 4px -2px rgba(0,0,0,.06);
@@ -99,6 +105,26 @@ export const OVERLAY_CSS = `
   color: var(--b500);
 }
 
+/* Snipe shortcut button — sits below ⚡, only rendered when gaps exist */
+.trigger--snipe {
+  top: 142px;   /* 108px + 28px height + 6px gap */
+  position: fixed;
+  left: 0;
+}
+.trigger-snipe-count {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  background: var(--r500);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 3px;
+  border-radius: 6px;
+  pointer-events: none;
+}
+
 /* ── Backdrop ────────────────────────────────────────────────────────────── */
 .backdrop {
   position: fixed;
@@ -122,6 +148,10 @@ export const OVERLAY_CSS = `
 .drawer--open {
   transform: translateX(0);
   pointer-events: all;
+}
+/* Snipe view gets a wider drawer */
+.drawer--snipe {
+  width: var(--w-snipe);
 }
 
 /* ── Panel shell ─────────────────────────────────────────────────────────── */
@@ -735,4 +765,204 @@ select.input {
   border: 1px solid var(--a-br);
 }
 
+/* ── Snipe Scheduler ─────────────────────────────────────────────────────── */
+/* Light blue body background for the snipe panel */
+.snipe-body {
+  background: #f0f7ff;
+}
+.snipe-body .cfg-section {
+  border-bottom-color: #d0e8ff;
+}
+.snipe-body .section-label {
+  color: #2563eb;
+}
+.snipe-speed-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.snipe-speed-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--n400);
+  white-space: nowrap;
+}
+.snipe-speed-input {
+  width: 72px !important;
+}
+
+.snipe-summary-row {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--n400);
+}
+.snipe-summary-item strong {
+  color: var(--n600);
+  font-weight: 600;
+}
+
+.snipe-error {
+  font-size: 12px;
+  color: var(--r500);
+  background: var(--r-bg);
+  border: 1px solid var(--r-br);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.snipe-gap-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.snipe-gap-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid #c3daf9;
+  background: #ffffff;
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+  color: var(--n500);
+  transition: border-color 0.12s, background 0.12s;
+}
+.snipe-gap-pill:hover {
+  border-color: var(--b-br);
+  background: var(--b-bg);
+}
+.snipe-gap-pill--selected {
+  border-color: var(--b400);
+  background: var(--b-bg);
+  color: var(--b500);
+}
+.snipe-gap-label {
+  font-weight: 600;
+  min-width: 44px;
+}
+.snipe-gap-time {
+  font-family: var(--mono);
+  flex: 1;
+}
+.snipe-gap-width {
+  font-size: 11px;
+  color: var(--n300);
+  white-space: nowrap;
+}
+
+.snipe-candidate-meta {
+  font-weight: 400;
+  color: var(--n300);
+  font-size: 11px;
+}
+
+.snipe-card {
+  border: 1px solid #c3daf9;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: #ffffff;
+}
+.snipe-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.snipe-card-coord {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--n600);
+  font-family: var(--mono);
+}
+.snipe-card-meta {
+  font-size: 11px;
+  color: var(--n400);
+}
+.snipe-card-meta strong {
+  color: var(--n600);
+}
+
+.snipe-card-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.snipe-timer-btn {
+  min-width: 52px;
+}
+.snipe-countdown {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--g600);
+  min-width: 96px;
+}
+.snipe-countdown--past {
+  color: var(--r500);
+}
+
+.snipe-units {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.snipe-unitbox {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 58px;
+  padding: 5px 4px;
+  border-radius: 8px;
+  border: 1px solid var(--n150);
+  background: var(--bg);
+  transition: border-color 0.1s, background 0.1s;
+}
+.snipe-unitbox--on {
+  border-color: var(--g-br);
+  background: var(--g-bg);
+}
+.snipe-unit-icon {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: filter 0.1s;
+}
+.snipe-unitbox--on .snipe-unit-icon {
+  filter: drop-shadow(0 0 3px var(--g500));
+}
+.snipe-unit-avail {
+  font-size: 11px;
+  color: var(--n400);
+  line-height: 1;
+}
+.snipe-unit-input {
+  width: 54px;
+  padding: 2px 3px;
+  font-size: 11px;
+  text-align: center;
+  border-radius: 5px;
+  border: 1px solid var(--n150);
+  background: var(--bg);
+  color: var(--n600);
+  font-family: var(--mono);
+}
+.snipe-unit-input:focus {
+  outline: none;
+  border-color: var(--b400);
+}
 `;

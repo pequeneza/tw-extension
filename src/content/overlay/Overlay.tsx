@@ -8,6 +8,7 @@ import {
   MODULE_CONFIG_SCHEMAS, FieldDef, ModuleConfigSchema,
 } from "../../types/config-schemas";
 import { FakeSenderView } from "./FakeSenderView";
+import { SnipeView }     from "./SnipeView";
 
 /* ─── Storage ─────────────────────────────────────────────────────────────── */
 function storageGet(keys: string[]): Promise<Record<string, unknown>> {
@@ -20,7 +21,7 @@ function storageSet(data: Record<string, unknown>): Promise<void> {
 }
 
 type CfgValues = Record<string, string | number | boolean>;
-type View = { type: "list" } | { type: "config"; id: ModuleId } | { type: "fakes" };
+type View = { type: "list" } | { type: "config"; id: ModuleId } | { type: "fakes" } | { type: "snipe" };
 
 /* ─── useSettings — lives in OverlayRoot, never unmounts ─────────────────── */
 function useSettings() {
@@ -158,6 +159,25 @@ function Field({ f, val, onChange }: {
         .filter(Boolean).join(", ")
     : "";
 
+  // ── Number / text input: hold a string draft so the box can be cleared
+  //    without immediately snapping back to default. Commit to parent only
+  //    when the value is valid (on every keystroke for text, on blur for number).
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const [draft, setDraft] = useState<string>(String(v));
+  // Keep draft in sync when the parent value changes from outside (e.g. Reset)
+  const prevV = useRef<unknown>(v);
+  if (prevV.current !== v) {
+    prevV.current = v;
+    // Only update draft when parent drove the change (not when we caused it)
+    if (draft !== String(v)) setDraft(String(v));
+  }
+
+  const commitNum = (raw: string) => {
+    const n = parseFloat(raw);
+    if (Number.isFinite(n)) onChange(f.key, n);
+    // if not finite (empty / "-") leave parent value unchanged — don't snap
+  };
+
   return (
     <div className="field">
       <div className="field-top">
@@ -165,14 +185,34 @@ function Field({ f, val, onChange }: {
         {rangeHint && <span className="field-range">{rangeHint}</span>}
       </div>
       {f.help && <span className="field-help">{f.help}</span>}
-      <input className="input" type={f.type} value={String(v)}
+      <input
+        className="input"
+        type={f.type}
+        value={draft}
         min={f.min} max={f.max} step={f.step}
         onChange={(e) => {
+          const raw = e.target.value;
+          setDraft(raw);
+          if (!isNum) {
+            onChange(f.key, raw);
+          } else {
+            // commit immediately if valid so live preview updates
+            const n = parseFloat(raw);
+            if (Number.isFinite(n)) onChange(f.key, n);
+          }
+        }}
+        onBlur={() => {
           if (isNum) {
-            const n = parseFloat(e.target.value);
-            onChange(f.key, Number.isFinite(n) ? n : f.default as number);
-          } else onChange(f.key, e.target.value);
-        }} />
+            const n = parseFloat(draft);
+            if (!Number.isFinite(n)) {
+              // restore to last known good value on blur if still empty
+              setDraft(String(v));
+            } else {
+              commitNum(draft);
+            }
+          }
+        }}
+      />
     </div>
   );
 }
@@ -275,7 +315,7 @@ function ModuleCard({ mod, isOn, isLive, hasCfg, onToggle, onCfg, index }: {
 
 /* ─── Panel ───────────────────────────────────────────────────────────────── */
 function Panel({
-  visible, onClose, s, ready, isOn, toggle,
+  visible, onClose, s, ready, isOn, toggle, view, setViewP,
 }: {
   visible: boolean;
   onClose: () => void;
@@ -283,17 +323,9 @@ function Panel({
   ready: boolean;
   isOn: (id: ModuleId) => boolean;
   toggle: (id: ModuleId) => void;
+  view: View;
+  setViewP: (v: View) => void;
 }) {
-  // Persist active view across navigations — fakes panel stays open
-  const [view, setView] = useState<View>(() => {
-    const v = sessionStorage.getItem("xbot_panel_view");
-    if (v === "fakes") return { type: "fakes" };
-    return { type: "list" };
-  });
-  const setViewP = (v: View) => {
-    sessionStorage.setItem("xbot_panel_view", v.type);
-    setView(v);
-  };
   const [search, setSearch] = useState("");
   const searchRef           = useRef<HTMLInputElement>(null);
   const anim                = useMountAnim(visible);
@@ -386,7 +418,9 @@ function Panel({
                 onCfg={() =>
                   mod.id === "fakes"
                     ? setViewP({ type: "fakes" })
-                    : setViewP({ type: "config", id: mod.id })
+                    : mod.id === "tw_snipe_scheduler"
+                      ? setViewP({ type: "snipe" })
+                      : setViewP({ type: "config", id: mod.id })
                 }
                 index={i} />
             ))
@@ -418,6 +452,12 @@ function Panel({
         visible={view.type === "fakes"}
         onBack={() => setViewP({ type: "list" })}
       />
+
+      {/* Snipe Scheduler — dedicated panel with gap/candidate UI */}
+      <SnipeView
+        visible={view.type === "snipe"}
+        onBack={() => setViewP({ type: "list" })}
+      />
     </div>
   );
 }
@@ -439,11 +479,53 @@ export function OverlayRoot() {
   // Settings live HERE — never unmount, never reset on close
   const { s, ready, isOn, toggle } = useSettings();
 
+  // Count gaps from live DOM — poll every 2 s so the button appears/disappears
+  // as the user navigates or the incomings table updates.
+  const [gapCount, setGapCount] = useState(0);
+  useEffect(() => {
+    const count = () => {
+      const wrap = document.querySelector("#commands_incomings");
+      if (!wrap) { setGapCount(0); return; }
+      let attacks = 0;
+      wrap.querySelectorAll<HTMLElement>("tr.command-row").forEach((tr) => {
+        const t = (
+          tr.getAttribute("data-command-type") ??
+          tr.querySelector("[data-command-type]")?.getAttribute("data-command-type") ?? ""
+        ).toLowerCase();
+        if (t !== "support") attacks++;
+      });
+      setGapCount(Math.max(0, attacks - 1));
+    };
+    count();
+    const id = setInterval(count, 2000);
+    return () => clearInterval(id);
+  }, []);
+
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
     document.addEventListener("keydown", h);
     return () => document.removeEventListener("keydown", h);
   }, []);
+
+  // View state lifted here so the drawer width can react to it
+  const [view, setView] = useState<View>(() => {
+    const v = sessionStorage.getItem("xbot_panel_view");
+    if (v === "fakes") return { type: "fakes" };
+    if (v === "snipe") return { type: "snipe" };
+    return { type: "list" };
+  });
+  const setViewP = (v: View) => {
+    sessionStorage.setItem("xbot_panel_view", v.type);
+    setView(v);
+  };
+
+  // Open drawer directly to snipe view
+  const openSnipe = () => {
+    setViewP({ type: "snipe" });
+    setOpen(true);
+  };
+
+  const isSnipe = view.type === "snipe";
 
   return (
     <>
@@ -452,16 +534,30 @@ export function OverlayRoot() {
         onClick={() => setOpen((o) => !o)}
         title="xBot" aria-label="xBot">⚡</button>
 
+      {/* Snipe shortcut — only visible when gaps exist on this page */}
+      {gapCount > 0 && (
+        <button
+          className="trigger trigger--snipe"
+          onClick={openSnipe}
+          title={`${gapCount} gap${gapCount !== 1 ? "s" : ""} — open snipe planner`}
+          aria-label="Snipe planner"
+        >
+          🏹
+          <span className="trigger-snipe-count">{gapCount}</span>
+        </button>
+      )}
+
       {/* Backdrop only shown when open */}
       <div className="backdrop" style={{ display: open ? "block" : "none" }}
            onClick={() => setOpen(false)} />
 
-      {/* Drawer always in DOM, shown/hidden via CSS */}
-      <div className={`drawer${open ? " drawer--open" : ""}`}>
+      {/* Drawer — wider when snipe view is active */}
+      <div className={`drawer${open ? " drawer--open" : ""}${isSnipe ? " drawer--snipe" : ""}`}>
         <Panel
           visible={open}
           onClose={() => setOpen(false)}
           s={s} ready={ready} isOn={isOn} toggle={toggle}
+          view={view} setViewP={setViewP}
         />
       </div>
     </>

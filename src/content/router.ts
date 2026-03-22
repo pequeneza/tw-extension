@@ -1,21 +1,17 @@
 /**
  * xBot — Content script, runs at document_end on every TW game page.
  *
- * 1. Always injects the overlay (trigger button + panel).
- * 2. Reads storage → injects only modules that are:
- *    a) explicitly enabled (settings[id] === true)  ← strict equality, no default-on
- *    b) whose matchPattern matches the current URL
- *
- * The strict `=== true` check is the critical fix: a missing key in storage
- * now means DISABLED, not enabled. This prevents scripts from running on
- * page navigation before the user has intentionally enabled them.
+ * Checks the global bot enabled flag first. If the bot is off, nothing runs.
+ * If on, injects only modules that are explicitly enabled and URL-matched.
  */
 
 import { MODULE_CONFIGS, STORAGE_KEY, ModuleSettings } from "../types/modules";
 import { MODULE_CONFIG_SCHEMAS } from "../types/config-schemas";
 
+const BOT_ENABLED_KEY = "xbot_enabled";
+
 function buildStorageKeys(): string[] {
-  const keys: string[] = [STORAGE_KEY];
+  const keys: string[] = [BOT_ENABLED_KEY, STORAGE_KEY];
   for (const schema of Object.values(MODULE_CONFIG_SCHEMAS)) {
     if (schema) keys.push(schema.storageKey);
   }
@@ -29,11 +25,11 @@ function injectScript(src: string): void {
   (document.head ?? document.documentElement).appendChild(s);
 }
 
-// Overlay is always injected — it's the control panel, not a module
-injectScript(chrome.runtime.getURL("content/overlay.js"));
-
-// Read storage once, then inject only explicitly-enabled matching modules
 chrome.storage.sync.get(buildStorageKeys(), (result) => {
+  // Global kill-switch: if bot is not explicitly enabled, do nothing
+  const botEnabled = (result[BOT_ENABLED_KEY] as boolean) === true;
+  if (!botEnabled) return;
+
   const settings = (result[STORAGE_KEY] as ModuleSettings) ?? {};
 
   // Expose per-module config on window for userscripts
@@ -48,7 +44,6 @@ chrome.storage.sync.get(buildStorageKeys(), (result) => {
   (document.head ?? document.documentElement).appendChild(exposeScript);
 
   for (const mod of MODULE_CONFIGS) {
-    // STRICT: must be explicitly true — missing key = disabled
     if (settings[mod.id] !== true) continue;
     if (!mod.matchPattern.test(window.location.href)) continue;
     injectScript(chrome.runtime.getURL(`modules/${mod.scriptFile}`));

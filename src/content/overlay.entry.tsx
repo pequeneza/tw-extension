@@ -1,9 +1,11 @@
 /**
- * overlay.entry.tsx
- * Mounts the TW Suite overlay into a Shadow DOM for full CSS isolation.
+ * xBot — Overlay entry point.
  *
- * CSS is imported from overlay-css.ts (a plain TS string constant) —
- * no Rollup CSS plugin needed, works with any bundler.
+ * Runs as a CONTENT SCRIPT (declared in manifest.json), NOT as an injected
+ * page script. This gives it access to chrome.storage, chrome.runtime, etc.
+ *
+ * Mounts into a Shadow DOM so xBot CSS cannot bleed into the TW page and
+ * TW CSS cannot reach inside and break xBot styles.
  */
 
 import React from "react";
@@ -12,10 +14,11 @@ import { OverlayRoot } from "./overlay/Overlay";
 import { OVERLAY_CSS } from "./overlay/overlay-css";
 
 function mount(): void {
-  if (document.getElementById("tw-suite-overlay-host")) return;
+  // Guard: only mount once per page (document_end can fire on SPA navigation)
+  if (document.getElementById("xbot-overlay-host")) return;
 
   const host = document.createElement("div");
-  host.id = "tw-suite-overlay-host";
+  host.id = "xbot-overlay-host";
   host.style.cssText =
     "position:fixed;top:0;left:0;z-index:2147483639;pointer-events:none;";
   document.documentElement.appendChild(host);
@@ -30,7 +33,7 @@ function mount(): void {
   mountPoint.style.cssText = "pointer-events:auto;";
   shadow.appendChild(mountPoint);
 
-  createRoot(mountPoint).render(<OverlayRoot/>);
+  createRoot(mountPoint).render(<OverlayRoot />);
 }
 
 if (document.body) {

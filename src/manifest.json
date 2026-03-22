@@ -30,7 +30,10 @@
   "content_scripts": [
     {
       "matches": ["https://*.tribalwars.com.pt/game.php*"],
-      "js": ["content/router.js"],
+      "js": [
+        "content/overlay.js",
+        "content/router.js"
+      ],
       "run_at": "document_end",
       "all_frames": false
     }
@@ -40,8 +43,7 @@
     {
       "resources": [
         "modules/*.js",
-        "assets/*",
-        "content/overlay.js"
+        "assets/*"
       ],
       "matches": ["https://*.tribalwars.com.pt/*"]
     }

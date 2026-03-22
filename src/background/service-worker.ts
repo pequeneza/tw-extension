@@ -2,11 +2,13 @@
  * xBot — Background service worker (MV3).
  *
  * On install: all modules default to DISABLED (opt-in model).
- * Users explicitly enable what they want — this prevents scripts from
- * running unintentionally when navigating between TW pages.
+ * On update:  any newly added module IDs are written as false (disabled).
  *
- * On update: any newly added module IDs are written as false (disabled)
- * so existing users don't get unexpected new scripts running.
+ * The no-op fetch listener below silences Chrome's "no-op fetch handler may
+ * bring overhead during navigation" warning. Without it Chrome registers a
+ * default passthrough anyway, but flags it as unintentional overhead. An
+ * explicit listener that returns undefined (letting the browser handle the
+ * request normally) is the recommended suppression pattern.
  */
 
 import { MODULE_CONFIGS, STORAGE_KEY } from "../types/modules";
@@ -20,10 +22,17 @@ type BgResponse =
   | { type: "ACTIVE_TAB_URL"; url: string | null }
   | { type: "ACK" };
 
+// ─── Suppress "no-op fetch handler" warning ───────────────────────────────────
+// Returning nothing (undefined) lets the browser handle the request normally.
+// This is intentionally a pass-through — the extension has no need to intercept
+// network requests; we just need Chrome to know the handler is deliberate.
+self.addEventListener("fetch", (_event) => {
+  // intentional no-op pass-through
+});
+
 // ─── Install / update ─────────────────────────────────────────────────────────
 chrome.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === "install") {
-    // Fresh install — all modules OFF by default (explicit opt-in)
     const defaults: ModuleSettings = {};
     for (const mod of MODULE_CONFIGS) defaults[mod.id] = false;
 
@@ -34,14 +43,13 @@ chrome.runtime.onInstalled.addListener(({ reason }) => {
   }
 
   if (reason === "update") {
-    // Extension updated — keep existing settings, but add any new module IDs as false
     chrome.storage.sync.get(STORAGE_KEY, (result) => {
       const existing = (result[STORAGE_KEY] as ModuleSettings) ?? {};
       let changed = false;
 
       for (const mod of MODULE_CONFIGS) {
         if (!(mod.id in existing)) {
-          existing[mod.id] = false; // new module → disabled by default
+          existing[mod.id] = false;
           changed = true;
         }
       }

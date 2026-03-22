@@ -1,0 +1,239 @@
+// Renomear Ataques (Cores BITO v3.0) — merged/strengthened
+// Base logic: BITO v3.0
+// Robustness: selectors + !important bg helper inspired by "Global Adaptado 3.4"
+
+(function () {
+  'use strict';
+
+  if (window.__twRenamerBitoMergedLoaded) return;
+  window.__twRenamerBitoMergedLoaded = true;
+
+  ////* Preferências do script *////
+  var tamanho_letra = 8;
+  var pagina_de_ataques = 'coluna'; // Modos: coluna, linha, nada
+
+  var settings = [
+    ['[Morto]', '[Desviado]', '[Desviar]', '[Reconquistar]', '[Reconquistado]', '[Snipado]', '[Snipar]','[Fubar]', '[Snipe Cancel]', '[Fake]', '[Possível Full]', '[Reforçar]', ' | Retirar', ' | Vigiar', ' | ✓'], //Nome do comando
+    ['M'      , 'D!'        , 'D'        , 'R'             , 'RR'             , 'S!'       , 'S'       , 'FU'    ,'SC'             , 'FA' , 'PV', 'RF', 'R!', 'V!', '✓'], //Nome do botão
+    ['green'  , 'orange'    , 'dorange'  , 'gray'          , 'white'          , 'lblue'    , 'blue'    , 'dgreen','red'            , 'Pink', 'dblue', 'black', 'dgreen', 'yellow','lgreen' ], //Cor do botão
+    ['white'  , 'white'     , 'white'    , 'white'         , 'black'          , 'white'    , 'white'   , 'white' ,'white'          , 'black', 'white', 'white', 'white' , 'black','black']
+  ];
+
+  var colors = [
+    ['red', 'green', 'blue', 'yellow', 'orange', 'lblue', 'lime', 'white', 'black', 'gray', 'dorange', 'black', 'Pink', 'brown','dblue','dgreen','lgreen'], // Nomes das cores
+    ['#e20606', '#31c908', '#0d83dd', '#ffd91c', '#ef8b10', '#22e5db', '#ffd400', '#ffffff', '#000000', '#adb6c6', '#9232a8', '#40434E', '#FFC0CB', '#892929','#00007f','#004c00','#93cf82'], // background top
+    ['#ff0000', '#228c05', '#0860a3', '#e8c30d', '#d3790a', '#0cd3c9', '#ffd400', '#dbdbdb', '#000000', '#828891', '#9232a8', '#40434E','#FFC0CB' , '#892929','#00007f','#004c00','#93cf82' ] // background bottom
+  ];
+
+  function getTop(num) {
+    var index = colors[0].indexOf(settings[2][num]);
+    if (settings[2][num]) return colors[1][index];
+    return '#b69471';
+  }
+
+  function getBot(num) {
+    var index = colors[0].indexOf(settings[2][num]);
+    if (settings[2][num]) return colors[2][index];
+    return '#6c4d2d';
+  }
+
+  function getFon(num) {
+    var index = colors[0].indexOf(settings[3][num]);
+    if (settings[3][num]) return colors[1][index];
+    return '#ffffff';
+  }
+
+  function getSize() {
+    if (tamanho_letra) return tamanho_letra;
+    return 12;
+  }
+
+  function check(name, nr) {
+    var i, j;
+    for (i = 0; i < settings[0].length; i++) {
+      for (j = 0; j < settings[0].length; j++) {
+        if (name.indexOf(settings[0][i] + settings[0][j]) != -1) {
+          if (nr == 1) return i;
+          else if (nr == 2) return j;
+          else return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function isSupport(linha) {
+    try {
+      var scr = window.$(linha).find('img:eq(0)').attr('src');
+      return !!(scr && scr.indexOf('support') >= 0);
+    } catch {
+      return false;
+    }
+  }
+
+  // Force bg with !important
+  function setBg($el, value) {
+    if (!$el || !$el.length) return;
+    $el.attr("style", ($el.attr("style") || "") + "background:" + value + " !important;");
+  }
+
+  // Inject buttons into a "linha" (row) for non-overview_villages pages
+  function injectButtonsLegacy(nr, linha) {
+    var $linha = window.$(linha);
+
+    // Avoid duplicates: remove old span and rebuild
+    $linha.find('.rename-buttons').remove();
+
+    var html = '<span class="rename-buttons" style="float: right;">';
+    settings[1].forEach(function (nome, num) {
+      html +=
+        '<button type="button" id="opt' + nr + '_' + num + '" class="btn" title="' + settings[0][num] + '" ' +
+        'style="margin-left:2px;color:' + getFon(num) + '; font-size: ' + getSize() + 'px !important; background: linear-gradient(to bottom, ' + getTop(num) + ' 30%, ' + getBot(num) + ' 10%)">' +
+        nome + '</button>';
+    });
+    html += '</span>';
+
+    $linha.find('.quickedit-content').append(html);
+
+    settings[0].forEach(function (nome, num) {
+      window.$('#opt' + nr + '_' + num).off('click').on('click', function () {
+        $linha.find('.rename-icon').click();
+        var $input = $linha.find('input[type=text]');
+        if (!$input.length) return;
+
+        if (nome.indexOf('|') === -1) {
+          $input.val($input.val().split(" ")[0] + ' ' + settings[0][num]);
+        } else {
+          $input.val($input.val() + settings[0][num]);
+        }
+        $linha.find('input[type=button]').click();
+        injectButtonsLegacy(nr, linha); // rebuild buttons after rename
+      });
+    });
+  }
+
+  function paintRow($linha, linha, name) {
+    var code = settings[0].indexOf(name.indexOf(" ") >= 0 ? name.substr(name.indexOf(" ") + 1) : name);
+    var dual = check(name);
+    var codes = [];
+    codes[0] = check(name, 1);
+    codes[1] = check(name, 2);
+
+    if (isSupport(linha)) {
+      // support => yellow
+      if (pagina_de_ataques === 'linha') {
+        setBg($linha.find('td'), colors[2][colors[0].indexOf('yellow')]);
+      } else if (pagina_de_ataques === 'coluna') {
+        setBg($linha.find('td:eq(0)'), colors[2][colors[0].indexOf('yellow')]);
+      }
+      return;
+    }
+
+    if (code != -1) {
+      var colorcode = settings[2][code];
+      var color = colors[1][colors[0].indexOf(colorcode)];
+      if (pagina_de_ataques === 'linha') {
+        setBg($linha.find('td'), color);
+      } else if (pagina_de_ataques === 'coluna') {
+        setBg($linha.find('td:eq(0)'), color);
+        $linha.find('a:eq(0)').attr(
+          'style',
+          'color: white !important; text-shadow:-1px -1px 0 #000,  1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;'
+        );
+      }
+    } else if (dual) {
+      var colorcode1 = settings[2][codes[0]];
+      var colorcode2 = settings[2][codes[1]];
+      var color1 = colors[1][colors[0].indexOf(colorcode1)];
+      var color2 = colors[1][colors[0].indexOf(colorcode2)];
+      var gradient = 'repeating-linear-gradient(45deg, ' + color1 + ', ' + color1 + ' 10px, ' + color2 + ' 10px, ' + color2 + ' 20px)';
+
+      if (pagina_de_ataques === 'linha') {
+        setBg($linha.find('td'), gradient);
+      } else if (pagina_de_ataques === 'coluna') {
+        setBg($linha.find('td:eq(0)'), gradient);
+        $linha.find('a:eq(0)').attr(
+          'style',
+          'color: white !important; text-shadow:-1px -1px 0 #000,  1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;'
+        );
+      }
+    } else {
+      // default red for untagged attacks
+      if (pagina_de_ataques === 'linha') {
+        setBg($linha.find('td'), colors[2][colors[0].indexOf('red')]);
+        $linha.find('a').each(function (_, td) {
+          window.$(td).attr('style', 'color: ' + colors[2][colors[0].indexOf('white')] + ' !important;');
+        });
+      } else if (pagina_de_ataques === 'coluna') {
+        setBg($linha.find('td:eq(0)'), colors[2][colors[0].indexOf('red')]);
+        $linha.find('a:eq(0)').attr(
+          'style',
+          'color: white !important; text-shadow:-1px -1px 0 #000,  1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;'
+        );
+      }
+    }
+  }
+
+  function run() {
+    if (typeof window.$ === "undefined") return;
+
+    // Legacy mode (non overview_villages incomings list)
+    if (location.href.indexOf("screen=overview_villages") == -1 && location.href.indexOf("mode=incomings&subtype=attacks") == -1) {
+      window.$('#commands_incomings .command-row').each(function (nr, linha) {
+        if (!isSupport(linha)) injectButtonsLegacy(nr, linha);
+      });
+      return;
+    }
+
+    // Incomings overview table mode: paint + ensure buttons in first column when rename icon exists
+    setInterval(function () {
+      var $rows = window.$('#incomings_table tr.nowrap');
+      if (!$rows.length) $rows = window.$('#incomings_table tbody tr'); // fallback
+
+      $rows.each(function (nr, linha) {
+        var $linha = window.$(linha);
+        var $cmdCell = $linha.find('td:eq(0)');
+        if (!$cmdCell.length) return;
+
+        var $label = $cmdCell.find('.quickedit-label');
+        var name = $label.length ? window.$.trim($label.text()) : window.$.trim($cmdCell.text());
+        if (!name) return;
+
+        // Inject buttons (once per row)
+        if ($cmdCell.find('.rename-buttons').length === 0 && $cmdCell.find('.rename-icon').length > 0) {
+          var html = '<span class="rename-buttons" style="float:right;">';
+          settings[1].forEach(function (nome, num) {
+            html += '<button type="button" data-cmd="' + settings[0][num] + '" ' +
+              'title="' + settings[0][num] + '" ' +
+              'style="margin-left:2px;color:' + getFon(num) + ';font-size:' + getSize() + 'px!important;' +
+              'background:linear-gradient(to bottom,' + getTop(num) + ' 30%,' + getBot(num) + ' 10%);">' +
+              nome + '</button>';
+          });
+          html += '</span>';
+          $cmdCell.append(html);
+
+          $cmdCell.find('.rename-buttons button').off('click').on('click', function () {
+            var tag = window.$(this).data('cmd');
+            $cmdCell.find('.rename-icon').click();
+            var $input = $cmdCell.find('input[type=text]');
+            if ($input.length) {
+              $input.val($input.val().split(" ")[0] + ' ' + tag);
+              $cmdCell.find('input[type=button]').click();
+            }
+          });
+        }
+
+        paintRow($linha, linha, name);
+      });
+    }, 250);
+  }
+
+  // Run once after ready
+  function whenReady(fn, tries = 0) {
+    if (typeof window.$ !== "undefined" && document.body) return fn();
+    if (tries > 200) return;
+    setTimeout(() => whenReady(fn, tries + 1), 50);
+  }
+
+  whenReady(run);
+})();

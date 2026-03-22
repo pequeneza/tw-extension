@@ -451,7 +451,7 @@ export const MODULE_CONFIG_SCHEMAS: ModuleConfigSchemas = {
     ],
   },
 
-  mass_label_delay: {
+  mass_label_renamer: {
     storageKey: "tw_suite_cfg_mass_label",
     fields: [
       {

@@ -12,9 +12,8 @@ export type ModuleId =
   | "extended_profile"
   | "fakes"
   | "mano_de_deus"
-  | "mass_label_delay"
+  | "mass_label_renamer"
   | "noble_sender_trainer"
-  | "renamer_bito"
   | "resource_buyer"
   | "tw_snipe_scheduler"
   | "wh_balancer";
@@ -64,11 +63,11 @@ export const MODULE_CONFIGS: ModuleConfig[] = [
     icon: "🎯",
   },
   {
-    id: "mass_label_delay",
-    label: "Mass Label Delay",
-    description: "Automatically labels all incoming attacks with a human-like delay.",
-    matchPattern: /screen=overview_villages.*mode=incomings/,
-    scriptFile: "mass_label_delay.user.js",
+    id: "mass_label_renamer",
+    label: "Mass Label + Renamer",
+    description: "BITO colour buttons on every incoming row + automatic attack tags.",
+    matchPattern: /screen=overview_villages.*mode=incomings|screen=overview(?!_villages)/,
+    scriptFile: "mass_label_renamer.user.js",
     icon: "🏷️",
   },
   {
@@ -78,14 +77,6 @@ export const MODULE_CONFIGS: ModuleConfig[] = [
     matchPattern: /screen=snob(?!.*mode=coin)/,
     scriptFile: "noble_sender_trainer.user.js",
     icon: "👑",
-  },
-  {
-    id: "renamer_bito",
-    label: "Renamer (BITO Colors)",
-    description: "Renames and color-codes incoming attacks for quick triage.",
-    matchPattern: /screen=overview|screen=place/,
-    scriptFile: "renamer_bito_merged.user.js",
-    icon: "🎨",
   },
   {
     id: "resource_buyer",

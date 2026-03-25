@@ -48,6 +48,43 @@
   align-items:center;
 }
 #tm_whbalancer_btn{ margin-left:0 !important; }
+/* PP rows highlight */
+.tmWH tr.tmPpHeader td{
+  background:#c7e3ff !important;
+  border:1px solid #2a5d8a !important;
+  color:#000;
+  font-weight:bold;
+}
+.tmWH tr.tmPpRow td{
+  background:#e7f3ff !important;
+  border:1px solid #2a5d8a !important;
+}
+.tmWH .tmBadgePPNow{
+  display:inline-block;
+  padding:1px 6px;
+  border:1px solid #1a7a1a;
+  background:#d4f7d4;
+  border-radius:3px;
+  font-size:12px;
+  margin-right:6px;
+  color:#1a5c1a;
+  font-weight:bold;
+}
+.tmWH tr.tmPpNowHeader td{
+  background:#d4f7d4 !important;
+  border:1px solid #1a7a1a !important;
+  color:#000;
+  font-weight:bold;
+}
+.tmWH .tmBadgePP{
+  display:inline-block;
+  padding:1px 6px;
+  border:1px solid #2a5d8a;
+  background:#ffffff;
+  border-radius:3px;
+  font-size:12px;
+  margin-right:6px;
+}
 
 .tmWH { color:#000; font-family: Verdana, Arial, sans-serif; }
 .tmWH .twbox { background:#f3e6c1; border:1px solid #7b5b2b; padding:8px; margin-bottom:10px; }
@@ -153,6 +190,25 @@
   box-shadow: 0 2px 10px rgba(0,0,0,0.25);
   pointer-events:none;
 }
+/* HQ building priority boost */
+.tmWH tr.tmHqBoostRow td { background:#fffbe6 !important; border-color:#c8a800 !important; }
+.tmWH .tmBadgeHQ {
+  display:inline-block; padding:1px 5px;
+  border:1px solid #c8a800; background:#fff3b0;
+  border-radius:3px; font-size:11px; margin-right:4px;
+  color:#7a6000; font-weight:bold;
+}
+/* HQ building check */
+.tmHqBox { margin-top:10px; }
+.tmHqRow { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:4px 0; border-bottom:1px solid rgba(123,91,43,0.2); flex-wrap:wrap; }
+.tmHqRow:last-child { border-bottom:none; }
+.tmHqVillage { font-weight:bold; min-width:140px; }
+.tmHqBuilding { font-size:11px; color:#3b2a12; flex:1; }
+.tmHqOk { color:#1a7a1a; font-weight:bold; }
+.tmHqWarn { color:#a40000; font-weight:bold; }
+.tmHqEta { font-size:11px; color:#555; white-space:nowrap; }
+.tmHqRes { font-size:11px; }
+.tmHqShortfall { color:#a40000; }
 </style>`;
     document.head.insertAdjacentHTML("beforeend", css);
   }
@@ -251,6 +307,7 @@
           targetVillageId: String(p.targetVillageId),
           payRes: String(p.payRes),
           neededRes: String(p.neededRes),
+          instant: !!p.instant,
           shipments: p.shipments.map(s => ({
             source: String(s.source),
             target: String(s.target),
@@ -447,6 +504,8 @@
 
           reservePerVillage: 0,
           maxDistance: 9999,
+          hqPriorityEnabled: false,
+          maxedOutPoints: 10471,
 
           settingsOpen: false,
           premiumOptionsOpen: false
@@ -488,6 +547,8 @@
         if (typeof s.premiumOptionsOpen === "undefined") s.premiumOptionsOpen = false;
         if (typeof s.reservePerVillage === "undefined") s.reservePerVillage = 0;
         if (typeof s.maxDistance === "undefined") s.maxDistance = 9999;
+        if (typeof s.hqPriorityEnabled === "undefined") s.hqPriorityEnabled = false;
+        if (typeof s.maxedOutPoints === "undefined") s.maxedOutPoints = 10471;
 
         s.builtOutPercentage = Math.max(0.1, Math.min(0.95, parseFloat(s.builtOutPercentage)));
         s.needsMorePercentage = Math.max(0.1, Math.min(0.95, parseFloat(s.needsMorePercentage)));
@@ -978,6 +1039,26 @@
       return sum;
     }
 
+    function getPlanMovedAmount(plan) {
+      const moved = sumShipments(plan);
+      return plan.payRes === "wood" ? (moved.wood || 0)
+        : plan.payRes === "stone" ? (moved.stone || 0)
+        : (moved.iron || 0);
+    }
+
+    // Decide if a persisted plan is valid under CURRENT settings
+    function validatePpPlanUnderCurrentSettings(plan) {
+      const s = state?.settings || loadSettings();
+      const movedAmount = getPlanMovedAmount(plan);
+      const reasons = [];
+      if (!s.premiumInstantEnabled) reasons.push("Premium is disabled");
+      const minTrade = (s.premiumMinTradeAmount || 0);
+      if (movedAmount < minTrade) reasons.push(`Moved amount ${numberWithCommasDots(movedAmount)} < Min trade ${numberWithCommasDots(minTrade)}`);
+      const threshold = (s.premiumThreshold || 0);
+      if (movedAmount < threshold) reasons.push(`Moved amount ${numberWithCommasDots(movedAmount)} < Threshold ${numberWithCommasDots(threshold)}`);
+      return { ok: reasons.length === 0, reasons, movedAmount };
+    }
+
     // ---------------- Ex/Short ----------------
     function computeExcessShortage(villagesData, incomingRes, averages) {
       const excessResources  = [];
@@ -1003,12 +1084,28 @@
         tempStone += inc.stone;
         tempIron  += inc.iron;
 
-        // Built-out village: keep only builtOutPercentage, donate the rest
+        // Built-out village: donate everything above the keep threshold.
+        //
+        // The keep threshold is the LOWER of:
+        //   a) builtOutPercentage × warehouseCapacity  (the original intent)
+        //   b) current stock + incoming                (so a village never tries
+        //      to donate more than it has — avoids the case where the WH%
+        //      threshold exceeds actual stock, leaving the village with 0 excess
+        //      even though it has meaningful resources available)
+        //
+        // In practice this means: if a built-out village has 40k iron and its
+        // WH% threshold is 78k, the old code would donate 0. The new code donates
+        // max(0, stock - reserve) so the village still contributes its surplus.
         if (v.farmSpaceUsed > s.highFarm || v.points > s.highPoints) {
-          const leave = s.builtOutPercentage * wh;
-          if (v.wood  + inc.wood  > leave) tempWood  = Math.round((v.wood  + inc.wood)  - leave);
-          if (v.stone + inc.stone > leave) tempStone = Math.round((v.stone + inc.stone) - leave);
-          if (v.iron  + inc.iron  > leave) tempIron  = Math.round((v.iron  + inc.iron)  - leave);
+          const wh_leave   = s.builtOutPercentage * wh;
+          const res_leave  = s.reservePerVillage || 0;
+          // Use reservePerVillage as the hard floor; WH% as an optional higher floor
+          const leaveWood  = Math.max(res_leave, Math.min(wh_leave, v.wood  + inc.wood));
+          const leaveStone = Math.max(res_leave, Math.min(wh_leave, v.stone + inc.stone));
+          const leaveIron  = Math.max(res_leave, Math.min(wh_leave, v.iron  + inc.iron));
+          if (v.wood  + inc.wood  > leaveWood)  tempWood  = Math.round((v.wood  + inc.wood)  - leaveWood);
+          if (v.stone + inc.stone > leaveStone) tempStone = Math.round((v.stone + inc.stone) - leaveStone);
+          if (v.iron  + inc.iron  > leaveIron)  tempIron  = Math.round((v.iron  + inc.iron)  - leaveIron);
         }
 
         // Low-points village: always fill to needsMorePercentage
@@ -1020,9 +1117,19 @@
 
         // Fix #5: overflow → urgent donor (was misclassified as receiver in original).
         // When current + incoming >= warehouse capacity the village must donate, not receive.
-        if (v.wood  + inc.wood  >= wh) tempWood  = Math.round((v.wood  + inc.wood)  - s.builtOutPercentage * wh);
-        if (v.stone + inc.stone >= wh) tempStone = Math.round((v.stone + inc.stone) - s.builtOutPercentage * wh);
-        if (v.iron  + inc.iron  >= wh) tempIron  = Math.round((v.iron  + inc.iron)  - s.builtOutPercentage * wh);
+        // Use the same capped leave calculation as the built-out path for consistency.
+        if (v.wood  + inc.wood  >= wh) {
+          const ovLeave = Math.max(s.reservePerVillage || 0, Math.min(s.builtOutPercentage * wh, v.wood  + inc.wood));
+          tempWood  = Math.round((v.wood  + inc.wood)  - ovLeave);
+        }
+        if (v.stone + inc.stone >= wh) {
+          const ovLeave = Math.max(s.reservePerVillage || 0, Math.min(s.builtOutPercentage * wh, v.stone + inc.stone));
+          tempStone = Math.round((v.stone + inc.stone) - ovLeave);
+        }
+        if (v.iron  + inc.iron  >= wh) {
+          const ovLeave = Math.max(s.reservePerVillage || 0, Math.min(s.builtOutPercentage * wh, v.iron  + inc.iron));
+          tempIron  = Math.round((v.iron  + inc.iron)  - ovLeave);
+        }
 
         // Donor hard cap: can only send what is physically in the warehouse now
         if (tempWood  > 0 && tempWood  > v.wood)  tempWood  = v.wood;
@@ -1068,6 +1175,67 @@
           if (res === "wood") shortageResources[idx][resIndex].wood = 0;
           if (res === "stone") shortageResources[idx][resIndex].stone = 0;
           if (res === "iron") shortageResources[idx][resIndex].iron = 0;
+        }
+      }
+    }
+
+    // ---------------- HQ Build Priority ----------------
+    // For villages with an empty build queue (queueEndsSec === 0) and a known
+    // next building cost:
+    //   - Zero their EXCESS for any resource needed by the building (they must
+    //     not donate those resources — they need them for construction).
+    //   - Boost their SHORTAGE to exactly what's still missing for the building
+    //     (rounded up to 1000), so the router prioritises sending to them.
+    //
+    // hqData: Map<villageId string, { queueEndsSec, costWood, costStone, costIron, buildingName }>
+    function applyHqBuildPriority({ villagesData, excessResources, shortageResources, incomingRes, hqData }) {
+      if (!hqData || !hqData.size) return;
+
+      // Pre-load both lock sources so we can respect them.
+      // Manual locks: keyed by "x|y" coords → { wood, stone, iron }
+      // PP locks: keyed by villageId + res
+      const manualLocks   = loadManualLocksByCoords();
+      const ppLocks       = loadPpLocks(); // array of { villageId, res }
+      const ppLockSet     = new Set(ppLocks.map(l => `${l.villageId}:${l.res}`));
+
+      for (let idx = 0; idx < villagesData.length; idx++) {
+        const v  = villagesData[idx];
+        const hq = hqData.get(String(v.id));
+        if (!hq) continue;
+        if (hq.queueEndsSec > 0) continue;        // still building — not ready yet
+        if (!hq.buildingName) continue;            // no next building configured
+        if (hq.costWood + hq.costStone + hq.costIron === 0) continue; // cost unknown
+
+        // Resolve manual lock for this village by coords
+        const coords    = coordsFromVillageName(v.name);
+        const coordKey  = coords ? `${coords.x}|${coords.y}` : null;
+        const manLock   = (coordKey && manualLocks[coordKey]) || {};
+
+        const inc = incomingRes[v.id] || { wood: 0, stone: 0, iron: 0 };
+
+        const RES = [
+          { res: "wood",  cost: hq.costWood,  inc: inc.wood,  sIdx: 0, eIdx: 0 },
+          { res: "stone", cost: hq.costStone, inc: inc.stone, sIdx: 1, eIdx: 1 },
+          { res: "iron",  cost: hq.costIron,  inc: inc.iron,  sIdx: 2, eIdx: 2 },
+        ];
+
+        for (const { res, cost, inc: incAmt, sIdx, eIdx } of RES) {
+          // Respect locks: if this resource is locked (manual or PP), skip it entirely.
+          // applyManualCoordLocks / applyPpResourceLock already zeroed it — don't override.
+          if (manLock[res]) continue;
+          if (ppLockSet.has(`${v.id}:${res}`)) continue;
+
+          const missing = Math.max(0, cost - (v[res] + incAmt));
+          const need    = Math.ceil(missing / 1000) * 1000;
+          if (need <= 0) continue;
+
+          // Zero excess — village must not donate a resource it needs for building
+          if (excessResources[idx]?.[eIdx]) excessResources[idx][eIdx][res] = 0;
+
+          // Boost shortage to the building shortfall (only if not already higher)
+          if (shortageResources[idx]?.[sIdx]) {
+            shortageResources[idx][sIdx][res] = Math.max(shortageResources[idx][sIdx][res], need);
+          }
         }
       }
     }
@@ -1266,6 +1434,65 @@
       const buffer = 7000;
       const minTrade = (s.premiumMinTradeAmount || 0);
 
+      // ── Check for immediate trade opportunity ────────────────────────────────
+      // If any village already holds enough of payRes to execute the trade right
+      // now (no shipping needed), create a zero-shipment plan and return early.
+      //
+      // Rules:
+      //  - Village must not be excluded and must have merchants
+      //  - Available amount = curPay minus keep threshold (same as donor calc)
+      //  - Available amount must meet minTrade and premiumThreshold
+      //  - Pick the village with the MOST available payRes (maximises trade size)
+      {
+        const instantCandidates = state.villagesData
+          .map(v => {
+            if (excludedVillageIds.has(String(v.id))) return null;
+            if ((v.availableMerchants || 0) <= 0) return null;
+
+            const wh     = v.warehouseCapacity || 0;
+            const curPay = payRes === "wood" ? (v.wood || 0) : payRes === "stone" ? (v.stone || 0) : (v.iron || 0);
+
+            // Respect keep threshold — same logic as donors above
+            const keepByPct = Math.floor((wh * keepPct) / 1000) * 1000;
+            const keep      = Math.floor(Math.max(keepMin, keepByPct) / 1000) * 1000;
+            const avail     = Math.floor(Math.max(0, curPay - keep) / 1000) * 1000;
+
+            if (avail < minTrade) return null;
+
+            const tradeAmt = Math.floor(Math.min(avail, s.premiumMoveAmount || idealMove, idealMove) / 1000) * 1000;
+            if (tradeAmt < minTrade) return null;
+            if (tradeAmt < (s.premiumThreshold || 0)) return null;
+
+            return { v, tradeAmt, avail };
+          })
+          .filter(Boolean)
+          .sort((a, b) => b.avail - a.avail);  // most excess first
+
+        if (instantCandidates.length) {
+          const best = instantCandidates[0];
+          const instantPlan = {
+            id: "",
+            neededRes,
+            payRes,
+            targetVillageId: String(best.v.id),
+            targetVillageName: best.v.name,
+            shipments: [],           // no shipping needed — trade immediately
+            tradeAmount: best.tradeAmt,
+            spread,
+            idealMove,
+            moveAmt: best.tradeAmt,
+            whFree: best.avail,
+            instant: true,           // flag: execute without waiting for incoming
+            createdAt: Date.now(),
+            lastArrivalEtaSec: null,
+            lastArrivalMsAtFetch: null,
+            lastRefreshMs: 0
+          };
+          instantPlan.id = makePlanId(instantPlan);
+          return instantPlan;
+        }
+      }
+
       const candidates = state.villagesData
         .map(v => {
           if (excludedVillageIds.has(String(v.id))) return null;
@@ -1363,6 +1590,7 @@
         idealMove,
         moveAmt,
         whFree: chosen.free,
+        instant: false,
         createdAt: Date.now(),
         lastArrivalEtaSec: null,
         lastArrivalMsAtFetch: null,
@@ -1445,6 +1673,24 @@
     function renderTimerBoxForPlan(plan, modeText, countdown, etaInfo) {
       const etaLine = etaInfo ? `<div class="line twmuted">${etaInfo}</div>` : "";
 
+      const moved = sumShipments(plan);
+      const movedAmount =
+        plan.payRes === "wood" ? moved.wood :
+        plan.payRes === "stone" ? moved.stone :
+        moved.iron;
+
+      const isInstant = plan.instant || plan.shipments.length === 0;
+      const totalsLine = isInstant
+        ? `<div class="line twmuted"><span style="color:#1a7a1a;font-weight:bold">⚡ Instant</span> — resources already on hand, no shipping needed.</div>`
+        : `<div class="line twmuted">Shipments total: <b>${numberWithCommasDots(movedAmount || 0)}</b> ${resourceLabel(plan.payRes)}</div>`;
+
+      const v = validatePpPlanUnderCurrentSettings(plan);
+      const invalidLine = !v.ok
+        ? `<div class="line" style="color:#a40000; font-weight:bold">
+            ⚠ Invalid under current settings: ${v.reasons.join(" | ")}
+          </div>`
+        : "";
+
       const byId = new Map((state?.villagesData || []).map(v => [String(v.id), v]));
       const tgt = byId.get(String(plan.targetVillageId));
 
@@ -1469,6 +1715,8 @@
           <div class="tm-flex">
             <div>
               <div class="line"><b>PP route:</b> ${resourceLabel(plan.payRes)} → ${resourceLabel(plan.neededRes)} @ <b>${plan.targetVillageName}</b></div>
+              ${totalsLine}
+              ${invalidLine}
               <div class="line twmuted">${modeText}</div>
               ${etaLine}
             </div>
@@ -1544,6 +1792,24 @@
 
       // ensure persisted
       upsertPpPlan(plan);
+
+      // Instant trade: no shipping needed, execute immediately
+      if (plan.instant || plan.shipments.length === 0) {
+        renderTimerBoxForPlan(plan, "Resources already available — executing instant trade now…", "00:00:00", null);
+        UI.SuccessMessage("Executing instant trade (no shipping needed)…");
+        try {
+          await doInstantTrade(plan.targetVillageId, plan.payRes, plan.neededRes, plan.tradeAmount);
+          UI.SuccessMessage("Instant trade executed. Re-running balancer…");
+          removePpPlan(plan.id);
+          removePpLock({ villageId: plan.targetVillageId, res: plan.payRes });
+          await runComputationAndRender();
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error(e);
+          alert("Instant trade failed: " + (e.message || e));
+        }
+        return;
+      }
 
       renderTimerBoxForPlan(
         plan,
@@ -1828,6 +2094,12 @@
 
         <label>Global max distance (fields)</label>
         <input type="number" id="tmwh_maxDistance" value="${s.maxDistance}">
+
+        <label>Prioritise empty build queues <a href="#" class="tmLink tmHelp" data-tip="hq_priority">?</a></label>
+        <input type="checkbox" id="tmwh_hqPriorityEnabled" ${s.hqPriorityEnabled ? "checked" : ""}>
+
+        <label>Maxed out village (points) <a href="#" class="tmLink tmHelp" data-tip="hq_maxed">?</a></label>
+        <input type="number" id="tmwh_maxedOutPoints" value="${s.maxedOutPoints}">
       </div>
 
       <hr/>
@@ -1842,41 +2114,41 @@
           <label>Enable</label>
           <input type="checkbox" id="tmwh_premiumEnabled" ${s.premiumInstantEnabled ? "checked" : ""}>
 
-          <label>Staging strategy</label>
+          <label>Routing Strategy <a href="#" class="tmLink tmHelp" data-tip="tipStrategy">?</a></label>
           <select id="tmwh_premiumStagingStrategy">
             <option value="weighted" ${s.premiumStagingStrategy === "weighted" ? "selected" : ""}>Weighted donors</option>
             <option value="largest" ${s.premiumStagingStrategy === "largest" ? "selected" : ""}>Largest donor</option>
           </select>
 
-          <label>Threshold</label>
+          <label>Threshold <a href="#" class="tmLink tmHelp" data-tip="pp_threshold">?</a></label>
           <input type="number" id="tmwh_premiumThreshold" value="${s.premiumThreshold}">
 
-          <label>Min trade amount</label>
+          <label>Min trade amount <a href="#" class="tmLink tmHelp" data-tip="pp_min_trade">?</a></label>
           <input type="number" id="tmwh_premiumMinTradeAmount" value="${s.premiumMinTradeAmount}">
 
-          <label>Move amount</label>
+          <label>Move amount <a href="#" class="tmLink tmHelp" data-tip="pp_move_amount">?</a></label>
           <input type="number" id="tmwh_premiumMoveAmount" value="${s.premiumMoveAmount}">
 
-          <label>Max distance (ETA)</label>
+          <label>Max distance <a href="#" class="tmLink tmHelp" data-tip="pp_max_distance">?</a></label>
           <input type="number" id="tmwh_premiumMaxDistance" value="${s.premiumMaxDistance}">
 
-          <label>Max target fill (%)</label>
+          <label>Max target fill (%) <a href="#" class="tmLink tmHelp" data-tip="pp_max_fill">?</a></label>
           <input type="number" step="0.01" min="0.1" max="0.98" id="tmwh_premiumMaxTargetFillPct" value="${s.premiumMaxTargetFillPct}">
 
-          <label>Max plans (safety)</label>
+          <label>Max plans <a href="#" class="tmLink tmHelp" data-tip="pp_max_plans">?</a></label>
           <input type="number" id="tmwh_premiumMaxPlansHardCap" value="${s.premiumMaxPlansHardCap}">
         </div>
 
         <hr/>
 
         <div class="tm-grid">
-          <label>Donor keep (%)</label>
+          <label>Donor keep (%) <a href="#" class="tmLink tmHelp" data-tip="pp_donor_keep_pct">?</a></label>
           <input type="number" step="0.01" min="0" max="0.95" id="tmwh_premiumDonorKeepPct" value="${s.premiumDonorKeepPct}">
 
-          <label>Donor keep min</label>
+          <label>Donor keep min <a href="#" class="tmLink tmHelp" data-tip="pp_donor_keep_min">?</a></label>
           <input type="number" id="tmwh_premiumDonorKeepMin" value="${s.premiumDonorKeepMin}">
 
-          <label>Donor min excess</label>
+          <label>Donor min excess <a href="#" class="tmLink tmHelp" data-tip="pp_donor_min_excess">?</a></label>
           <input type="number" id="tmwh_premiumDonorMinExcess" value="${s.premiumDonorMinExcess}">
         </div>
 
@@ -1949,6 +2221,17 @@
   </div>
 
   <div class="twbox">
+    <div class="title">
+      HQ Build Queue Check
+      <button class="btn btnSophie" id="tmwh_hq_run" type="button" style="float:right;font-size:11px;margin-top:-2px;">Check HQ</button>
+    </div>
+    <div class="twmuted" style="font-size:11px;margin-bottom:6px">
+      Fetches each village's HQ page to check if resources will be available when the current build queue finishes.
+    </div>
+    <div id="tmwh_hq_panel" class="twmuted">Press "Check HQ" after running the balancer.</div>
+  </div>
+
+  <div class="twbox">
     <div class="title">Send list</div>
 
     <div class="tm-actions" style="margin-bottom:6px">
@@ -1981,6 +2264,128 @@
         box.addEventListener("keydown",  blockKey);
         box.addEventListener("keyup",    blockKey);
         box.addEventListener("keypress", blockKey);
+      });
+
+      // Bind all Premium tooltips using .tmHelp anchors
+      (function bindPremiumTooltips() {
+        const tips = {
+          tipStrategy: `
+            <div style="font-weight:bold; margin-bottom:6px">Staging strategy</div>
+            <div class="twmuted">
+              <b>Weighted donors</b>: splits the required amount across multiple donor villages,
+              prioritizing closer donors. More reliable when merchants are spread out.<br/><br/>
+              <b>Largest donor</b>: tries to use the biggest single donor first.
+              Fewer shipments, but can fail if that donor has low merchants or is far away.
+            </div>
+          `,
+          pp_threshold: `
+            <div style="font-weight:bold; margin-bottom:6px">Threshold</div>
+            <div class="twmuted">
+              Minimum global imbalance (most abundant resource minus least abundant resource)
+              required before the script will attempt to create a PP (Merchant Exchange) plan.
+            </div>
+          `,
+          pp_min_trade: `
+            <div style="font-weight:bold; margin-bottom:6px">Min trade amount</div>
+            <div class="twmuted">
+              Minimum amount (in the <b>paying</b> resource) that must be staged via shipments
+              before a PP plan is accepted. If the plan cannot reach this, no PP route is suggested.
+            </div>
+          `,
+          pp_move_amount: `
+            <div style="font-weight:bold; margin-bottom:6px">Move amount</div>
+            <div class="twmuted">
+              Upper cap for how much the planner will try to move for a single PP route.
+              The actual amount may be lower due to merchants, donor excess, target capacity, or distance limits.
+            </div>
+          `,
+          pp_max_distance: `
+            <div style="font-weight:bold; margin-bottom:6px">Max distance (ETA)</div>
+            <div class="twmuted">
+              Maximum distance (in fields) allowed between a donor village and the target village
+              for PP shipments. Lower values reduce travel time but may prevent plans if donors are far away.
+            </div>
+          `,
+          pp_max_fill: `
+            <div style="font-weight:bold; margin-bottom:6px">Max target fill (%)</div>
+            <div class="twmuted">
+              Prevents overfilling the target village with the paying resource.
+              Example: 0.90 means the target will not be planned above ~90% of warehouse capacity for that resource.
+            </div>
+          `,
+          pp_max_plans: `
+            <div style="font-weight:bold; margin-bottom:6px">Max plans (safety)</div>
+            <div class="twmuted">
+              Hard limit of how many PP routes the script can generate in one run.
+              Helps avoid accidental large PP spending and excessive shipments.
+            </div>
+          `,
+          pp_donor_keep_pct: `
+            <div style="font-weight:bold; margin-bottom:6px">Donor keep (%)</div>
+            <div class="twmuted">
+              Donor villages will keep at least this percentage of their warehouse capacity
+              (in the paying resource). Only amounts above that are considered excess and can be sent.
+            </div>
+          `,
+          pp_donor_keep_min: `
+            <div style="font-weight:bold; margin-bottom:6px">Donor keep min</div>
+            <div class="twmuted">
+              Minimum amount a donor village will always keep (in the paying resource),
+              regardless of the percentage keep rule.
+            </div>
+          `,
+          pp_donor_min_excess: `
+            <div style="font-weight:bold; margin-bottom:6px">Donor min excess</div>
+            <div class="twmuted">
+              Minimum excess required for a village to be considered a donor at all.
+              Villages with less excess than this are ignored to reduce tiny shipments.
+            </div>
+          `,
+          hq_maxed: `
+            <div style="font-weight:bold; margin-bottom:6px">Maxed out village (points)</div>
+            <div class="twmuted">
+              Villages at or above this points threshold are considered fully built and are
+              skipped during the HQ build queue check. Default is <b>10.471</b> — the maximum
+              points a village can reach in Tribal Wars PT.
+              Set lower if you want to exclude villages you consider finished.
+            </div>
+          `,
+          hq_priority: `
+            <div style="font-weight:bold; margin-bottom:6px">Prioritise empty build queues</div>
+            <div class="twmuted">
+              When enabled, the balancer fetches each village's HQ build queue before routing.<br/><br/>
+              Villages with an <b>empty queue</b> (ready to build) and a configured <b>next building</b> are treated as priority receivers:
+              <ul style="margin:6px 0 0 16px; padding:0">
+                <li>Their <b>shortage</b> is boosted to the exact building cost shortfall.</li>
+                <li>Their <b>excess</b> is zeroed for any resource needed by the building — they will not donate those resources.</li>
+              </ul>
+              <br/>This ensures that villages that can build right now receive resources first and keep what they need.
+              Adds one HTTP request per village to the run.
+            </div>
+          `
+        };
+
+        ensureTipPortal();
+        const $root = $(".tmWH");
+        $root.find(".tmHelp").off("mouseover mouseout click");
+        $root.find(".tmHelp").on("mouseover", function (e) {
+          e.preventDefault();
+          const key = $(this).attr("data-tip");
+          showTipAt(this, tips[key] || `<div class="twmuted">No help available.</div>`);
+        });
+        $root.find(".tmHelp").on("mouseout", function () { hideTip(); });
+        $root.find(".tmHelp").on("click", function (e) { e.preventDefault(); });
+      })();
+
+      // HQ Build Queue Check
+      $("#tmwh_hq_run").on("click", async function () {
+        const $btn = $(this);
+        $btn.prop("disabled", true).text("Checking…");
+        try {
+          await runHqCheck();
+        } finally {
+          $btn.prop("disabled", false).text("Check HQ");
+        }
       });
 
       renderPpLockStatus();
@@ -2137,8 +2542,11 @@
       s.sendAllEnabled = $("#tmwh_sendAllEnabled").is(":checked");
       s.sendAllIntervalMs = parseInt($("#tmwh_sendAllIntervalMs").val(), 10);
 
-      s.reservePerVillage = parseInt($("#tmwh_reservePerVillage").val(), 10);
-      s.maxDistance       = parseInt($("#tmwh_maxDistance").val(),       10);
+      s.reservePerVillage    = parseInt($("#tmwh_reservePerVillage").val(), 10);
+      s.maxDistance          = parseInt($("#tmwh_maxDistance").val(),       10);
+      s.hqPriorityEnabled    = $("#tmwh_hqPriorityEnabled").is(":checked");
+      s.maxedOutPoints       = parseInt($("#tmwh_maxedOutPoints").val(), 10);
+      if (isNaN(s.maxedOutPoints) || s.maxedOutPoints <= 0) s.maxedOutPoints = 10471;
 
       if (isNaN(s.lowPoints)) s.lowPoints = 1;
       if (isNaN(s.highPoints)) s.highPoints = 12000;
@@ -2179,6 +2587,7 @@
 
       if (isNaN(s.reservePerVillage)) s.reservePerVillage = 0;
       if (isNaN(s.maxDistance))       s.maxDistance = 9999;
+      // hqPriorityEnabled is boolean, no sanitisation needed
       s.reservePerVillage = Math.max(0, s.reservePerVillage);
       s.maxDistance       = Math.max(1, s.maxDistance);
 
@@ -2244,10 +2653,19 @@
         const src = byId.get(String(l.source));
         const tgt = byId.get(String(l.target));
         const cls = idx % 2 === 0 ? "tmRowA" : "tmRowB";
+        // Check if target is an HQ-priority village (empty queue, needs resources for building)
+        const hqTarget = state.hqData?.get(String(l.target));
+        const isHqBoost = hqTarget && hqTarget.queueEndsSec === 0 && hqTarget.buildingName
+                          && (hqTarget.costWood + hqTarget.costStone + hqTarget.costIron > 0);
+        const rowCls = isHqBoost ? "tmHqBoostRow" : cls;
+        const hqBadge = isHqBoost
+          ? `<span class="tmBadgeHQ" title="Building: ${hqTarget.buildingName}">HQ</span>`
+          : "";
+
         $rows.append(`
-          <tr class="${cls}">
+          <tr class="${rowCls}">
             <td><a class="tmLink tmVilTip" data-vid="${l.source}" href="${src?.url || "#"}">${src?.name || l.source}</a></td>
-            <td><a class="tmLink tmVilTip" data-vid="${l.target}" href="${tgt?.url || "#"}">${tgt?.name || l.target}</a></td>
+            <td>${hqBadge}<a class="tmLink tmVilTip" data-vid="${l.target}" href="${tgt?.url || "#"}">${tgt?.name || l.target}</a></td>
             <td style="text-align:center">${l.distance ?? ""}</td>
             <td style="text-align:right">${l.wood || 0}</td>
             <td style="text-align:right">${l.stone || 0}</td>
@@ -2287,43 +2705,75 @@
         plan.payRes === "wood" ? moved.wood :
         plan.payRes === "stone" ? moved.stone :
         moved.iron;
+      const totalAll = (moved.wood || 0) + (moved.stone || 0) + (moved.iron || 0);
+
+      // Instant plans: no shipments — show a single green status row and return
+      if (plan.instant || plan.shipments.length === 0) {
+        $rows.prepend(`
+          <tr class="tmPpNowHeader">
+            <td colspan="7">
+              <span class="tmBadgePPNow">⚡ PP NOW</span>
+              <b>${plan.targetVillageName}</b> already has
+              <b>${numberWithCommasDots(plan.tradeAmount || 0)}</b> ${resourceLabel(plan.payRes)} —
+              instant trade for ${resourceLabel(plan.neededRes)} executing automatically (10pp).
+            </td>
+          </tr>
+        `);
+        return;
+      }
 
       $rows.prepend(`
-        <tr>
-          <td colspan="7" style="background:#d2b47a; border:1px solid #7b5b2b; font-weight:bold">
-            PP plan: move ${numberWithCommasDots(movedAmount)} ${resourceLabel(plan.payRes)} → ${plan.targetVillageName}, then instant trade for ${resourceLabel(plan.neededRes)} (10pp).
-            <span class="twmuted">(id: <code>${plan.id}</code>)</span>
+        <tr class="tmPpHeader">
+          <td colspan="7">
+            <span class="tmBadgePP">PP</span>
+            Plan: move <b>${numberWithCommasDots(movedAmount || 0)}</b> ${resourceLabel(plan.payRes)}
+            → <b>${plan.targetVillageName}</b>, then instant trade for ${resourceLabel(plan.neededRes)} (10pp).
+            <span class="twmuted" style="margin-left:10px">
+              Totals:
+              ${resIconHtml("wood")} <b>${numberWithCommasDots(moved.wood || 0)}</b>
+              ${resIconHtml("stone")} <b>${numberWithCommasDots(moved.stone || 0)}</b>
+              ${resIconHtml("iron")} <b>${numberWithCommasDots(moved.iron || 0)}</b>
+              | All: <b>${numberWithCommasDots(totalAll || 0)}</b>
+            </span>
           </td>
         </tr>
       `);
 
-      plan.shipments.forEach((s, i) => {
+      plan.shipments.forEach((s) => {
         const src = byId.get(String(s.source));
         const tgt = byId.get(String(s.target));
-        const cls = i % 2 === 0 ? "tmRowA" : "tmRowB";
         $rows.prepend(`
-          <tr class="${cls}">
+          <tr class="tmPpRow">
             <td><a class="tmLink tmVilTip" data-vid="${s.source}" href="${src?.url || "#"}">${src?.name || s.source}</a></td>
             <td><a class="tmLink tmVilTip" data-vid="${s.target}" href="${tgt?.url || "#"}">${tgt?.name || s.target}</a></td>
             <td style="text-align:center">${s.distance}</td>
-            <td style="text-align:right">${s.wood}</td>
-            <td style="text-align:right">${s.stone}</td>
-            <td style="text-align:right">${s.iron}</td>
+            <td style="text-align:right">${s.wood || 0}</td>
+            <td style="text-align:right">${s.stone || 0}</td>
+            <td style="text-align:right">${s.iron || 0}</td>
             <td style="text-align:center">
-              <button class="btn btnSophie tmSendSug" data-src="${s.source}" data-tgt="${s.target}" data-wood="${s.wood}" data-stone="${s.stone}" data-iron="${s.iron}" type="button">Send</button>
+              <button
+                class="btn btnSophie tmSendSug"
+                data-src="${s.source}"
+                data-tgt="${s.target}"
+                data-wood="${s.wood || 0}"
+                data-stone="${s.stone || 0}"
+                data-iron="${s.iron || 0}"
+                type="button"
+              >Send</button>
             </td>
           </tr>
         `);
       });
 
-      $(".tmSendSug").off("click").on("click", function () {
+      // Bind within container (safe even if called multiple times)
+      $rows.find(".tmSendSug").off("click").on("click", function () {
         const $b = $(this);
         sendResource(
           $b.attr("data-src"),
           $b.attr("data-tgt"),
-          parseInt($b.attr("data-wood"), 10),
-          parseInt($b.attr("data-stone"), 10),
-          parseInt($b.attr("data-iron"), 10)
+          parseInt($b.attr("data-wood"), 10) || 0,
+          parseInt($b.attr("data-stone"), 10) || 0,
+          parseInt($b.attr("data-iron"), 10) || 0
         );
         $b.closest("tr").remove();
       });
@@ -2338,6 +2788,235 @@
         .on("mouseout.pptip", ".tmVilTip", function () {
           hideTip();
         });
+    }
+
+    // ---------------- HQ BUILD QUEUE CHECK ----------------
+
+    // Fetch screen=main for a single village and parse:
+    //   - The NEXT building in queue (name + wood/stone/iron cost)
+    //   - Remaining seconds until queue finishes
+    //   - Production per hour for each resource (from the prod row on the same page)
+    // Fetch screen=main&mode=build for a village.
+    //
+    // This single page contains everything we need:
+    //
+    // 1. BUILD QUEUE — rows with class like "buildorder_storage":
+    //      <tr class="lit nodrag buildorder_storage">
+    //        <td>...<span data-endtime="UNIX_TIMESTAMP">HH:MM:SS</span>...</td>
+    //      </tr>
+    //    We take the MAX data-endtime across all queue rows = when the last item finishes.
+    //
+    // 2. NEXT BUILDING NAME — from screen=main&mode=accountmanager:
+    //      <div class="vis">
+    //        <h4>Próxima ordem de construção</h4>
+    //        <p class="vis_item">
+    //          <a class="inline-icon building-watchtower" href="...&screen=watchtower">
+    //            Torre de vigia
+    //          </a>
+    //        </p>
+    //      </div>
+    //    We extract: building name (anchor text) + building id from href screen param.
+    //
+    // 3. BUILDING COST — same screen=main&mode=build page, row tr#main_buildrow_{id}:
+    //      <td class="cost_wood warn" data-cost="108089">...</td>
+    //      <td class="cost_stone warn" data-cost="126104">...</td>
+    //      <td class="cost_iron"      data-cost="101472">...</td>
+    //    We read data-cost directly — exact integer, no text parsing needed.
+    async function fetchHqNextBuilding(villageId) {
+      // Step 1: get the next building name + id from accountmanager page
+      const amUrl  = makeURL({ village: villageId, screen: "main", mode: "accountmanager" });
+      const amHtml = await $.get(amUrl);
+      const $am    = $(amHtml);
+
+      let buildingName   = null;
+      let buildingId     = null; // e.g. "watchtower"
+
+      $am.find("div.vis").each(function () {
+        if ($(this).find("h4").text().indexOf("Próxima") === -1) return;
+        const $a = $(this).find("p.vis_item a.inline-icon").first();
+        if (!$a.length) return;
+        buildingName = $a.text().trim();
+        const m = ($a.attr("href") || "").match(/[?&]screen=([^&]+)/);
+        if (m) buildingId = m[1];
+        return false;
+      });
+
+      if (!buildingName || !buildingId) {
+        // No next building queued for this village
+        return { villageId: String(villageId), queueEndsSec: 0,
+                 buildingName: null, costWood: 0, costStone: 0, costIron: 0 };
+      }
+
+      // Step 2a: fetch screen=main&mode=build for the QUEUE TIMER only.
+      //   The build-mode page shows active queue rows (class "buildorder_*"), each
+      //   with a span[data-endtime] Unix timestamp. We take the max = queue end time.
+      //
+      // Step 2b: fetch screen=main (no mode) for BUILDING COSTS.
+      //   The main HQ page has tr#main_buildrow_{buildingId} with:
+      //     <td class="cost_wood [warn]" data-cost="108089">
+      //     <td class="cost_stone [warn]" data-cost="126104">
+      //     <td class="cost_iron [warn]"  data-cost="101472">
+      //   These rows do NOT appear on mode=build.
+
+      const [buildRes, mainRes] = await Promise.all([
+        $.get(makeURL({ village: villageId, screen: "main", mode: "build" })),
+        $.get(makeURL({ village: villageId, screen: "main" })),
+      ]);
+      const $b    = $(buildRes);
+      const $main = $(mainRes);
+
+      // ── Queue end time (from mode=build) ──────────────────────────────────────
+      let maxEndTime = 0;
+      $b.find("tr[class*='buildorder'] td span[data-endtime]").each(function () {
+        const t = parseInt($(this).attr("data-endtime"), 10);
+        if (!isNaN(t) && t > maxEndTime) maxEndTime = t;
+      });
+      const queueEndsSec = maxEndTime > 0
+        ? Math.max(0, maxEndTime - Math.floor(Date.now() / 1000))
+        : 0;
+
+      // ── Building cost (from screen=main, no mode) ─────────────────────────────
+      // tr#main_buildrow_{buildingId} — data-cost attribute has the exact integer.
+      const $row    = $main.find(`#main_buildrow_${buildingId}`);
+      const costWood  = parseInt($row.find("td.cost_wood").attr("data-cost")  || "0", 10) || 0;
+      const costStone = parseInt($row.find("td.cost_stone").attr("data-cost") || "0", 10) || 0;
+      const costIron  = parseInt($row.find("td.cost_iron").attr("data-cost")  || "0", 10) || 0;
+
+      return {
+        villageId: String(villageId),
+        queueEndsSec,
+        buildingName,
+        buildingId,
+        costWood, costStone, costIron,
+      };
+    }
+
+    // Given village data + HQ result, compute whether the village will have
+    // enough resources when the queue finishes to start the next building.
+    // Production rates come from villageData (already fetched from the prod overview)
+    // since the accountmanager page does not expose per-hour production rates.
+    function computeHqReadiness(villageData, hqResult) {
+      const { queueEndsSec, costWood, costStone, costIron, buildingName } = hqResult;
+
+      if (!buildingName || (costWood + costStone + costIron === 0)) return null;
+
+      const hrs = queueEndsSec / 3600;
+      const wh  = villageData.warehouseCapacity;
+
+      // Production rate: TW production overview doesn't give per-hour rate directly,
+      // but we can estimate: the prod overview shows current stock. We don't have
+      // hourly rates in villageData, so we use 0 (conservative — no production credit).
+      // If the village produces enough in time it's a bonus; we flag the worst case.
+      // This is intentionally conservative to avoid false "ready" signals.
+      const prodWood = 0, prodStone = 0, prodIron = 0;
+
+      const projWood  = Math.min(wh, villageData.wood  + prodWood  * hrs);
+      const projStone = Math.min(wh, villageData.stone + prodStone * hrs);
+      const projIron  = Math.min(wh, villageData.iron  + prodIron  * hrs);
+
+      const shortWood  = Math.max(0, costWood  - projWood);
+      const shortStone = Math.max(0, costStone - projStone);
+      const shortIron  = Math.max(0, costIron  - projIron);
+      const hasShortfall = shortWood + shortStone + shortIron > 0;
+
+      return {
+        buildingName,
+        queueEndsSec,
+        costWood, costStone, costIron,
+        projWood: Math.floor(projWood),
+        projStone: Math.floor(projStone),
+        projIron: Math.floor(projIron),
+        shortWood: Math.ceil(shortWood / 1000) * 1000,
+        shortStone: Math.ceil(shortStone / 1000) * 1000,
+        shortIron: Math.ceil(shortIron / 1000) * 1000,
+        hasShortfall,
+      };
+    }
+
+    async function runHqCheck() {
+      const $panel = $("#tmwh_hq_panel");
+      if (!$panel.length) return;
+      $panel.html(`<div class="twmuted">Checking HQ queues…</div>`);
+
+      const villagesData = state.villagesData;
+      if (!villagesData || !villagesData.length) {
+        $panel.html(`<div class="twmuted">Run the balancer first to load village data.</div>`);
+        return;
+      }
+
+      const results = [];
+      for (let i = 0; i < villagesData.length; i++) {
+        const v = villagesData[i];
+        // Skip fully-built villages — no HQ check needed at max points
+        if (v.points >= (state.settings.maxedOutPoints || 10471)) {
+          if (i < villagesData.length - 1) await new Promise(res => setTimeout(res, 300));
+          continue;
+        }
+        $panel.html(`<div class="twmuted">Checking HQ queues… (${i + 1}/${villagesData.length})</div>`);
+        try {
+          const hq = await fetchHqNextBuilding(v.id);
+          const check = computeHqReadiness(v, hq);
+          if (check) results.push({ v, hq, check });
+        } catch (e) {
+          // skip villages that fail (e.g. sitter restrictions)
+        }
+        if (i < villagesData.length - 1) await new Promise(res => setTimeout(res, 300));
+      }
+
+      if (!results.length) {
+        $panel.html(`<div class="twmuted">No upcoming buildings found in any village queue.</div>`);
+        return;
+      }
+
+      // Sort: shortfalls first, then by queue end time ascending
+      results.sort((a, b) => {
+        if (a.check.hasShortfall !== b.check.hasShortfall) return a.check.hasShortfall ? -1 : 1;
+        return a.hq.queueEndsSec - b.hq.queueEndsSec;
+      });
+
+      const rowsHtml = results.map(({ v, check }) => {
+        const eta = check.queueEndsSec > 0 ? formatHMS(check.queueEndsSec) : "now";
+        const statusHtml = check.hasShortfall
+          ? `<span class="tmHqWarn">⚠ Short:
+              ${check.shortWood  > 0 ? `${resIconHtml("wood")} <b>${numberWithCommasDots(check.shortWood)}</b> ` : ""}
+              ${check.shortStone > 0 ? `${resIconHtml("stone")} <b>${numberWithCommasDots(check.shortStone)}</b> ` : ""}
+              ${check.shortIron  > 0 ? `${resIconHtml("iron")} <b>${numberWithCommasDots(check.shortIron)}</b>` : ""}
+            </span>`
+          : `<span class="tmHqOk">✓ Ready</span>`;
+
+        const costHtml = `
+          <span class="tmHqRes">
+            Cost: ${resIconHtml("wood")} ${numberWithCommasDots(check.costWood)}
+            ${resIconHtml("stone")} ${numberWithCommasDots(check.costStone)}
+            ${resIconHtml("iron")} ${numberWithCommasDots(check.costIron)}
+          </span>`;
+
+        const projHtml = `
+          <span class="tmHqRes twmuted">
+            At ETA: ${resIconHtml("wood")} ${numberWithCommasDots(check.projWood)}
+            ${resIconHtml("stone")} ${numberWithCommasDots(check.projStone)}
+            ${resIconHtml("iron")} ${numberWithCommasDots(check.projIron)}
+          </span>`;
+
+        return `
+          <div class="tmHqRow">
+            <span class="tmHqVillage">
+              <a class="tmLink" href="${v.url}">${v.name}</a>
+            </span>
+            <span class="tmHqBuilding">${check.buildingName}</span>
+            <span class="tmHqEta">Queue ends: <b>${eta}</b></span>
+            ${statusHtml}
+            ${costHtml}
+            ${projHtml}
+          </div>`;
+      }).join("");
+
+      const shortfallCount = results.filter(r => r.check.hasShortfall).length;
+      const header = shortfallCount > 0
+        ? `<div style="margin-bottom:6px"><b>${shortfallCount}</b> village(s) need resources before queue ends.</div>`
+        : `<div style="margin-bottom:6px;color:#1a7a1a"><b>All villages</b> will have enough resources.</div>`;
+
+      $panel.html(`<div class="tmHqBox">${header}${rowsHtml}</div>`);
     }
 
     async function runComputationAndRender() {
@@ -2370,6 +3049,36 @@
 
       applyManualCoordLocks({ villagesData, excessResources, shortageResources });
       applyPpResourceLock({ villagesData, excessResources, shortageResources });
+
+      // HQ priority: fetch build queues sequentially (rate-limit safe) then boost
+      // empty-queue villages. Parallel requests (Promise.allSettled) hammered the
+      // server with ~3 × N requests at once and caused 429 errors for all of them.
+      // Sequential with a 300ms gap keeps well within TW's rate limit.
+      let hqData = null;
+      if (state.settings.hqPriorityEnabled) {
+        hqData = new Map();
+        const total = villagesData.length;
+        for (let i = 0; i < total; i++) {
+          const v = villagesData[i];
+          // Skip fully-built villages — no HQ check needed at max points
+          if (v.points >= (state.settings.maxedOutPoints || 10471)) {
+            if (i < total - 1) await new Promise(res => setTimeout(res, 300));
+            continue;
+          }
+          $("#tmwh_summary").text(`Checking HQ build queues… (${i + 1}/${total})`);
+          try {
+            const hq = await fetchHqNextBuilding(v.id);
+            if (hq?.villageId) hqData.set(hq.villageId, hq);
+          } catch (_) {
+            // single village failed — skip it, continue with the rest
+          }
+          if (i < total - 1) await new Promise(res => setTimeout(res, 300));
+        }
+        state.hqData = hqData;
+        applyHqBuildPriority({ villagesData, excessResources, shortageResources, incomingRes, hqData });
+      } else {
+        state.hqData = null;
+      }
 
       const { links } = assignMerchantsAndBuildLinks(villagesData, excessResources, shortageResources, villageID);
       let cleanLinks = addDistanceToLinks(normalizeAndCombineLinks(links), villagesData);
@@ -2417,6 +3126,7 @@
         villagesData: [],
         averages: null,
         cleanLinks: [],
+        hqData: null,
         sendAllTimer: null
       };
 

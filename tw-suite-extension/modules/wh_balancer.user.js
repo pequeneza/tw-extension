@@ -2967,6 +2967,7 @@
         const maxPts = state.settings.maxedOutPoints || 10471;
         for (const v of villagesData) {
           if (v.points >= maxPts) continue;
+          if (v.points < (state.settings.lowPoints || 0)) continue;
           const hq = cachedHqData.get(String(v.id));
           if (!hq) continue;
           const check = computeHqReadiness(v, hq);
@@ -2975,7 +2976,8 @@
       } else {
         // No cached data — fetch fresh sequentially
         const maxPts = state.settings.maxedOutPoints || 10471;
-        const toCheck = villagesData.filter(v => v.points < maxPts);
+        const lowPts = state.settings.lowPoints || 0;
+        const toCheck = villagesData.filter(v => v.points >= lowPts && v.points < maxPts);
         const skipped = villagesData.length - toCheck.length;
         for (let i = 0; i < toCheck.length; i++) {
           const v = toCheck[i];
@@ -3090,11 +3092,12 @@
       if (state.settings.hqPriorityEnabled) {
         hqData = new Map();
         const maxPts = state.settings.maxedOutPoints || 10471;
-        const hqCandidates = villagesData.filter(v => v.points < maxPts);
+        const lowPts = state.settings.lowPoints || 0;
+        const hqCandidates = villagesData.filter(v => v.points >= lowPts && v.points < maxPts);
         const hqSkipped    = villagesData.length - hqCandidates.length;
         for (let i = 0; i < hqCandidates.length; i++) {
           const v = hqCandidates[i];
-          $("#tmwh_summary").text(`Checking HQ build queues… (${i + 1}/${hqCandidates.length}${hqSkipped > 0 ? `, ${hqSkipped} maxed skipped` : ""})`);
+          $("#tmwh_summary").text(`Checking HQ build queues… (${i + 1}/${hqCandidates.length}${hqSkipped > 0 ? `, ${hqSkipped} skipped` : ""})`);
           try {
             const hq = await fetchHqNextBuilding(v.id);
             if (hq?.villageId) hqData.set(hq.villageId, hq);

@@ -67,7 +67,7 @@ const USERSCRIPT_MAP: Record<string, string> = {
   [`${MODULES_DIR}/extended_profile.user.js`]:     "extended_profile.user.js",
   [`${MODULES_DIR}/fakes.user.js`]:                "fakes.user.js",
   [`${MODULES_DIR}/mano_de_deus.user.js`]:         "mano_de_deus.user.js",
-  [`${MODULES_DIR}/mass_label_renamer.js`]:        "mass_label_renamer.user.js",
+  [`${MODULES_DIR}/mass_label_renamer.user.js`]:        "mass_label_renamer.user.js",
   [`${MODULES_DIR}/noble_sender_trainer.user.js`]: "noble_sender_trainer.user.js",
   [`${MODULES_DIR}/resource_buyer.user.js`]:       "resource_buyer.user.js",
   [`${MODULES_DIR}/tw_snipe_scheduler.user.js`]:   "tw_snipe_scheduler.user.js",

@@ -33,6 +33,14 @@ function mount(): void {
   mountPoint.style.cssText = "pointer-events:auto;";
   shadow.appendChild(mountPoint);
 
+  // Stop keyboard events from bubbling out of the overlay into the TW page.
+  // TW registers hotkeys on document — without this, typing in any panel input
+  // (e.g. a number field) triggers TW's keybind handler instead.
+  const blockKey = (e: Event) => e.stopPropagation();
+  mountPoint.addEventListener("keydown",  blockKey);
+  mountPoint.addEventListener("keyup",    blockKey);
+  mountPoint.addEventListener("keypress", blockKey);
+
   createRoot(mountPoint).render(<OverlayRoot />);
 }
 

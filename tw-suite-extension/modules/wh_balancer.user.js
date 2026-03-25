@@ -199,7 +199,12 @@
   color:#7a6000; font-weight:bold;
 }
 /* HQ building check */
-.tmHqBox { margin-top:10px; }
+#tmwh_hq_panel {
+  max-height:260px;
+  overflow-y:auto;
+  overflow-x:hidden;
+}
+.tmHqBox { margin-top:4px; }
 .tmHqRow { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:4px 0; border-bottom:1px solid rgba(123,91,43,0.2); flex-wrap:wrap; }
 .tmHqRow:last-child { border-bottom:none; }
 .tmHqVillage { font-weight:bold; min-width:140px; }
@@ -2228,7 +2233,7 @@
     <div class="twmuted" style="font-size:11px;margin-bottom:6px">
       Fetches each village's HQ page to check if resources will be available when the current build queue finishes.
     </div>
-    <div id="tmwh_hq_panel" class="twmuted">Press "Check HQ" after running the balancer.</div>
+    <div id="tmwh_hq_panel" class="twmuted">Press Run (with "Prioritise empty build queues" enabled) or press "Check HQ".</div>
   </div>
 
   <div class="twbox">
@@ -2378,13 +2383,21 @@
       })();
 
       // HQ Build Queue Check
+      function updateHqBtnLabel() {
+        const hasCached = state.hqData && state.hqData.size > 0;
+        $("#tmwh_hq_run").text(hasCached ? "Show HQ" : "Check HQ");
+      }
+      updateHqBtnLabel();
+
       $("#tmwh_hq_run").on("click", async function () {
         const $btn = $(this);
-        $btn.prop("disabled", true).text("Checking…");
+        const hasCached = state.hqData && state.hqData.size > 0;
+        $btn.prop("disabled", true).text(hasCached ? "Loading…" : "Checking…");
         try {
           await runHqCheck();
         } finally {
-          $btn.prop("disabled", false).text("Check HQ");
+          $btn.prop("disabled", false);
+          updateHqBtnLabel();
         }
       });
 
@@ -2936,7 +2949,6 @@
     async function runHqCheck() {
       const $panel = $("#tmwh_hq_panel");
       if (!$panel.length) return;
-      $panel.html(`<div class="twmuted">Checking HQ queues…</div>`);
 
       const villagesData = state.villagesData;
       if (!villagesData || !villagesData.length) {
@@ -2944,23 +2956,43 @@
         return;
       }
 
+      // If Run already fetched HQ data (hqPriorityEnabled), reuse it — no extra requests.
+      // Only fetch fresh if the user explicitly wants it (hqData is null).
+      const cachedHqData = state.hqData;
       const results = [];
-      for (let i = 0; i < villagesData.length; i++) {
-        const v = villagesData[i];
-        // Skip fully-built villages — no HQ check needed at max points
-        if (v.points >= (state.settings.maxedOutPoints || 10471)) {
-          if (i < villagesData.length - 1) await new Promise(res => setTimeout(res, 300));
-          continue;
-        }
-        $panel.html(`<div class="twmuted">Checking HQ queues… (${i + 1}/${villagesData.length})</div>`);
-        try {
-          const hq = await fetchHqNextBuilding(v.id);
+
+      if (cachedHqData && cachedHqData.size > 0) {
+        // Use cached data from the last Run — instant, no HTTP requests
+        $panel.html(`<div class="twmuted">Using data from last Run…</div>`);
+        const maxPts = state.settings.maxedOutPoints || 10471;
+        for (const v of villagesData) {
+          if (v.points >= maxPts) continue;
+          const hq = cachedHqData.get(String(v.id));
+          if (!hq) continue;
           const check = computeHqReadiness(v, hq);
           if (check) results.push({ v, hq, check });
-        } catch (e) {
-          // skip villages that fail (e.g. sitter restrictions)
         }
-        if (i < villagesData.length - 1) await new Promise(res => setTimeout(res, 300));
+      } else {
+        // No cached data — fetch fresh sequentially
+        const maxPts = state.settings.maxedOutPoints || 10471;
+        const toCheck = villagesData.filter(v => v.points < maxPts);
+        const skipped = villagesData.length - toCheck.length;
+        for (let i = 0; i < toCheck.length; i++) {
+          const v = toCheck[i];
+          $panel.html(`<div class="twmuted">Checking HQ queues… (${i + 1}/${toCheck.length}${skipped > 0 ? `, ${skipped} maxed out skipped` : ""})</div>`);
+          try {
+            const hq = await fetchHqNextBuilding(v.id);
+            const check = computeHqReadiness(v, hq);
+            if (check) results.push({ v, hq, check });
+          } catch (e) {
+            // skip villages that fail (e.g. sitter restrictions)
+          }
+          if (i < toCheck.length - 1) await new Promise(res => setTimeout(res, 300));
+        }
+        // Cache the freshly-fetched data for subsequent Check HQ calls
+        const freshMap = new Map();
+        results.forEach(({ v, hq }) => freshMap.set(String(v.id), hq));
+        state.hqData = freshMap;
       }
 
       if (!results.length) {
@@ -3057,22 +3089,19 @@
       let hqData = null;
       if (state.settings.hqPriorityEnabled) {
         hqData = new Map();
-        const total = villagesData.length;
-        for (let i = 0; i < total; i++) {
-          const v = villagesData[i];
-          // Skip fully-built villages — no HQ check needed at max points
-          if (v.points >= (state.settings.maxedOutPoints || 10471)) {
-            if (i < total - 1) await new Promise(res => setTimeout(res, 300));
-            continue;
-          }
-          $("#tmwh_summary").text(`Checking HQ build queues… (${i + 1}/${total})`);
+        const maxPts = state.settings.maxedOutPoints || 10471;
+        const hqCandidates = villagesData.filter(v => v.points < maxPts);
+        const hqSkipped    = villagesData.length - hqCandidates.length;
+        for (let i = 0; i < hqCandidates.length; i++) {
+          const v = hqCandidates[i];
+          $("#tmwh_summary").text(`Checking HQ build queues… (${i + 1}/${hqCandidates.length}${hqSkipped > 0 ? `, ${hqSkipped} maxed skipped` : ""})`);
           try {
             const hq = await fetchHqNextBuilding(v.id);
             if (hq?.villageId) hqData.set(hq.villageId, hq);
           } catch (_) {
             // single village failed — skip it, continue with the rest
           }
-          if (i < total - 1) await new Promise(res => setTimeout(res, 300));
+          if (i < hqCandidates.length - 1) await new Promise(res => setTimeout(res, 300));
         }
         state.hqData = hqData;
         applyHqBuildPriority({ villagesData, excessResources, shortageResources, incomingRes, hqData });

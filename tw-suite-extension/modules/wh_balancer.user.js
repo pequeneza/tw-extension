@@ -1163,10 +1163,14 @@
           const hasLongQueue = queueSec > longQueueSec;
 
           if (!hasLongQueue) {
-            // Force strong receiver (classic behavior)
-            tempWood  = -(needsCap - v.wood  - inc.wood);
-            tempStone = -(needsCap - v.stone - inc.stone);
-            tempIron  = -(needsCap - v.iron  - inc.iron);
+            // Priority receiver: keep the average-based shortage (same formula as normal
+            // villages) so the shortage magnitude is realistic. The priority just means
+            // these villages are served first in assignMerchantsAndBuildLinks — not that
+            // they get an inflated warehouse-proportional shortage that starves other receivers.
+            // Clamp to zero if they're already above average (shouldn't donate either).
+            if (tempWood  > 0) tempWood  = 0;
+            if (tempStone > 0) tempStone = 0;
+            if (tempIron  > 0) tempIron  = 0;
           }
           // else → keep the normal temp value (can be positive → donor)
         }
@@ -1285,7 +1289,7 @@
     //     (rounded up to 1000), so the router prioritises sending to them.
     //
     // hqData: Map<villageId string, { queueEndsSec, costWood, costStone, costIron, buildingName }>
-    function applyHqBuildPriority({ villagesData, excessResources, shortageResources, incomingRes, hqData }) {
+    function applyHqBuildPriority({ villagesData, excessResources, shortageResources, incomingRes, hqData, averages }) {
       if (!hqData || !hqData.size) return;
 
       // Pre-load both lock sources so we can respect them.
@@ -1323,8 +1327,21 @@
           if (ppLockSet.has(`${v.id}:${res}`)) continue;
 
           const missing = Math.max(0, cost - (v[res] + incAmt));
-          const need    = Math.ceil(missing / 1000) * 1000;
+          let need      = Math.ceil(missing / 1000) * 1000;
           if (need <= 0) continue;
+
+          // For low-points villages, cap the HQ shortage boost to the same ceiling used
+          // in computeExcessShortage: convergent average minus current stock.
+          // Without this, large building costs re-introduce the inflated-shortage problem
+          // that the low-points fix was designed to prevent.
+          if (v.points < (state?.settings?.lowPoints || 0)) {
+            const avgForRes = res === "wood"  ? averages.actualWoodAverage
+                            : res === "stone" ? averages.actualStoneAverage
+                            :                   averages.actualIronAverage;
+            const avgBased = Math.max(0, Math.ceil((avgForRes - v[res] - incAmt) / 1000) * 1000);
+            need = Math.min(need, avgBased);
+            if (need <= 0) continue;
+          }
 
           // Zero excess — village must not donate a resource it needs for building
           if (excessResources[idx]?.[eIdx]) excessResources[idx][eIdx][res] = 0;
@@ -1338,10 +1355,15 @@
     }
 
     // ---------------- Links build ----------------
-    function assignMerchantsAndBuildLinks(villagesData, excessResources, shortageResources, villageID) {
+    function assignMerchantsAndBuildLinks(villagesData, excessResources, shortageResources, villageID, isMintingMode) {
       const links = [];
 
-      // Fix #4: pre-compute coords once, cache pairwise distances
+      // Max distance constraint — applied per-donor inside the loop so donor resources
+      // are not consumed by links that will later be filtered out.
+      const maxDist = Math.max(1, state?.settings?.maxDistance || 9999);
+      const lowPts  = state?.settings?.lowPoints || 0;
+
+      // Pre-compute coords, cache pairwise distances
       const coordsById = new Map();
       for (const v of villagesData) {
         const c = coordsFromVillageName(v.name);
@@ -1358,9 +1380,31 @@
         return distCache.get(key);
       }
 
-      // Fix #2: shared merchant pool — a single merchantsLeft counter per donor
-      // replaces the three independent per-resource slot pools of the original.
-      // This prevents over-promising the same physical merchants to multiple resources.
+      // Fix (Bug 4): Build cluster map before donor loop so donor sorting can be cluster-aware.
+      // Uses modular row-wrap instead of Math.min clamp to avoid dumping overflow into last cluster.
+      const clusterEnabled = !isMintingMode && state?.settings?.useClusters;
+      const numClusters = clusterEnabled ? (state?.settings?.numClusters || 1) : 1;
+      const villageCluster = new Map();
+      if (clusterEnabled && numClusters >= 2) {
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        coordsById.forEach(c => {
+          minX = Math.min(minX, c.x); maxX = Math.max(maxX, c.x);
+          minY = Math.min(minY, c.y); maxY = Math.max(maxY, c.y);
+        });
+        const width    = maxX - minX || 1;
+        const height   = maxY - minY || 1;
+        const gridSize = Math.ceil(Math.sqrt(numClusters));
+        for (const v of villagesData) {
+          const c = coordsById.get(String(v.id));
+          if (!c) { villageCluster.set(String(v.id), 0); continue; }
+          const gx = Math.min(Math.floor(((c.x - minX) / width)  * gridSize), gridSize - 1);
+          const gy = Math.min(Math.floor(((c.y - minY) / height) * gridSize), gridSize - 1);
+          // Modular wrap: row-major index clamped to [0, numClusters-1] without lump-clamp
+          villageCluster.set(String(v.id), (gy % Math.ceil(numClusters / gridSize)) * gridSize + gx);
+        }
+      }
+
+      // Shared merchant pool per donor
       const donors = [];
       for (let p = 0; p < excessResources.length; p++) {
         const exW = Math.floor(excessResources[p][0].wood  / 1000) * 1000;
@@ -1372,31 +1416,24 @@
 
         const avail = villagesData[p].availableMerchants;
         const merchantsNeeded = Math.ceil(combined / 1000);
-        // Scale excess down to what available merchants can actually carry
         const scale = merchantsNeeded <= avail ? 1 : avail / merchantsNeeded;
 
         donors.push({
-          id:           String(villagesData[p].id),
-          merchantsLeft: avail,                          // shared pool
+          id:            String(villagesData[p].id),
+          merchantsLeft: avail,
           wood:  Math.floor(exW * scale / 1000) * 1000,
           stone: Math.floor(exS * scale / 1000) * 1000,
           iron:  Math.floor(exI * scale / 1000) * 1000,
         });
       }
 
-      // Fix #3: process each resource pass with receivers sorted largest-shortage-first
-      // Original iterated in reverse points order which is unrelated to shortage size.
       const RES = [
-        { res: "wood",  sIdx: 0, eIdx: 0 },
-        { res: "stone", sIdx: 1, eIdx: 1 },
-        { res: "iron",  sIdx: 2, eIdx: 2 },
+        { res: "wood",  sIdx: 0 },
+        { res: "stone", sIdx: 1 },
+        { res: "iron",  sIdx: 2 },
       ];
 
-      const lowPts = state?.settings?.lowPoints || 0;
-
       for (const { res, sIdx } of RES) {
-        // Split receivers into priority (low-points) and normal tiers.
-        // Priority villages are served first to guarantee they always receive resources.
         const priorityReceivers = [];
         const normalReceivers   = [];
         for (let q = 0; q < shortageResources.length; q++) {
@@ -1415,20 +1452,41 @@
           let remaining = shortageResources[q][sIdx][res];
           if (remaining <= 0) continue;
 
-          // Fix #4: sort donors by cached distance to this receiver
-          const tgtId = String(villageID[q]);
-          const sortedDonors = donors
-            .filter(d => d[res] > 0 && d.merchantsLeft > 0)
-            .sort((a, b) => cachedDist(a.id, tgtId) - cachedDist(b.id, tgtId));
+          const tgtId      = String(villageID[q]);
+          const tgtCluster = villageCluster.get(tgtId) ?? 0;
+
+          // Fix (Bug 1): cluster-aware donor sorting.
+          // When clustering is active, intra-cluster donors are tried first (sorted by distance),
+          // then cross-cluster donors as fallback (also sorted by distance).
+          // This is where clustering actually affects resource flow — not post-hoc re-sorting.
+          const eligibleDonors = donors.filter(d => d[res] > 0 && d.merchantsLeft > 0);
+
+          let sortedDonors;
+          if (clusterEnabled && numClusters >= 2) {
+            const intra = eligibleDonors
+              .filter(d => (villageCluster.get(d.id) ?? 0) === tgtCluster)
+              .sort((a, b) => cachedDist(a.id, tgtId) - cachedDist(b.id, tgtId));
+            const inter = eligibleDonors
+              .filter(d => (villageCluster.get(d.id) ?? 0) !== tgtCluster)
+              .sort((a, b) => cachedDist(a.id, tgtId) - cachedDist(b.id, tgtId));
+            sortedDonors = [...intra, ...inter];
+          } else {
+            sortedDonors = eligibleDonors
+              .sort((a, b) => cachedDist(a.id, tgtId) - cachedDist(b.id, tgtId));
+          }
 
           for (const donor of sortedDonors) {
             if (remaining <= 0) break;
             if (donor[res] <= 0 || donor.merchantsLeft <= 0) continue;
 
-            // How much can this donor actually send given shared merchant pool?
             const maxByMerchants = donor.merchantsLeft * 1000;
             const canSend = Math.floor(Math.min(remaining, donor[res], maxByMerchants) / 1000) * 1000;
             if (canSend <= 0) continue;
+
+            // Skip if this donor→receiver pair exceeds maxDistance, unless the receiver
+            // is a low-points priority village (always exempt from distance filter).
+            const isLowPtsReceiver = villagesData[q] && villagesData[q].points < lowPts;
+            if (maxDist < 9999 && !isLowPtsReceiver && cachedDist(donor.id, tgtId) > maxDist) continue;
 
             links.push({
               source: donor.id,
@@ -1438,9 +1496,9 @@
               iron:  res === "iron"  ? canSend : 0,
             });
 
-            donor[res]         -= canSend;
-            donor.merchantsLeft -= Math.ceil(canSend / 1000); // Fix #2: deduct from shared pool
-            remaining          -= canSend;
+            donor[res]          -= canSend;
+            donor.merchantsLeft -= Math.ceil(canSend / 1000);
+            remaining           -= canSend;
           }
 
           shortageResources[q][sIdx][res] = remaining;
@@ -2309,7 +2367,7 @@
         <input type="checkbox" id="tmwh_useClusters" ${s.useClusters ? "checked" : ""}>
         
         <label>Number of Clusters</label>
-        <input type="number" id="tmwh_numClusters" "${s.numClustersd}">
+        <input type="number" id="tmwh_numClusters" value="${s.numClusters}">
       </div>
       <hr/>
 
@@ -2781,7 +2839,7 @@
 
       //Cluster Support
       s.useClusters = $("#tmwh_useClusters").is(":checked");
-      s.numClusters = parseInt($("#tmwh_numClusters").val(), 20);
+      s.numClusters = parseInt($("#tmwh_numClusters").val(), 10);
 
       if (isNaN(s.lowPoints)) s.lowPoints = 1;
       if (isNaN(s.highPoints)) s.highPoints = 12000;
@@ -3425,16 +3483,14 @@
       }
 
       if ((state.settings.hqPriorityEnabled || isFirstHqRun) && hqData && hqData.size > 0) {
-        applyHqBuildPriority({ villagesData, excessResources, shortageResources, incomingRes, hqData });
+        applyHqBuildPriority({ villagesData, excessResources, shortageResources, incomingRes, hqData, averages });
       }
 
-      const { links } = assignMerchantsAndBuildLinks(villagesData, excessResources, shortageResources, villageID);
+      const { links } = assignMerchantsAndBuildLinks(villagesData, excessResources, shortageResources, villageID, isMintingMode);
       let cleanLinks = removeCircularRoutes(addDistanceToLinks(normalizeAndCombineLinks(links), villagesData));
 
-      // Apply clustering if enabled and not in minting mode
-      if (!isMintingMode && state.settings.useClusters) {
-        cleanLinks = applyClustering(cleanLinks, villagesData, state.settings.numClusters);
-      }
+      // Clustering is now handled inside assignMerchantsAndBuildLinks (intra-cluster donors first).
+      // The post-hoc applyClustering() re-sort is no longer needed.
 
       // Global max distance filter (still applies, low-points exempt)
       const maxDist = Math.max(1, state.settings.maxDistance || 9999);

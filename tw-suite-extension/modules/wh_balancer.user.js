@@ -512,6 +512,7 @@
           maxDistance: 9999,
           hqPriorityEnabled: false,
           maxedOutPoints: 10471,
+          lowPointsLongQueueHours: 3,
 
           settingsOpen: false,
           premiumOptionsOpen: false
@@ -1067,72 +1068,82 @@
 
     // ---------------- Ex/Short ----------------
     function computeExcessShortage(villagesData, incomingRes, averages) {
-      const excessResources  = [];
+      const excessResources   = [];
       const shortageResources = [];
-      const villageID = [];
+      const villageID         = [];
       const s = state.settings;
+
+      const longQueueHours = s.lowPointsLongQueueHours || 3;           // fallback
+      const longQueueSec   = longQueueHours * 3600;
 
       for (let idx = 0; idx < villagesData.length; idx++) {
         const v   = villagesData[idx];
         villageID.push(v.id);
-        // Fix #6: incoming applied as per-village credit, not baked into the fleet average.
-        const inc      = incomingRes[v.id] || { wood: 0, stone: 0, iron: 0 };
-        const wh       = v.warehouseCapacity;
+
+        const inc = incomingRes[v.id] || { wood: 0, stone: 0, iron: 0 };
+        const wh  = v.warehouseCapacity;
         const needsCap = wh * s.needsMorePercentage;
 
-        // Base position: current stock vs corrected average (stocks only)
-        let tempWood  = averages.actualWoodAverage  < needsCap ? v.wood  - averages.actualWoodAverage  : -(needsCap - v.wood);
-        let tempStone = averages.actualStoneAverage < needsCap ? v.stone - averages.actualStoneAverage : -(needsCap - v.stone);
-        let tempIron  = averages.actualIronAverage  < needsCap ? v.iron  - averages.actualIronAverage  : -(needsCap - v.iron);
+        // Base position vs convergent average
+        let tempWood  = averages.actualWoodAverage  < needsCap 
+                        ? v.wood  - averages.actualWoodAverage  
+                        : -(needsCap - v.wood);
+        let tempStone = averages.actualStoneAverage < needsCap 
+                        ? v.stone - averages.actualStoneAverage 
+                        : -(needsCap - v.stone);
+        let tempIron  = averages.actualIronAverage  < needsCap 
+                        ? v.iron  - averages.actualIronAverage  
+                        : -(needsCap - v.iron);
 
-        // Credit incoming: reduces shortage or partially offsets excess
+        // Apply incoming transports
         tempWood  += inc.wood;
         tempStone += inc.stone;
         tempIron  += inc.iron;
 
-        // Built-out village: donate everything above the keep threshold.
-        //
-        // The keep threshold is the LOWER of:
-        //   a) builtOutPercentage × warehouseCapacity  (the original intent)
-        //   b) current stock + incoming                (so a village never tries
-        //      to donate more than it has — avoids the case where the WH%
-        //      threshold exceeds actual stock, leaving the village with 0 excess
-        //      even though it has meaningful resources available)
-        //
-        // In practice this means: if a built-out village has 40k iron and its
-        // WH% threshold is 78k, the old code would donate 0. The new code donates
-        // max(0, stock - reserve) so the village still contributes its surplus.
+        // Built-out villages (high points or high farm) donate most surplus
         if (v.farmSpaceUsed > s.highFarm || v.points > s.highPoints) {
           const wh_leave  = s.builtOutPercentage * wh;
           const res_leave = s.reservePerVillage || 0;
-          // Leave = builtOutPercentage × WH, but only if the village actually has
-          // more than that threshold. If stock is already below the WH% threshold,
-          // use only reservePerVillage as the floor — so the village still donates
-          // everything above the hard reserve.
-          // Example: iron=27k, wh_leave=30k, reserve=0 → leave=0 → excess=27k ✓
-          // Example: iron=50k, wh_leave=30k, reserve=0 → leave=30k → excess=20k ✓
+
           const leaveWood  = (v.wood  + inc.wood)  > wh_leave ? wh_leave  : res_leave;
           const leaveStone = (v.stone + inc.stone) > wh_leave ? wh_leave  : res_leave;
           const leaveIron  = (v.iron  + inc.iron)  > wh_leave ? wh_leave  : res_leave;
+
           if (v.wood  + inc.wood  > leaveWood)  tempWood  = Math.round((v.wood  + inc.wood)  - leaveWood);
           if (v.stone + inc.stone > leaveStone) tempStone = Math.round((v.stone + inc.stone) - leaveStone);
           if (v.iron  + inc.iron  > leaveIron)  tempIron  = Math.round((v.iron  + inc.iron)  - leaveIron);
         }
 
-        // Low-points village: always fill to needsMorePercentage
+        // ==================== LOW-POINTS VILLAGE LOGIC ====================
+        // Default: low-points villages (< lowPoints) are strong receivers and never donors.
+        // Exception: If they have more than "lowPointsLongQueueHours" of queued buildings,
+        //            they are allowed to act as donors (can have excess).
         if (v.points < s.lowPoints) {
-          tempWood  = -(needsCap - v.wood  - inc.wood);
-          tempStone = -(needsCap - v.stone - inc.stone);
-          tempIron  = -(needsCap - v.iron  - inc.iron);
-        }
+          const hq = state.hqData ? state.hqData.get(String(v.id)) : null;
+          const queueSec = hq && typeof hq.queueEndsSec === "number" ? hq.queueEndsSec : 0;
 
-        // Fix #5 (extended): near-overflow → urgent donor at 95%+ fill.
-        // Triggers at 95% to prevent warehouses from reaching capacity between runs.
-        // Exception: low-points (priority) villages are NEVER forced into donor role.
-        if (v.points >= s.lowPoints) {
+          const hasLongQueue = queueSec > longQueueSec;
+
+          if (!hasLongQueue) {
+            // Force strong receiver (classic behavior)
+            tempWood  = -(needsCap - v.wood  - inc.wood);
+            tempStone = -(needsCap - v.stone - inc.stone);
+            tempIron  = -(needsCap - v.iron  - inc.iron);
+          }
+          // else → keep the normal temp value (can be positive → donor)
+        }
+        // =================================================================
+
+        // Near-overflow protection (95%+ full) — treat as urgent donor
+        // Now respects the long-queue exception for low-points villages
+        const isLowWithLongQueue = (v.points < s.lowPoints) &&
+                                  (state.hqData?.get(String(v.id))?.queueEndsSec ?? 0) > longQueueSec;
+
+        if (v.points >= s.lowPoints || isLowWithLongQueue) {
           const wh_leave_ov  = s.builtOutPercentage * wh;
           const res_leave_ov = s.reservePerVillage || 0;
           const ovThreshold  = 0.95 * wh;
+
           if (v.wood  + inc.wood  >= ovThreshold) {
             const ovLeave = (v.wood  + inc.wood)  > wh_leave_ov ? wh_leave_ov : res_leave_ov;
             tempWood  = Math.round((v.wood  + inc.wood)  - ovLeave);
@@ -1147,29 +1158,54 @@
           }
         }
 
-        // Low-points village final safety: force negative (receiver) if anything slipped through
+        // Final safety clamp for low-points villages (skip if long queue)
         if (v.points < s.lowPoints) {
-          if (tempWood  > 0) tempWood  = 0;
-          if (tempStone > 0) tempStone = 0;
-          if (tempIron  > 0) tempIron  = 0;
+          const hq = state.hqData ? state.hqData.get(String(v.id)) : null;
+          const queueSec = hq && typeof hq.queueEndsSec === "number" ? hq.queueEndsSec : 0;
+          const hasLongQueue = queueSec > longQueueSec;
+
+          if (!hasLongQueue) {
+            if (tempWood  > 0) tempWood  = 0;
+            if (tempStone > 0) tempStone = 0;
+            if (tempIron  > 0) tempIron  = 0;
+          }
         }
 
-        // Donor hard cap: can only send what is physically in the warehouse now
+        // Hard cap: cannot send more than currently available in warehouse
         if (tempWood  > 0 && tempWood  > v.wood)  tempWood  = v.wood;
         if (tempStone > 0 && tempStone > v.stone) tempStone = v.stone;
         if (tempIron  > 0 && tempIron  > v.iron)  tempIron  = v.iron;
 
-        excessResources[idx]  = [];
+        // Build output arrays (one entry per resource)
+        excessResources[idx]   = [];
         shortageResources[idx] = [];
 
-        if (tempWood  > 0) { excessResources[idx].push({ wood:  Math.floor(tempWood  / 1000) * 1000 }); shortageResources[idx].push({ wood:  0 }); }
-        else               { shortageResources[idx].push({ wood:  Math.floor(-tempWood  / 1000) * 1000 }); excessResources[idx].push({ wood:  0 }); }
+        // Wood
+        if (tempWood > 0) {
+          excessResources[idx].push({ wood: Math.floor(tempWood / 1000) * 1000 });
+          shortageResources[idx].push({ wood: 0 });
+        } else {
+          shortageResources[idx].push({ wood: Math.floor(-tempWood / 1000) * 1000 });
+          excessResources[idx].push({ wood: 0 });
+        }
 
-        if (tempStone > 0) { excessResources[idx].push({ stone: Math.floor(tempStone / 1000) * 1000 }); shortageResources[idx].push({ stone: 0 }); }
-        else               { shortageResources[idx].push({ stone: Math.floor(-tempStone / 1000) * 1000 }); excessResources[idx].push({ stone: 0 }); }
+        // Stone
+        if (tempStone > 0) {
+          excessResources[idx].push({ stone: Math.floor(tempStone / 1000) * 1000 });
+          shortageResources[idx].push({ stone: 0 });
+        } else {
+          shortageResources[idx].push({ stone: Math.floor(-tempStone / 1000) * 1000 });
+          excessResources[idx].push({ stone: 0 });
+        }
 
-        if (tempIron  > 0) { excessResources[idx].push({ iron:  Math.floor(tempIron  / 1000) * 1000 }); shortageResources[idx].push({ iron:  0 }); }
-        else               { shortageResources[idx].push({ iron:  Math.floor(-tempIron  / 1000) * 1000 }); excessResources[idx].push({ iron:  0 }); }
+        // Iron
+        if (tempIron > 0) {
+          excessResources[idx].push({ iron: Math.floor(tempIron / 1000) * 1000 });
+          shortageResources[idx].push({ iron: 0 });
+        } else {
+          shortageResources[idx].push({ iron: Math.floor(-tempIron / 1000) * 1000 });
+          excessResources[idx].push({ iron: 0 });
+        }
       }
 
       return { excessResources, shortageResources, villageID };
@@ -2166,6 +2202,11 @@
 
         <label>Maxed out village (points) <a href="#" class="tmLink tmHelp" data-tip="hq_maxed">?</a></label>
         <input type="number" id="tmwh_maxedOutPoints" value="${s.maxedOutPoints}">
+        
+        <label title="Low-points villages with long queues can donate excess">
+          Low-points long queue threshold (hours):
+        </label>
+        <input type="number" id="tmwh_lowPointsLongQueueHours" value="3" min="0" max="24" step="0.5">
       </div>
 
       <hr/>
@@ -2597,6 +2638,8 @@
       s.highFarm = parseInt($("#tmwh_highFarm").val(), 10);
       s.builtOutPercentage = parseFloat($("#tmwh_builtOutPercentage").val());
       s.needsMorePercentage = parseFloat($("#tmwh_needsMorePercentage").val());
+      s.lowPointsLongQueueHours = parseFloat($("#tmwh_lowPointsLongQueueHours").val());
+      
 
       s.premiumInstantEnabled = $("#tmwh_premiumEnabled").is(":checked");
       s.premiumThreshold = parseInt($("#tmwh_premiumThreshold").val(), 10);
@@ -2620,13 +2663,14 @@
       s.maxDistance          = parseInt($("#tmwh_maxDistance").val(),       10);
       s.hqPriorityEnabled    = $("#tmwh_hqPriorityEnabled").is(":checked");
       s.maxedOutPoints       = parseInt($("#tmwh_maxedOutPoints").val(), 10);
-      if (isNaN(s.maxedOutPoints) || s.maxedOutPoints <= 0) s.maxedOutPoints = 10471;
 
       if (isNaN(s.lowPoints)) s.lowPoints = 1;
       if (isNaN(s.highPoints)) s.highPoints = 12000;
       if (isNaN(s.highFarm)) s.highFarm = 99999;
       if (isNaN(s.builtOutPercentage)) s.builtOutPercentage = 0.25;
       if (isNaN(s.needsMorePercentage)) s.needsMorePercentage = 0.85;
+      if (isNaN(s.maxedOutPoints) || s.maxedOutPoints <= 0) s.maxedOutPoints = 10471;
+      if (isNaN(s.lowPointsLongQueueHours)) s.lowPointsLongQueueHours = 3;
 
       if (isNaN(s.premiumThreshold)) s.premiumThreshold = 50000;
       if (isNaN(s.premiumMoveAmount)) s.premiumMoveAmount = 300000;
@@ -2644,6 +2688,7 @@
 
       s.builtOutPercentage = Math.max(0.01, Math.min(0.95, s.builtOutPercentage));
       s.needsMorePercentage = Math.max(0.1, Math.min(0.95, s.needsMorePercentage));
+      s.lowPointsLongQueueHours = Math.max(0, Math.min(24, s.lowPointsLongQueueHours));
 
       s.premiumThreshold = Math.max(0, s.premiumThreshold);
       s.premiumMoveAmount = Math.max(0, s.premiumMoveAmount);
@@ -3207,14 +3252,13 @@
       applyManualCoordLocks({ villagesData, excessResources, shortageResources });
       applyPpResourceLock({ villagesData, excessResources, shortageResources });
 
-      // HQ data strategy:
-      //   First run of session → always fetch fresh HQ data (regardless of hqPriorityEnabled)
-      //   Subsequent runs → only re-fetch if hqPriorityEnabled AND data is stale (>30 min)
-      // This gives the player accurate build-queue info on first open and avoids repeated
-      // HTTP floods on quick re-runs.
+      // HQ fetching decision — Updated per user request
+      // - Never auto-fetch HQ on the very first run of the session (even if hqPriorityEnabled = true)
+      // - Only fetch if the user has explicitly enabled hqPriorityEnabled AND data is stale
       const isFirstHqRun = !state.hqLastFetchMs;
       const isHqStale    = (nowMs - (state.hqLastFetchMs || 0)) > HQ_STALENESS_MS;
-      const shouldFetchHq = isFirstHqRun || (state.settings.hqPriorityEnabled && isHqStale);
+
+      const shouldFetchHq = state.settings.hqPriorityEnabled && !isFirstHqRun && isHqStale;
 
       let hqData = state.hqData || null;
 

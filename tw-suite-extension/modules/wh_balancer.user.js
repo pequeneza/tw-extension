@@ -1477,6 +1477,67 @@
       return cleanLinks;
     }
 
+  // Improved spatial clustering with inter-cluster exchange via closest links
+  function applyClustering(links, villagesData, numClusters) {
+    if (!numClusters || numClusters < 2) return links;
+
+    // Get coordinates
+    const villageCoords = new Map();
+    villagesData.forEach(v => {
+      const c = coordsFromVillageName(v.name);
+      if (c) villageCoords.set(String(v.id), c);
+    });
+
+    // Find map bounds
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    villageCoords.forEach(c => {
+      minX = Math.min(minX, c.x);
+      maxX = Math.max(maxX, c.x);
+      minY = Math.min(minY, c.y);
+      maxY = Math.max(maxY, c.y);
+    });
+
+    const width = maxX - minX || 1;
+    const height = maxY - minY || 1;
+    const gridSize = Math.ceil(Math.sqrt(numClusters));
+
+    // Assign cluster ID to each village
+    const villageCluster = new Map();
+    villagesData.forEach(v => {
+      const c = villageCoords.get(String(v.id));
+      if (!c) {
+        villageCluster.set(String(v.id), 0);
+        return;
+      }
+      const gx = Math.floor(((c.x - minX) / width) * gridSize);
+      const gy = Math.floor(((c.y - minY) / height) * gridSize);
+      const clusterId = gy * gridSize + gx;
+      villageCluster.set(String(v.id), Math.min(clusterId, numClusters - 1));
+    });
+
+    // Tag links with cluster info and distance
+    const enhancedLinks = links.map(link => {
+      const srcCluster = villageCluster.get(String(link.source)) || 0;
+      const tgtCluster = villageCluster.get(String(link.target)) || 0;
+      return {
+        ...link,
+        srcCluster,
+        tgtCluster,
+        isIntraCluster: srcCluster === tgtCluster
+      };
+    });
+
+    // Sort: intra-cluster first, then inter-cluster by distance (closest exchanges preferred)
+    enhancedLinks.sort((a, b) => {
+      if (a.isIntraCluster !== b.isIntraCluster) {
+        return a.isIntraCluster ? -1 : 1;   // intra first
+      }
+      return (a.distance || 9999) - (b.distance || 9999); // then closest overall
+    });
+
+    return enhancedLinks;
+  }
+
     // ---------------- CIRCULAR ROUTE REMOVAL ----------------
     // If A→B and B→A both exist, keep only the net direction per resource.
     // Mixed-direction resources (A sends wood to B while B sends wood to A)
@@ -2241,12 +2302,15 @@
         <label>Maxed out village (points) <a href="#" class="tmLink tmHelp" data-tip="hq_maxed">?</a></label>
         <input type="number" id="tmwh_maxedOutPoints" value="${s.maxedOutPoints}">
         
-        <label title="Low-points villages with long queues can donate excess">
-          Low-points long queue threshold (hours):
-        </label>
-        <input type="number" id="tmwh_lowPointsLongQueueHours" value="3" min="0" max="24" step="0.5">
-      </div>
+        <label>Low-points long queue threshold (hours): <a href="#" class="tmLink tmHelp" data-tip="LP_QueueHrs">?</a></label></label>
+        <input type="number" id="tmwh_lowPointsLongQueueHours" value="${s.lowPointsLongQueueHours}">
 
+        <label>Clusters <a href="#" class="tmLink tmHelp" data-tip="cluster_logic">?</a></label>
+        <input type="checkbox" id="tmwh_useClusters" ${s.useClusters ? "checked" : ""}>
+        
+        <label>Number of Clusters</label>
+        <input type="number" id="tmwh_numClusters" "${s.numClustersd}">
+      </div>
       <hr/>
 
       <button class="tmSubToggle ${premiumOpen ? "open" : ""}" id="tmwh_togglePremium" type="button">
@@ -2507,6 +2571,19 @@
               <br/>This ensures that villages that can build right now receive resources first and keep what they need.
               Adds one HTTP request per village to the run.
             </div>
+          `,
+          LP_QueueHrs: `
+            <div style="font-weight:bold; margin-bottom:6px">Low-points long queue threshold (hours):</div>
+            <div class="twmuted">
+              Amount of hours a low point village needs to have in queue before becoming a resource donor<br/><br/>
+            </div>
+          `,
+          cluster_logic:`
+          <div style="font-weight:bold; margin-bottom:6px">Clusters:</div>
+          <div class="twmuted">
+            Divide villages into clusters and balance within each cluster instead of globally. 
+            Useful in very large/spread-out accounts.<br/><br/>
+          </div>
           `
         };
 
@@ -2702,6 +2779,10 @@
       s.hqPriorityEnabled    = $("#tmwh_hqPriorityEnabled").is(":checked");
       s.maxedOutPoints       = parseInt($("#tmwh_maxedOutPoints").val(), 10);
 
+      //Cluster Support
+      s.useClusters = $("#tmwh_useClusters").is(":checked");
+      s.numClusters = parseInt($("#tmwh_numClusters").val(), 20);
+
       if (isNaN(s.lowPoints)) s.lowPoints = 1;
       if (isNaN(s.highPoints)) s.highPoints = 12000;
       if (isNaN(s.highFarm)) s.highFarm = 99999;
@@ -2709,6 +2790,8 @@
       if (isNaN(s.needsMorePercentage)) s.needsMorePercentage = 0.85;
       if (isNaN(s.maxedOutPoints) || s.maxedOutPoints <= 0) s.maxedOutPoints = 10471;
       if (isNaN(s.lowPointsLongQueueHours)) s.lowPointsLongQueueHours = 3;
+
+      if (isNaN(s.numClusters)) s.numClusters = 1;
 
       if (isNaN(s.premiumThreshold)) s.premiumThreshold = 50000;
       if (isNaN(s.premiumMoveAmount)) s.premiumMoveAmount = 300000;
@@ -2744,6 +2827,7 @@
 
       if (isNaN(s.reservePerVillage)) s.reservePerVillage = 0;
       if (isNaN(s.maxDistance))       s.maxDistance = 9999;
+
       // hqPriorityEnabled is boolean, no sanitisation needed
       s.reservePerVillage = Math.max(0, s.reservePerVillage);
       s.maxDistance       = Math.max(1, s.maxDistance);
@@ -3297,12 +3381,16 @@
       //   - If disabled → never auto-fetch
       //   - After first successful fetch → only refresh automatically if data is > 30 min old
       //   - Manual "Check HQ" button always works independently
+
+      const isMintingMode = !!state.settings.isMinting;
       const isFirstHqRun = !state.hqLastFetchMs;
       const isHqStale    = (nowMs - (state.hqLastFetchMs || 0)) > HQ_STALENESS_MS;
 
       let shouldFetchHq = false;
 
-      if (state.settings.hqPriorityEnabled) {
+      if (!isMintingMode && state.settings.hqPriorityEnabled) {
+        const isFirstHqRun = !state.hqLastFetchMs;
+        const isHqStale    = (nowMs - (state.hqLastFetchMs || 0)) > HQ_STALENESS_MS;
         if (isFirstHqRun || isHqStale || !state.hqData || state.hqData.size === 0) {
           shouldFetchHq = true;
         }
@@ -3324,7 +3412,6 @@
             const hq = await fetchHqNextBuilding(v.id);
             if (hq?.villageId) hqData.set(hq.villageId, hq);
           } catch (e) {
-            // single village failed — skip it, continue with the rest
             console.warn(`HQ fetch failed for village ${v.id}`, e);
           }
           if (i < hqCandidates.length - 1) {
@@ -3334,7 +3421,6 @@
 
         state.hqData = hqData;
         state.hqLastFetchMs = nowMs;
-
         saveHqData(hqData, nowMs);
       }
 
@@ -3345,17 +3431,21 @@
       const { links } = assignMerchantsAndBuildLinks(villagesData, excessResources, shortageResources, villageID);
       let cleanLinks = removeCircularRoutes(addDistanceToLinks(normalizeAndCombineLinks(links), villagesData));
 
-      // Apply global max distance filter.
-      // Low-points (priority) villages are exempt — they must receive resources
-      // regardless of distance to avoid being left with empty warehouses.
-      const maxDist  = Math.max(1, state.settings.maxDistance || 9999);
-      const lowPts   = state.settings.lowPoints || 0;
+      // Apply clustering if enabled and not in minting mode
+      if (!isMintingMode && state.settings.useClusters) {
+        cleanLinks = applyClustering(cleanLinks, villagesData, state.settings.numClusters);
+      }
+
+      // Global max distance filter (still applies, low-points exempt)
+      const maxDist = Math.max(1, state.settings.maxDistance || 9999);
+      const lowPts  = state.settings.lowPoints || 0;
       const vByIdMap = new Map(villagesData.map(v => [String(v.id), v]));
+
       if (maxDist < 9999) {
         cleanLinks = cleanLinks.filter(l => {
           if ((l.distance || 0) <= maxDist) return true;
           const tgt = vByIdMap.get(String(l.target));
-          return tgt && tgt.points < lowPts; // exempt priority villages
+          return tgt && tgt.points < lowPts;
         });
       }
 
@@ -3375,16 +3465,16 @@
         return;
       }
 
-      // Fix #7: villages that are receivers in the regular trade plan are excluded
-      // from being PP donors, preventing conflicts between the two systems.
-      const regularReceiverIds = new Set(state.cleanLinks.map(l => String(l.target)));
-      const plans = buildPlansUntilDone(regularReceiverIds);
-      for (const plan of plans) {
-        addPpLock({ villageId: plan.targetVillageId, res: plan.payRes });
-        upsertPpPlan(plan);
-
-        appendSuggestedShipmentsToTable(plan);
-        await startPlanCountdown(plan);
+      // PP Planning - completely skipped in "Ignored settings" mode
+      if (!isMintingMode && loadPpPlans().length === 0) {
+        const regularReceiverIds = new Set(state.cleanLinks.map(l => String(l.target)));
+        const plans = buildPlansUntilDone(regularReceiverIds);
+        for (const plan of plans) {
+          addPpLock({ villageId: plan.targetVillageId, res: plan.payRes });
+          upsertPpPlan(plan);
+          appendSuggestedShipmentsToTable(plan);
+          await startPlanCountdown(plan);
+        }
       }
 
       renderPpLockStatus();
@@ -3403,7 +3493,12 @@
         hqData: savedHq.data,           
         hqLastFetchMs: savedHq.timestamp, 
         pendingSends: [],   
-        sendAllTimer: null
+        sendAllTimer: null,
+
+        // Cluster support
+        useClusters: false,
+        numClusters: 1,
+
       };
 
       showMainDialog();

@@ -555,7 +555,7 @@
         if (typeof s.hqPriorityEnabled === "undefined") s.hqPriorityEnabled = false;
         if (typeof s.maxedOutPoints === "undefined") s.maxedOutPoints = 10471;
 
-        s.builtOutPercentage = Math.max(0.1, Math.min(0.95, parseFloat(s.builtOutPercentage)));
+        s.builtOutPercentage = Math.max(0.01, Math.min(0.95, parseFloat(s.builtOutPercentage)));
         s.needsMorePercentage = Math.max(0.1, Math.min(0.95, parseFloat(s.needsMorePercentage)));
 
         s.premiumThreshold = Math.max(0, parseInt(s.premiumThreshold, 10) || 0);
@@ -728,6 +728,20 @@
         },
         !1
       );
+
+      // Record this send so the next Run can subtract it from the donor's
+      // stock and credit it to the receiver — preventing duplicate routes
+      // when re-running before shipments appear in the prod overview.
+      if (state && state.pendingSends) {
+        state.pendingSends.push({
+          source: String(sourceID),
+          target: String(targetID),
+          wood:  woodAmount  || 0,
+          stone: stoneAmount || 0,
+          iron:  ironAmount  || 0,
+          sentAt: Date.now(),
+        });
+      }
     }
 
     async function doInstantTrade(villageId, giveRes, wantRes, wantAmount) {
@@ -1102,12 +1116,17 @@
         // WH% threshold is 78k, the old code would donate 0. The new code donates
         // max(0, stock - reserve) so the village still contributes its surplus.
         if (v.farmSpaceUsed > s.highFarm || v.points > s.highPoints) {
-          const wh_leave   = s.builtOutPercentage * wh;
-          const res_leave  = s.reservePerVillage || 0;
-          // Use reservePerVillage as the hard floor; WH% as an optional higher floor
-          const leaveWood  = Math.max(res_leave, Math.min(wh_leave, v.wood  + inc.wood));
-          const leaveStone = Math.max(res_leave, Math.min(wh_leave, v.stone + inc.stone));
-          const leaveIron  = Math.max(res_leave, Math.min(wh_leave, v.iron  + inc.iron));
+          const wh_leave  = s.builtOutPercentage * wh;
+          const res_leave = s.reservePerVillage || 0;
+          // Leave = builtOutPercentage × WH, but only if the village actually has
+          // more than that threshold. If stock is already below the WH% threshold,
+          // use only reservePerVillage as the floor — so the village still donates
+          // everything above the hard reserve.
+          // Example: iron=27k, wh_leave=30k, reserve=0 → leave=0 → excess=27k ✓
+          // Example: iron=50k, wh_leave=30k, reserve=0 → leave=30k → excess=20k ✓
+          const leaveWood  = (v.wood  + inc.wood)  > wh_leave ? wh_leave  : res_leave;
+          const leaveStone = (v.stone + inc.stone) > wh_leave ? wh_leave  : res_leave;
+          const leaveIron  = (v.iron  + inc.iron)  > wh_leave ? wh_leave  : res_leave;
           if (v.wood  + inc.wood  > leaveWood)  tempWood  = Math.round((v.wood  + inc.wood)  - leaveWood);
           if (v.stone + inc.stone > leaveStone) tempStone = Math.round((v.stone + inc.stone) - leaveStone);
           if (v.iron  + inc.iron  > leaveIron)  tempIron  = Math.round((v.iron  + inc.iron)  - leaveIron);
@@ -1122,18 +1141,30 @@
 
         // Fix #5: overflow → urgent donor (was misclassified as receiver in original).
         // When current + incoming >= warehouse capacity the village must donate, not receive.
-        // Use the same capped leave calculation as the built-out path for consistency.
-        if (v.wood  + inc.wood  >= wh) {
-          const ovLeave = Math.max(s.reservePerVillage || 0, Math.min(s.builtOutPercentage * wh, v.wood  + inc.wood));
-          tempWood  = Math.round((v.wood  + inc.wood)  - ovLeave);
+        // Exception: low-points (priority) villages are NEVER forced into donor role —
+        // they should always be receivers regardless of their current fill level.
+        if (v.points >= s.lowPoints) {
+          const wh_leave_ov = s.builtOutPercentage * wh;
+          const res_leave_ov = s.reservePerVillage || 0;
+          if (v.wood  + inc.wood  >= wh) {
+            const ovLeave = (v.wood  + inc.wood)  > wh_leave_ov ? wh_leave_ov : res_leave_ov;
+            tempWood  = Math.round((v.wood  + inc.wood)  - ovLeave);
+          }
+          if (v.stone + inc.stone >= wh) {
+            const ovLeave = (v.stone + inc.stone) > wh_leave_ov ? wh_leave_ov : res_leave_ov;
+            tempStone = Math.round((v.stone + inc.stone) - ovLeave);
+          }
+          if (v.iron  + inc.iron  >= wh) {
+            const ovLeave = (v.iron  + inc.iron)  > wh_leave_ov ? wh_leave_ov : res_leave_ov;
+            tempIron  = Math.round((v.iron  + inc.iron)  - ovLeave);
+          }
         }
-        if (v.stone + inc.stone >= wh) {
-          const ovLeave = Math.max(s.reservePerVillage || 0, Math.min(s.builtOutPercentage * wh, v.stone + inc.stone));
-          tempStone = Math.round((v.stone + inc.stone) - ovLeave);
-        }
-        if (v.iron  + inc.iron  >= wh) {
-          const ovLeave = Math.max(s.reservePerVillage || 0, Math.min(s.builtOutPercentage * wh, v.iron  + inc.iron));
-          tempIron  = Math.round((v.iron  + inc.iron)  - ovLeave);
+
+        // Low-points village final safety: force negative (receiver) if anything slipped through
+        if (v.points < s.lowPoints) {
+          if (tempWood  > 0) tempWood  = 0;
+          if (tempStone > 0) tempStone = 0;
+          if (tempIron  > 0) tempIron  = 0;
         }
 
         // Donor hard cap: can only send what is physically in the warehouse now
@@ -2089,7 +2120,7 @@
         <input type="number" id="tmwh_highFarm" value="${s.highFarm}">
 
         <label>WH % to keep in finished villages</label>
-        <input type="number" step="0.01" min="0" max="1" id="tmwh_builtOutPercentage" value="${s.builtOutPercentage}">
+        <input type="number" step="0.01" min="0.01" max="0.95" id="tmwh_builtOutPercentage" value="${s.builtOutPercentage}">
 
         <label>WH % target for priority villages</label>
         <input type="number" step="0.01" min="0" max="1" id="tmwh_needsMorePercentage" value="${s.needsMorePercentage}">
@@ -2581,7 +2612,7 @@
 
       if (isNaN(s.sendAllIntervalMs)) s.sendAllIntervalMs = 500;
 
-      s.builtOutPercentage = Math.max(0.1, Math.min(0.95, s.builtOutPercentage));
+      s.builtOutPercentage = Math.max(0.01, Math.min(0.95, s.builtOutPercentage));
       s.needsMorePercentage = Math.max(0.1, Math.min(0.95, s.needsMorePercentage));
 
       s.premiumThreshold = Math.max(0, s.premiumThreshold);
@@ -3077,6 +3108,34 @@
           }))
         : rawVillagesData;
 
+      // Apply pending sends from this session: subtract from donor stock and
+      // credit to receiver incoming so duplicate routes aren't generated on re-run.
+      // Sends older than 2 hours are dropped (shipment long since arrived).
+      const nowMs   = Date.now();
+      const twoHrsMs = 2 * 60 * 60 * 1000;
+      state.pendingSends = (state.pendingSends || []).filter(s => nowMs - s.sentAt < twoHrsMs);
+
+      if (state.pendingSends.length) {
+        const vById = new Map(villagesData.map(v => [String(v.id), v]));
+        for (const s of state.pendingSends) {
+          const src = vById.get(s.source);
+          const tgt = vById.get(s.target);
+          // Subtract from donor's current stock (they no longer have it)
+          if (src) {
+            src.wood  = Math.max(0, src.wood  - s.wood);
+            src.stone = Math.max(0, src.stone - s.stone);
+            src.iron  = Math.max(0, src.iron  - s.iron);
+          }
+          // Credit to receiver's incoming (they will receive it)
+          if (tgt) {
+            if (!incomingRes[s.target]) incomingRes[s.target] = { wood: 0, stone: 0, iron: 0 };
+            incomingRes[s.target].wood  += s.wood;
+            incomingRes[s.target].stone += s.stone;
+            incomingRes[s.target].iron  += s.iron;
+          }
+        }
+      }
+
       const averages = computeTotalsAndAverages(villagesData, incomingRes);
 
       const { excessResources, shortageResources, villageID } = computeExcessShortage(villagesData, incomingRes, averages);
@@ -3097,7 +3156,7 @@
         const hqSkipped    = villagesData.length - hqCandidates.length;
         for (let i = 0; i < hqCandidates.length; i++) {
           const v = hqCandidates[i];
-          $("#tmwh_summary").text(`Checking HQ build queues… (${i + 1}/${hqCandidates.length}${hqSkipped > 0 ? `, ${hqSkipped} skipped` : ""})`);
+          $("#tmwh_summary").text(`Checking HQ build queues… (${i + 1}/${hqCandidates.length}${hqSkipped > 0 ? `, ${hqSkipped} maxed skipped` : ""})`);
           try {
             const hq = await fetchHqNextBuilding(v.id);
             if (hq?.villageId) hqData.set(hq.villageId, hq);
@@ -3159,6 +3218,7 @@
         averages: null,
         cleanLinks: [],
         hqData: null,
+        pendingSends: [],   // sends dispatched this session, not yet visible in prod overview
         sendAllTimer: null
       };
 

@@ -198,6 +198,14 @@
   border-radius:3px; font-size:11px; margin-right:4px;
   color:#7a6000; font-weight:bold;
 }
+.tmWH .tmBadgeCC {
+  display:inline-block;
+  padding:1px 5px;
+  border:1px solid #991e43;
+  background:#e8e8f8;
+  border-radius:3px; font-size:11px; margin-right:4px;
+  color:#444466; font-weight:bold;
+}
 /* HQ building check */
 #tmwh_hq_panel {
   max-height:260px;
@@ -343,7 +351,9 @@
         if (!Array.isArray(entries)) throw new Error("Invalid HQ data format");
 
         const map = new Map(entries);
-        const timestamp = parseInt(rawTs, 10) || 0;
+        // If timestamp is missing but data exists, treat as just-fetched rather than
+        // epoch-0 (which would trigger isFirstHqRun and force an immediate re-fetch).
+        const timestamp = parseInt(rawTs, 10) || Date.now();
 
         return { data: map, timestamp };
       } catch (e) {
@@ -2487,6 +2497,11 @@
     <div id="tmwh_summary" class="twmuted">Press Run.</div>
   </div>
 
+  <div class="twbox" id="tmwh_map_box" style="display:none">
+    <div class="title">Cluster Map</div>
+    <div id="tmwh_map_container" style="overflow:auto"></div>
+  </div>
+
   <div class="twbox">
     <div class="title">
       HQ Build Queue Check
@@ -2756,6 +2771,12 @@
         const ns = readSettingsFromUI();
         state.settings = ns;
         saveSettings(ns);
+        // Purge cached HQ data when HQ priority is explicitly disabled via Save
+        if (!ns.hqPriorityEnabled) {
+          state.hqData        = null;
+          state.hqLastFetchMs = null;
+          saveHqData(null, null);
+        }
         UI.SuccessMessage("Settings saved.");
       });
 
@@ -2896,6 +2917,130 @@
       return s;
     }
 
+    function renderClusterMap(villagesData, cleanLinks) {
+      const s = state?.settings;
+      const mapBox = document.getElementById("tmwh_map_box");
+      const container = document.getElementById("tmwh_map_container");
+      if (!mapBox || !container) return;
+
+      // Only show map when clustering is enabled and numClusters >= 2
+      if (!s?.useClusters || (s?.numClusters || 1) < 2) {
+        mapBox.style.display = "none";
+        return;
+      }
+      mapBox.style.display = "";
+
+      // Gather coords
+      const coords = [];
+      const idToVillage = new Map();
+      for (const v of villagesData) {
+        const c = coordsFromVillageName(v.name);
+        if (c) { coords.push({ id: String(v.id), name: v.name, x: c.x, y: c.y, pts: v.points }); }
+        idToVillage.set(String(v.id), v);
+      }
+      if (!coords.length) return;
+
+      // Compute clusters (same logic as assignMerchantsAndBuildLinks)
+      const numClusters = s.numClusters;
+      const gridSize = Math.ceil(Math.sqrt(numClusters));
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (const c of coords) {
+        minX = Math.min(minX, c.x); maxX = Math.max(maxX, c.x);
+        minY = Math.min(minY, c.y); maxY = Math.max(maxY, c.y);
+      }
+      const width  = maxX - minX || 1;
+      const height = maxY - minY || 1;
+      for (const c of coords) {
+        const gx = Math.min(Math.floor(((c.x - minX) / width)  * gridSize), gridSize - 1);
+        const gy = Math.min(Math.floor(((c.y - minY) / height) * gridSize), gridSize - 1);
+        c.cluster = (gy % Math.ceil(numClusters / gridSize)) * gridSize + gx;
+      }
+
+      // SVG dimensions
+      const PAD = 32, DOT = 7, W = 540, H = 400;
+      const scaleX = x => PAD + ((x - minX) / width)  * (W - PAD * 2);
+      const scaleY = y => PAD + ((y - minY) / height) * (H - PAD * 2);
+
+      // Cluster colours (up to 12 distinct)
+      const COLORS = [
+        "#e74c3c","#3498db","#2ecc71","#f39c12","#9b59b6",
+        "#1abc9c","#e67e22","#34495e","#e91e63","#00bcd4",
+        "#8bc34a","#ff5722"
+      ];
+      const clusterColor = i => COLORS[i % COLORS.length];
+
+      // Build link index for drawing arrows (only cross-cluster links)
+      const crossLinks = (cleanLinks || []).filter(l => {
+        const sc = coords.find(c => c.id === String(l.source));
+        const tc = coords.find(c => c.id === String(l.target));
+        return sc && tc && sc.cluster !== tc.cluster;
+      });
+
+      // Draw grid cell backgrounds
+      let cellRects = "";
+      for (let gy = 0; gy < gridSize; gy++) {
+        for (let gx = 0; gx < gridSize; gx++) {
+          const cid = (gy % Math.ceil(numClusters / gridSize)) * gridSize + gx;
+          if (cid >= numClusters) continue;
+          const x1 = PAD + (gx / gridSize) * (W - PAD * 2);
+          const y1 = PAD + (gy / gridSize) * (H - PAD * 2);
+          const cw = (W - PAD * 2) / gridSize;
+          const ch = (H - PAD * 2) / gridSize;
+          const col = clusterColor(cid);
+          cellRects += `<rect x="${x1.toFixed(1)}" y="${y1.toFixed(1)}" width="${cw.toFixed(1)}" height="${ch.toFixed(1)}" fill="${col}" fill-opacity="0.10" stroke="${col}" stroke-opacity="0.35" stroke-width="1" stroke-dasharray="4,3"/>`;
+        }
+      }
+
+      // Draw cross-cluster link arrows
+      let arrows = "";
+      for (const l of crossLinks) {
+        const sc = coords.find(c => c.id === String(l.source));
+        const tc = coords.find(c => c.id === String(l.target));
+        if (!sc || !tc) continue;
+        const x1 = scaleX(sc.x), y1 = scaleY(sc.y);
+        const x2 = scaleX(tc.x), y2 = scaleY(tc.y);
+        const col = clusterColor(sc.cluster);
+        arrows += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${col}" stroke-width="1.2" stroke-opacity="0.45" marker-end="url(#arr_${sc.cluster})"/>`;
+      }
+
+      // Arrowhead markers per cluster colour
+      let defs = '<defs>';
+      for (let i = 0; i < numClusters; i++) {
+        const col = clusterColor(i);
+        defs += `<marker id="arr_${i}" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="${col}" fill-opacity="0.6"/></marker>`;
+      }
+      defs += '</defs>';
+
+      // Draw village dots + labels
+      let dots = "";
+      for (const c of coords) {
+        const cx = scaleX(c.x), cy = scaleY(c.y);
+        const col = clusterColor(c.cluster);
+        const isLow = c.pts < (s.lowPoints || 0);
+        const label = c.name.split(" (")[0].trim(); // just "001x" part
+        dots += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${DOT}" fill="${col}" stroke="#fff" stroke-width="1.5" opacity="0.9">
+          <title>${c.name} pts=${c.pts} cluster=${c.cluster}</title>
+        </circle>`;
+        if (isLow) {
+          dots += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${DOT + 3}" fill="none" stroke="#fff" stroke-width="1.5" stroke-dasharray="3,2" opacity="0.7"/>`;
+        }
+        dots += `<text x="${(cx + DOT + 2).toFixed(1)}" y="${(cy + 4).toFixed(1)}" font-size="9" fill="#333" font-family="sans-serif">${label}</text>`;
+      }
+
+      container.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg" style="display:block;max-width:100%">
+        ${defs}
+        ${cellRects}
+        ${arrows}
+        ${dots}
+      </svg>
+      <div style="font-size:10px;color:#888;margin-top:4px">
+        ${Array.from({length: numClusters}, (_, i) =>
+          `<span style="display:inline-block;margin-right:8px"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${clusterColor(i)};vertical-align:middle;margin-right:3px"></span>Cluster ${i}</span>`
+        ).join("")}
+        &nbsp;·&nbsp; Dashed ring = low-points village &nbsp;·&nbsp; Arrows = cross-cluster sends
+      </div>`;
+    }
+
     function renderSummary(averages) {
       const links     = state.cleanLinks || [];
       const merchants = links.reduce((s, l) => s + Math.ceil((l.wood + l.stone + l.iron) / 1000), 0);
@@ -2948,6 +3093,27 @@
       $rows.empty();
       ensureTipPortal();
 
+      // Build cluster map for CC badge (same grid logic as assignMerchantsAndBuildLinks)
+      const clusterMap = new Map();
+      const s = state?.settings;
+      if (s?.useClusters && (s?.numClusters || 1) >= 2) {
+        const numClusters = s.numClusters;
+        const gridSize = Math.ceil(Math.sqrt(numClusters));
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (const v of state.villagesData) {
+          const c = coordsFromVillageName(v.name);
+          if (c) { minX = Math.min(minX, c.x); maxX = Math.max(maxX, c.x); minY = Math.min(minY, c.y); maxY = Math.max(maxY, c.y); }
+        }
+        const width = maxX - minX || 1, height = maxY - minY || 1;
+        for (const v of state.villagesData) {
+          const c = coordsFromVillageName(v.name);
+          if (!c) { clusterMap.set(String(v.id), 0); continue; }
+          const gx = Math.min(Math.floor(((c.x - minX) / width)  * gridSize), gridSize - 1);
+          const gy = Math.min(Math.floor(((c.y - minY) / height) * gridSize), gridSize - 1);
+          clusterMap.set(String(v.id), (gy % Math.ceil(numClusters / gridSize)) * gridSize + gx);
+        }
+      }
+
       cleanLinks.forEach((l, idx) => {
         const src = byId.get(String(l.source));
         const tgt = byId.get(String(l.target));
@@ -2961,9 +3127,17 @@
           ? `<span class="tmBadgeHQ" title="Building: ${hqTarget.buildingName}">HQ</span>`
           : "";
 
+        // CC badge — cross-cluster send
+        const srcCluster = clusterMap.get(String(l.source)) ?? -1;
+        const tgtCluster = clusterMap.get(String(l.target)) ?? -1;
+        const isCrossCluster = clusterMap.size > 0 && srcCluster !== tgtCluster;
+        const ccBadge = isCrossCluster
+          ? `<span class="tmBadgeCC" title="Cross-cluster send (cluster ${srcCluster} → ${tgtCluster})">CC</span>`
+          : "";
+
         $rows.append(`
           <tr class="${rowCls}">
-            <td><a class="tmLink tmVilTip" data-vid="${l.source}" href="${src?.url || "#"}">${src?.name || l.source}</a></td>
+            <td>${ccBadge}<a class="tmLink tmVilTip" data-vid="${l.source}" href="${src?.url || "#"}">${src?.name || l.source}</a></td>
             <td>${hqBadge}<a class="tmLink tmVilTip" data-vid="${l.target}" href="${tgt?.url || "#"}">${tgt?.name || l.target}</a></td>
             <td style="text-align:center">${l.distance ?? ""}</td>
             <td style="text-align:right">${l.wood || 0}</td>
@@ -3441,13 +3615,13 @@
       //   - Manual "Check HQ" button always works independently
 
       const isMintingMode = !!state.settings.isMinting;
-      const isFirstHqRun = !state.hqLastFetchMs;
+      const isFirstHqRun = !state.hqLastFetchMs && (!state.hqData || state.hqData.size === 0);
       const isHqStale    = (nowMs - (state.hqLastFetchMs || 0)) > HQ_STALENESS_MS;
 
       let shouldFetchHq = false;
 
       if (!isMintingMode && state.settings.hqPriorityEnabled) {
-        const isFirstHqRun = !state.hqLastFetchMs;
+        const isFirstHqRun = !state.hqLastFetchMs && (!state.hqData || state.hqData.size === 0);
         const isHqStale    = (nowMs - (state.hqLastFetchMs || 0)) > HQ_STALENESS_MS;
         if (isFirstHqRun || isHqStale || !state.hqData || state.hqData.size === 0) {
           shouldFetchHq = true;
@@ -3512,6 +3686,7 @@
 
       renderSummary(averages);
       renderRows(cleanLinks);
+      renderClusterMap(villagesData, cleanLinks);
       renderManualCoordLockList();
 
       await resumePersistedPlans();

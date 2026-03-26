@@ -265,6 +265,8 @@
     const PP_LOCKS_KEY = "tm_whbalancer_pp_locks_v2";
     const PP_PLANS_KEY = "tm_whbalancer_pp_plans_v2";
     const HQ_STALENESS_MS = 30 * 60 * 1000; // 30 minutes — re-fetch HQ data when stale
+    const HQ_DATA_KEY      = "tm_whbalancer_hq_data_v1";
+    const HQ_TIMESTAMP_KEY = "tm_whbalancer_hq_timestamp_v1";
 
     function safeJsonParse(raw, fallback) {
       try { return raw ? JSON.parse(raw) : fallback; } catch (e) { return fallback; }
@@ -329,6 +331,42 @@
 
     function savePpPlans(plans) {
       localStorage.setItem(PP_PLANS_KEY, JSON.stringify(Array.isArray(plans) ? plans : []));
+        }
+    function loadHqData() {
+      try {
+        const rawData = localStorage.getItem(HQ_DATA_KEY);
+        const rawTs   = localStorage.getItem(HQ_TIMESTAMP_KEY);
+
+        if (!rawData) return { data: new Map(), timestamp: 0 };
+
+        const entries = JSON.parse(rawData);
+        if (!Array.isArray(entries)) throw new Error("Invalid HQ data format");
+
+        const map = new Map(entries);
+        const timestamp = parseInt(rawTs, 10) || 0;
+
+        return { data: map, timestamp };
+      } catch (e) {
+        console.warn("Failed to load HQ data — clearing corrupted cache", e);
+        localStorage.removeItem(HQ_DATA_KEY);
+        localStorage.removeItem(HQ_TIMESTAMP_KEY);
+        return { data: new Map(), timestamp: 0 };
+      }
+    }
+
+    function saveHqData(map, timestamp) {
+      try {
+        if (!map || !(map instanceof Map) || map.size === 0) {
+          localStorage.removeItem(HQ_DATA_KEY);
+          localStorage.removeItem(HQ_TIMESTAMP_KEY);
+          return;
+        }
+        const entries = Array.from(map.entries());
+        localStorage.setItem(HQ_DATA_KEY, JSON.stringify(entries));
+        localStorage.setItem(HQ_TIMESTAMP_KEY, String(timestamp || Date.now()));
+      } catch (e) {
+        console.warn("Failed to save HQ data", e);
+      }
     }
 
     function upsertPpPlan(plan) {
@@ -3096,7 +3134,8 @@
         const ageMin = state.hqLastFetchMs ? Math.floor((Date.now() - state.hqLastFetchMs) / 60000) : null;
         const ageStr = ageMin !== null ? ` — data from ${ageMin} min ago` : "";
         $panel.html(`<div class="twmuted">Using cached HQ data${ageStr}. <span style="color:#a40000">Press "Check HQ" to refresh.</span></div>`);
-        const maxPts = state.settings.maxedOutPoints || 10471;
+        const maxPts = state.settings.maxedOutPoints;
+        saveHqData(state.hqData, state.hqLastFetchMs || Date.now());
         for (const v of villagesData) {
           if (v.points >= maxPts) continue;
           if (v.points < (state.settings.lowPoints || 0)) continue;
@@ -3213,10 +3252,9 @@
       // Apply pending sends from this session: subtract from donor stock and
       // credit to receiver incoming so duplicate routes aren't generated on re-run.
       // Sends older than 2 hours are dropped (shipment long since arrived).
-      const nowMs   = Date.now();
+      const nowMs = getNowMs;
       const twoHrsMs = 2 * 60 * 60 * 1000;
-      // ETA-aware expiry: base expiry on distance × merchant speed rather than a flat 2 hours.
-      // TW merchant base speed ≈ 16 fields/hour at speed 1; use 1.5× buffer for safety.
+
       const merchantSpeedFPH = ((typeof game_data !== "undefined" && game_data.speed) || 1) * 16;
       state.pendingSends = (state.pendingSends || []).filter(s => {
         const distFields = s.distance || 50;
@@ -3252,13 +3290,23 @@
       applyManualCoordLocks({ villagesData, excessResources, shortageResources });
       applyPpResourceLock({ villagesData, excessResources, shortageResources });
 
-      // HQ fetching decision — Updated per user request
-      // - Never auto-fetch HQ on the very first run of the session (even if hqPriorityEnabled = true)
-      // - Only fetch if the user has explicitly enabled hqPriorityEnabled AND data is stale
+      // ==================== HQ FETCHING DECISION (Fixed Timing) ====================
+      // Behavior:
+      //   - If "Prioritise empty build queues" is ENABLED → fetch HQ data on THIS Run
+      //     (even on first execution of the session)
+      //   - If disabled → never auto-fetch
+      //   - After first successful fetch → only refresh automatically if data is > 30 min old
+      //   - Manual "Check HQ" button always works independently
       const isFirstHqRun = !state.hqLastFetchMs;
       const isHqStale    = (nowMs - (state.hqLastFetchMs || 0)) > HQ_STALENESS_MS;
 
-      const shouldFetchHq = state.settings.hqPriorityEnabled && !isFirstHqRun && isHqStale;
+      let shouldFetchHq = false;
+
+      if (state.settings.hqPriorityEnabled) {
+        if (isFirstHqRun || isHqStale || !state.hqData || state.hqData.size === 0) {
+          shouldFetchHq = true;
+        }
+      }
 
       let hqData = state.hqData || null;
 
@@ -3268,20 +3316,26 @@
         const lowPts = state.settings.lowPoints || 0;
         const hqCandidates = villagesData.filter(v => v.points >= lowPts && v.points < maxPts);
         const hqSkipped    = villagesData.length - hqCandidates.length;
-        const fetchReason  = isFirstHqRun ? "first run" : "data stale";
+
         for (let i = 0; i < hqCandidates.length; i++) {
           const v = hqCandidates[i];
-          $("#tmwh_summary").text(`Checking HQ build queues (${fetchReason})… (${i + 1}/${hqCandidates.length}${hqSkipped > 0 ? `, ${hqSkipped} maxed skipped` : ""})`);
+          $("#tmwh_summary").text(`Checking HQ build queues… (${i + 1}/${hqCandidates.length}${hqSkipped > 0 ? `, ${hqSkipped} skipped` : ""})`);
           try {
             const hq = await fetchHqNextBuilding(v.id);
             if (hq?.villageId) hqData.set(hq.villageId, hq);
-          } catch (_) {
+          } catch (e) {
             // single village failed — skip it, continue with the rest
+            console.warn(`HQ fetch failed for village ${v.id}`, e);
           }
-          if (i < hqCandidates.length - 1) await new Promise(res => setTimeout(res, 300));
+          if (i < hqCandidates.length - 1) {
+            await new Promise(res => setTimeout(res, 300));
+          }
         }
+
         state.hqData = hqData;
         state.hqLastFetchMs = nowMs;
+
+        saveHqData(hqData, nowMs);
       }
 
       if ((state.settings.hqPriorityEnabled || isFirstHqRun) && hqData && hqData.size > 0) {
@@ -3337,6 +3391,8 @@
     }
 
     async function run() {
+      const savedHq = loadHqData();
+
       state = {
         settings: loadSettings(),
         planTimers: new Map(),
@@ -3344,9 +3400,9 @@
         villagesData: [],
         averages: null,
         cleanLinks: [],
-        hqData: null,
-        hqLastFetchMs: 0,   // tracks when HQ data was last fetched; 0 = never (first run)
-        pendingSends: [],   // sends dispatched this session, not yet visible in prod overview
+        hqData: savedHq.data,           
+        hqLastFetchMs: savedHq.timestamp, 
+        pendingSends: [],   
         sendAllTimer: null
       };
 

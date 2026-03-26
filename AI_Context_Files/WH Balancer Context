@@ -4,8 +4,7 @@
 ---
 
 ## File
-`tw-suite-extension/modules/wh_balancer.user.js` — ~3240 lines, vanilla JS userscript (TW PT, jQuery available as `$`).  
-Also at `/mnt/project/tw-suite-extension/modules/wh_balancer.user.js` in the container.
+`tw-suite-extension/modules/wh_balancer.user.js` — ~3240 lines, vanilla JS userscript (TW PT, jQuery available as `$`).
 
 **Repo:** https://github.com/pequeneza/tw-extension (branch: `react-ts-vite`)
 
@@ -16,81 +15,80 @@ Single IIFE. A launcher button (`xBalancer`) is injected into the TW page header
 
 **Main execution pipeline in `runComputationAndRender()`:**
 ```
-fetchIncomingOverview()          → incomingRes (Map: villageId → {wood,stone,iron})
-fetchProdOverview()              → rawVillagesData (array of village objects)
-apply reservePerVillage          → villagesData (stocks reduced by reserve)
-apply pendingSends               → adjusts stocks for already-dispatched sends
-computeTotalsAndAverages()       → averages (fleet-wide wood/stone/iron avg)
+fetchIncomingOverview()          → incomingRes
+fetchProdOverview()              → rawVillagesData
+apply reservePerVillage          → villagesData (stocks reduced)
+apply pendingSends               → adjusts for already-sent resources
+computeTotalsAndAverages()       → averages (including convergent average)
 computeExcessShortage()          → excessResources[], shortageResources[]
-applyManualCoordLocks()          → zeroes locked resources (both excess & shortage)
-applyPpResourceLock()            → zeroes PP-locked resources
+applyManualCoordLocks()
+applyPpResourceLock()
 [if hqPriorityEnabled]
-  fetchHqNextBuilding() × N      → hqData Map (sequential, 300ms gap, skips maxedOut & lowPoints villages)
-  applyHqBuildPriority()         → boosts shortage for empty-queue villages; respects all locks
+fetchHqNextBuilding() × N      → hqData Map (sequential with delay)
+applyHqBuildPriority()         → boosts shortage & zeroes excess for empty-queue villages
 assignMerchantsAndBuildLinks()   → links[]
-normalizeAndCombineLinks()       → deduped Map-based merge
-addDistanceToLinks()             → adds distance field, sorts by distance
-[maxDistance filter]
-renderRows()                     → send list table with [HQ] badge on priority targets
+normalizeAndCombineLinks() → deduped
+addDistanceToLinks() + maxDistance filter
+renderRows() + appendSuggestedShipmentsToTable()
 [PP plan building if no persisted plans]
 ```
 
 ---
 
+## Recent Fixes (Important)
+
+**HQ Cache Persistence** (March 2026)
+- Fixed HQ data not surviving page changes / section switches.
+- `loadHqData()` now always returns a `Map` and safely clears corrupted data.
+- `state.hqData` is guaranteed to be a `Map`.
+- Cache is now saved even when only displaying cached data.
+- Increased `HQ_STALENESS_MS` to **1 hour** (was 30 min).
+
+---
+
 ## Settings (localStorage key: `tm_whbalancer_settings`)
-| Setting | Default | Notes |
-|---|---|---|
-| `isMinting` | false | Ignore settings mode |
-| `lowPoints` | 3000 | Villages below this always fill to needsMorePercentage; NEVER donors |
-| `highPoints` | 7000 | Villages above this (or highFarm) are built-out donors |
-| `highFarm` | 23000 | Farm pop threshold for built-out |
-| `builtOutPercentage` | 0.26 | Keep fraction for built-out villages. Min: **0.01** (was 0.1 — recently fixed) |
-| `needsMorePercentage` | 0.7 | Target fill % for priority villages |
-| `reservePerVillage` | 0 | Flat reserve subtracted from all stocks before computation |
-| `maxDistance` | 9999 | Global distance filter on clean links |
-| `hqPriorityEnabled` | false | Fetch HQ build queues during Run |
-| `maxedOutPoints` | 10471 | Villages at/above this skip HQ fetch entirely |
-| `sendAllEnabled` | false | Send All automation |
-| `sendAllIntervalMs` | 500 | ms between Send All clicks |
-| `premiumInstantEnabled` | false | PP Merchant Exchange feature |
-| `premiumThreshold` | 50000 | Min global imbalance to trigger PP plan |
-| `premiumMinTradeAmount` | 70000 | Min shipped amount for PP plan |
-| `premiumMoveAmount` | 300000 | PP move cap |
-| `premiumStagingStrategy` | "weighted" | "weighted" or "largest" |
-| `premiumMaxDistance` | 18 | Max donor→target distance for PP |
-| `premiumMaxTargetFillPct` | 0.90 | Max WH fill for PP target |
-| `premiumMaxPlansHardCap` | 12 | Max PP plans per run |
-| `premiumDonorKeepPct` | 0.10 | PP donor keep % |
-| `premiumDonorKeepMin` | 20000 | PP donor keep min |
-| `premiumDonorMinExcess` | 5000 | PP min excess to qualify as donor |
+| Setting                    | Default   | Notes |
+|---------------------------|-----------|-------|
+| `isMinting`               | false     | Ignore all balancing rules |
+| `lowPoints`               | 3000      | Villages below this are strong receivers (never donors unless long queue) |
+| `highPoints`              | 7000      | Built-out donor threshold |
+| `highFarm`                | 23000     | High farm pop donor threshold |
+| `builtOutPercentage`      | 0.26      | Keep % in finished villages (min 0.01) |
+| `needsMorePercentage`     | 0.7       | Target fill % for priority villages |
+| `reservePerVillage`       | 0         | Flat reserve subtracted from every village |
+| `maxDistance`             | 9999      | Global max distance filter |
+| `hqPriorityEnabled`       | false     | Enable HQ build queue priority |
+| `maxedOutPoints`          | 10471     | Skip HQ check for fully maxed villages |
+| `lowPointsLongQueueHours` | 3         | Low-points villages with long queues may donate |
+| `sendAllEnabled`          | false     | Enable Send All automation |
+| `sendAllIntervalMs`       | 500       | ms between automatic clicks |
+
+**Premium / Instant Trade (10pp) Settings:**
+- `premiumInstantEnabled`, `premiumThreshold`, `premiumMinTradeAmount`, `premiumMoveAmount`, `premiumStagingStrategy`, `premiumMaxDistance`, `premiumMaxTargetFillPct`, `premiumMaxPlansHardCap`, `premiumDonorKeepPct`, etc.
 
 ---
 
-## Key localStorage keys (other than settings)
+## Key localStorage Keys
 | Key | Purpose |
-|---|---|
-| `tm_whbalancer_pp_locks_v2` | PP resource locks (villageId + res) |
-| `tm_whbalancer_pp_plans_v2` | Persisted PP plans with countdown timers |
-| `tm_whbalancer_manual_locks_coords_v1` | Manual coord locks `"x\|y"` → `{wood,stone,iron}` |
-| `tm_whbalancer_manual_locks_comments_v1` | Comments per coord |
+|-----|--------|
+| `tm_whbalancer_settings` | All user settings |
+| `tm_whbalancer_pp_locks_v2` | PP resource locks |
+| `tm_whbalancer_pp_plans_v2` | Persisted PP plans + timers |
+| `tm_whbalancer_manual_locks_coords_v1` | Manual coord-based locks |
+| `tm_whbalancer_manual_locks_comments_v1` | Comments for manual locks |
+| `tm_whbalancer_hq_data_v1` | Cached HQ build queue data |
+| `tm_whbalancer_hq_timestamp_v1` | HQ cache timestamp |
 
 ---
 
-## villagesData object shape
+## villagesData Object Shape
 ```js
 {
-  id: string,           // village ID
-  name: string,         // includes "xxx|yyy" coords
-  points: number,
-  url: string,
-  wood: number, stone: number, iron: number,  // current stock (post-reserve)
-  warehouseCapacity: number,
-  availableMerchants: number,
-  totalMerchants: number,
-  farmSpaceUsed: number,
-  farmSpaceTotal: number,
+  id, name, points, url,
+  wood, stone, iron,                  // current stock (after reserve + pendingSends)
+  warehouseCapacity, availableMerchants, totalMerchants,
+  farmSpaceUsed, farmSpaceTotal
 }
-```
 
 ---
 

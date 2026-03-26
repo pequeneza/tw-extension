@@ -1,25 +1,22 @@
 /**
  * SnipeView — in-overlay panel for the Gap Snipe Scheduler.
  *
- * Option 2 architecture: mounted inside the existing overlay drawer as a
- * dedicated view (same slide-in shell as FakeSenderView / ConfigView).
- * All logic reads from the live TW DOM through `document` (Shadow DOM
- * content scripts share the same `document` as the page).
+ * Two tabs:
+ *   Auto   — reads Nobre-labelled incomings from the DOM (existing behaviour)
+ *   Manual — user enters target coords + attack timings for teammate support
  *
- * The place-page automator stays in the userscript (tw_snipe_scheduler.user.js).
- * This panel only handles: gap reading, troop fetching, candidate computation,
- * countdowns, unit selection, and writing the plan to localStorage.
- *
- * Guard: if the current page doesn't have #commands_incomings the panel
- * shows a "not on overview" message instead of crashing.
+ * The place-page automator stays in tw_snipe_scheduler.user.js.
+ * Manual timings persist in localStorage under tw_snipe_manual_timings_v1
+ * (shared key with the userscript version).
  */
 
 import React, {
-  useCallback, useEffect, useState,
+  useCallback, useEffect, useRef, useState,
 } from "react";
 
 /* ─── Constants ───────────────────────────────────────────────────────────── */
-const STORAGE_KEY_PLAN = "tw_gap_snipe_plan_v12";
+const STORAGE_KEY_PLAN   = "tw_gap_snipe_plan_v12";
+const STORAGE_KEY_MANUAL = "tw_snipe_manual_timings_v1";
 
 const UNIT_MIN_PER_FIELD: Record<string, number> = {
   spear: 18, sword: 22, axe: 18, archer: 18, spy: 9,
@@ -27,14 +24,13 @@ const UNIT_MIN_PER_FIELD: Record<string, number> = {
   snob: 35, knight: 10,
 };
 
-// fastest → slowest (for candidate selection — we want the slowest feasible)
 const UNIT_ORDER_FAST_TO_SLOW: string[] = [
   "spy", "light", "knight", "marcher", "heavy",
   "spear", "axe", "archer", "sword", "ram", "catapult", "snob",
 ].filter((u) => u in UNIT_MIN_PER_FIELD);
 
 /* ─── Types ───────────────────────────────────────────────────────────────── */
-interface Incoming { arrivalMs: number; }
+interface Incoming { arrivalMs: number; label: string; target: Coord; }
 interface Coord    { x: number; y: number; }
 
 interface VillageTroops {
@@ -48,9 +44,17 @@ interface Candidate {
   chosenSlowestUnit: string;
   sendMs: number;
   arrivalMs: number;
-  /** units with mpf <= chosenSlowest that this village actually has */
   allowedUnits: string[];
 }
+
+interface TimingRow { id: string; dt: string; ms: number; }
+
+interface ManualState {
+  target: string;
+  timings: Array<{ dt: string; ms: number }>;
+}
+
+type Tab = "auto" | "manual";
 
 /* ─── Helpers ─────────────────────────────────────────────────────────────── */
 function pad2(n: number) { return String(n).padStart(2, "0"); }
@@ -65,7 +69,7 @@ function fmtDateMs(ms: number) {
 function fmtCountdown(diffMs: number) {
   const sign = diffMs < 0 ? "-" : "";
   const abs  = Math.abs(diffMs);
-  const ms   = Math.floor(abs % 1000);
+  const ms   = Math.floor(abs) % 1000;
   const s    = Math.floor(abs / 1000);
   const hh   = Math.floor(s / 3600);
   const mm   = Math.floor((s % 3600) / 60);
@@ -82,7 +86,7 @@ function toDatetimeLocalMs(ms: number) {
 
 function parseCoord(str: string): Coord | null {
   const m = str.match(/(\d{3})\|(\d{3})/);
-  return m ? { x: +m[1]!, y: +m[2]! } : null;
+  return m ? { x: +m[1], y: +m[2] } : null;
 }
 
 function euclidean(a: Coord, b: Coord) {
@@ -111,60 +115,95 @@ function unitIconUrl(unit: string) {
   return `https://dspt.innogamescdn.com/asset/b2fb8d33/graphic/unit/unit_${unit}.webp`;
 }
 
-/* ─── DOM readers (run against document — same as the TW page) ────────────── */
+function makeId() {
+  return `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
+/* ─── localStorage helpers ────────────────────────────────────────────────── */
+function loadManualState(): ManualState {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_MANUAL);
+    if (!raw) return { target: "", timings: [] };
+    return JSON.parse(raw) as ManualState;
+  } catch { return { target: "", timings: [] }; }
+}
+
+function saveManualState(s: ManualState) {
+  localStorage.setItem(STORAGE_KEY_MANUAL, JSON.stringify(s));
+}
+
+/* ─── DOM readers ─────────────────────────────────────────────────────────── */
 function readCurrentVillageId(): string | null {
   const el = document.querySelector<HTMLElement>("#commands_incomings");
   const dv = el?.getAttribute("data-village");
   if (dv && /^\d+$/.test(dv)) return dv;
-
   const m = window.location.search.match(/[?&]village=(\d+)/);
   if (m) return m[1]!;
-
   const gd = (window as Window & { game_data?: { village?: { id?: number } } }).game_data?.village?.id;
   if (gd) return String(gd);
-
   return null;
 }
 
-function readTargetCoord(): Coord | null {
+function getRowLabel(tr: HTMLElement): string {
+  const ql = tr.querySelector<HTMLElement>(".quickedit-label");
+  if (ql) return ql.textContent?.trim() ?? "";
+  return tr.querySelector("td")?.textContent?.trim() ?? "";
+}
+
+function getRowTargetCoord(tr: HTMLElement): Coord | null {
   let found: Coord | null = null;
-  document.querySelectorAll<HTMLElement>("b.nowrap").forEach((el) => {
+  tr.querySelectorAll<HTMLElement>("b.nowrap").forEach((el) => {
     if (found) return;
     const c = parseCoord(el.textContent ?? "");
+    if (c) found = c;
+  });
+  if (found) return found;
+  tr.querySelectorAll<HTMLAnchorElement>("a[href*='info_village']").forEach((a) => {
+    if (found) return;
+    const c = parseCoord(a.textContent ?? "") ?? parseCoord(a.getAttribute("href") ?? "");
     if (c) found = c;
   });
   return found;
 }
 
 function readIncomingsFromDOM(): Incoming[] {
-  const wrap = document.querySelector("#commands_incomings");
-  if (!wrap) return [];
+  const rows: HTMLElement[] = [];
+  const cmdWrap  = document.querySelector("#commands_incomings");
+  const incTable = document.querySelector("#incomings_table");
+
+  if (cmdWrap) {
+    cmdWrap.querySelectorAll<HTMLElement>("tr.command-row").forEach((tr) => rows.push(tr));
+  } else if (incTable) {
+    const nowrap = incTable.querySelectorAll<HTMLElement>("tr.nowrap");
+    const source = nowrap.length > 0 ? nowrap : incTable.querySelectorAll<HTMLElement>("tbody tr");
+    source.forEach((tr) => rows.push(tr));
+  }
 
   const list: Incoming[] = [];
-  wrap.querySelectorAll<HTMLElement>("tr.command-row").forEach((tr) => {
-    // skip supports
+  for (const tr of rows) {
     const cmdType = (
       tr.getAttribute("data-command-type") ??
-      tr.querySelector("[data-command-type]")?.getAttribute("data-command-type") ??
-      ""
+      tr.querySelector("[data-command-type]")?.getAttribute("data-command-type") ?? ""
     ).toLowerCase();
-    if (cmdType === "support") return;
-
+    if (cmdType === "support") continue;
+    const label = getRowLabel(tr);
+    if (!label.toLowerCase().includes("nobre")) continue;
     const endSpan = tr.querySelector<HTMLElement>("span[data-endtime]");
     const endSec  = parseInt(endSpan?.getAttribute("data-endtime") ?? "", 10);
-    if (!endSec) return;
-
-    const greyEl  = tr.querySelector<HTMLElement>("span.grey.small");
-    const ms      = clampInt(parseInt(greyEl?.textContent?.trim() ?? "0", 10), 0, 999);
-    list.push({ arrivalMs: endSec * 1000 + ms });
-  });
+    if (!endSec) continue;
+    const greyEl = tr.querySelector<HTMLElement>("span.grey.small");
+    const ms     = clampInt(parseInt(greyEl?.textContent?.trim() ?? "0", 10), 0, 999);
+    const target = getRowTargetCoord(tr);
+    if (!target) continue;
+    list.push({ arrivalMs: endSec * 1000 + ms, label, target });
+  }
 
   list.sort((a, b) => a.arrivalMs - b.arrivalMs);
   return list;
 }
 
 async function fetchOwnHomeTroops(villageId: string): Promise<VillageTroops[]> {
-  const url = `game.php?village=${encodeURIComponent(villageId)}&screen=overview_villages&mode=units&type=own_home`;
+  const url  = `game.php?village=${encodeURIComponent(villageId)}&screen=overview_villages&mode=units&type=own_home`;
   const html = await fetch(url, { credentials: "include" }).then((r) => r.text());
   const doc  = new DOMParser().parseFromString(html, "text/html");
 
@@ -172,7 +211,6 @@ async function fetchOwnHomeTroops(villageId: string): Promise<VillageTroops[]> {
     .find((t) => t.querySelector('thead img[src*="/graphic/unit/unit_"]'));
   if (!table) return [];
 
-  // build header → unit mapping
   const headerUnits: string[] = [];
   table.querySelectorAll("thead th").forEach((th) => {
     const img = th.querySelector<HTMLImageElement>("img");
@@ -186,30 +224,26 @@ async function fetchOwnHomeTroops(villageId: string): Promise<VillageTroops[]> {
 
   const out: VillageTroops[] = [];
   doc.querySelectorAll<HTMLTableRowElement>("table.vis tbody tr").forEach((tr) => {
-    const label  = tr.querySelector<HTMLElement>(".quickedit-label");
-    const coord  = parseCoord(label?.textContent ?? tr.textContent ?? "");
+    const label   = tr.querySelector<HTMLElement>(".quickedit-label");
+    const coord   = parseCoord(label?.textContent ?? tr.textContent ?? "");
     if (!coord) return;
-
-    const a      = tr.querySelector<HTMLAnchorElement>("a[href*='village=']");
+    const a       = tr.querySelector<HTMLAnchorElement>("a[href*='village=']");
     const idMatch = (a?.getAttribute("href") ?? "").match(/[?&]village=(\d+)/);
-    const vId    = idMatch ? idMatch[1]! : null;
-
-    const tds    = [...tr.querySelectorAll<HTMLElement>("td.unit-item")];
+    const vId     = idMatch ? idMatch[1]! : null;
+    const tds     = [...tr.querySelectorAll<HTMLElement>("td.unit-item")];
     if (!tds.length) return;
-
     const troops: Record<string, number> = {};
     headerUnits.forEach((unit, i) => {
       const raw = (tds[i]?.textContent ?? "").replace(/[^\d]/g, "");
       troops[unit] = raw ? parseInt(raw, 10) : 0;
     });
-
     out.push({ villageId: vId, coord, troops });
   });
 
   return out;
 }
 
-/* ─── Candidate computation (pure) ───────────────────────────────────────── */
+/* ─── Candidate computation ───────────────────────────────────────────────── */
 function computeCandidates(
   incomings: Incoming[],
   gapIdx: number,
@@ -225,52 +259,42 @@ function computeCandidates(
   const beforeMs = b.arrivalMs;
   const midMs    = Math.floor((afterMs + beforeMs) / 2);
   const nowMs    = getServerNowMs();
-
-  const candidates: Candidate[] = [];
+  const out: Candidate[] = [];
 
   for (const src of troops) {
     let chosen: { unit: string; sendMs: number; arrivalMs: number } | null = null;
-
-    // iterate slowest→fastest: first match wins (slowest feasible unit)
     for (const unit of [...UNIT_ORDER_FAST_TO_SLOW].reverse()) {
       const avail = src.troops[unit] ?? 0;
       if (!avail) continue;
-
-      const tMs           = travelMs(unit, src.coord, target, speedFactor);
-      const earliestSend  = (afterMs  + 1) - tMs;
-      const latestSend    = (beforeMs - 1) - tMs;
+      const tMs          = travelMs(unit, src.coord, target, speedFactor);
+      const earliestSend = (afterMs  + 1) - tMs;
+      const latestSend   = (beforeMs - 1) - tMs;
       if (earliestSend > latestSend) continue;
       if (latestSend < nowMs) continue;
-
       const sendForMid = midMs - tMs;
       const sendMs     = Math.min(latestSend, Math.max(earliestSend, sendForMid));
       const arrMs      = sendMs + tMs;
       if (!(arrMs > afterMs && arrMs < beforeMs)) continue;
       if (sendMs < nowMs) continue;
-
       chosen = { unit, sendMs, arrivalMs: arrMs };
       break;
     }
-
     if (!chosen) continue;
-
     const chosenMpf    = UNIT_MIN_PER_FIELD[chosen.unit]!;
     const allowedUnits = UNIT_ORDER_FAST_TO_SLOW
       .filter((u) => UNIT_MIN_PER_FIELD[u]! <= chosenMpf)
       .filter((u) => (src.troops[u] ?? 0) > 0);
-
-    candidates.push({ src, chosenSlowestUnit: chosen.unit, sendMs: chosen.sendMs, arrivalMs: chosen.arrivalMs, allowedUnits });
+    out.push({ src, chosenSlowestUnit: chosen.unit, sendMs: chosen.sendMs, arrivalMs: chosen.arrivalMs, allowedUnits });
   }
 
-  candidates.sort((x, y) => x.sendMs - y.sendMs);
-  return candidates.slice(0, 15);
+  out.sort((x, y) => x.sendMs - y.sendMs);
+  return out.slice(0, 15);
 }
 
-/* ─── useCountdown — per-candidate live timer ────────────────────────────── */
+/* ─── useCountdown ────────────────────────────────────────────────────────── */
 function useCountdown(sendMs: number, active: boolean) {
   const [display, setDisplay] = useState(() => fmtCountdown(sendMs - getServerNowMs()));
   const [past,    setPast]    = useState(false);
-
   useEffect(() => {
     if (!active) return;
     const id = setInterval(() => {
@@ -280,80 +304,53 @@ function useCountdown(sendMs: number, active: boolean) {
     }, 50);
     return () => clearInterval(id);
   }, [sendMs, active]);
-
   return { display, past };
 }
 
 /* ─── CandidateCard ───────────────────────────────────────────────────────── */
-function CandidateCard({
-  candidate, gapIdx, target, midGapArrivalMs,
-}: {
-  candidate: Candidate;
-  gapIdx: number;
-  target: Coord;
-  midGapArrivalMs: number;
+function CandidateCard({ candidate, target, midGapArrivalMs }: {
+  candidate: Candidate; target: Coord; midGapArrivalMs: number;
 }) {
   const [amounts, setAmounts] = useState<Record<string, number>>(() =>
     Object.fromEntries(candidate.allowedUnits.map((u) => [u, 0]))
   );
+  const [drafts, setDrafts] = useState<Record<string, string>>(() =>
+    Object.fromEntries(candidate.allowedUnits.map((u) => [u, "0"]))
+  );
   const [timerActive, setTimerActive] = useState(false);
   const { display, past } = useCountdown(candidate.sendMs, timerActive);
 
-  // reset amounts when candidate changes
   useEffect(() => {
     setAmounts(Object.fromEntries(candidate.allowedUnits.map((u) => [u, 0])));
+    setDrafts(Object.fromEntries(candidate.allowedUnits.map((u) => [u, "0"])));
     setTimerActive(false);
   }, [candidate.src.villageId, candidate.sendMs]);
 
   const toggleUnit = useCallback((unit: string) => {
     const next = (amounts[unit] ?? 0) > 0 ? 0 : (candidate.src.troops[unit] ?? 0);
-    setAmounts((prev) => ({ ...prev, [unit]: next }));
-    setDrafts((prev) => ({ ...prev, [unit]: String(next) }));
+    setAmounts((p) => ({ ...p, [unit]: next }));
+    setDrafts((p) => ({ ...p, [unit]: String(next) }));
   }, [candidate, amounts]);
 
   const selectAll = useCallback(() => {
-    const next = Object.fromEntries(
-      candidate.allowedUnits.map((u) => [u, candidate.src.troops[u] ?? 0])
-    );
+    const next = Object.fromEntries(candidate.allowedUnits.map((u) => [u, candidate.src.troops[u] ?? 0]));
     setAmounts(next);
     setDrafts(Object.fromEntries(Object.entries(next).map(([k, v]) => [k, String(v)])));
   }, [candidate]);
 
   const openSupport = useCallback(() => {
-    if (!candidate.src.villageId) {
-      alert("Cannot open support: villageId missing from troops list.");
-      return;
-    }
-    const units = Object.fromEntries(
-      Object.entries(amounts).filter(([, v]) => v > 0)
-    );
-    if (!Object.keys(units).length) {
-      alert("Select at least one unit amount (> 0).");
-      return;
-    }
-    const plan = {
+    if (!candidate.src.villageId) { alert("Cannot open support: villageId missing."); return; }
+    const units = Object.fromEntries(Object.entries(amounts).filter(([, v]) => v > 0));
+    if (!Object.keys(units).length) { alert("Select at least one unit amount (> 0)."); return; }
+    localStorage.setItem(STORAGE_KEY_PLAN, JSON.stringify({
       createdAt: Date.now(),
       sourceVillageId: candidate.src.villageId,
-      target,
-      unitsToSend: units,
-      midGapArrivalMs,
-    };
-    localStorage.setItem(STORAGE_KEY_PLAN, JSON.stringify(plan));
-    const url = `game.php?village=${encodeURIComponent(candidate.src.villageId)}&screen=place`;
-    window.open(url, "_blank", "noopener,noreferrer");
+      target, unitsToSend: units, midGapArrivalMs,
+    }));
+    window.open(`game.php?village=${encodeURIComponent(candidate.src.villageId!)}&screen=place`, "_blank", "noopener,noreferrer");
   }, [candidate, amounts, target, midGapArrivalMs]);
 
   const { x, y } = candidate.src.coord;
-
-  // Draft strings for unit inputs — allows clearing the box without snap-back
-  const [drafts, setDrafts] = useState<Record<string, string>>(() =>
-    Object.fromEntries(candidate.allowedUnits.map((u) => [u, "0"]))
-  );
-  // Keep drafts in sync when amounts reset (candidate change)
-  useEffect(() => {
-    setDrafts(Object.fromEntries(candidate.allowedUnits.map((u) => [u, "0"])));
-  }, [candidate.src.villageId, candidate.sendMs]);
-
   return (
     <div className="snipe-card">
       <div className="snipe-card-header">
@@ -363,62 +360,36 @@ function CandidateCard({
           &nbsp;·&nbsp;send: <strong>{fmtDateMs(candidate.sendMs)}</strong>
         </span>
       </div>
-
       <div className="snipe-card-row">
-        {/* Countdown timer */}
-        <button
-          className="btn btn-ghost snipe-timer-btn"
-          onClick={() => setTimerActive((t) => !t)}
-        >
+        <button className="btn btn-ghost snipe-timer-btn" onClick={() => setTimerActive((t) => !t)}>
           {timerActive ? "Stop" : "Timer"}
         </button>
-        {timerActive && (
-          <span className={`snipe-countdown${past ? " snipe-countdown--past" : ""}`}>
-            {display}
-          </span>
-        )}
-        <button className="btn btn-ghost" onClick={selectAll}>
-          Select all
-        </button>
-        <button className="btn btn-save btn-save--dirty" onClick={openSupport}>
-          Open support
-        </button>
+        {timerActive && <span className={`snipe-countdown${past ? " snipe-countdown--past" : ""}`}>{display}</span>}
+        <button className="btn btn-ghost" onClick={selectAll}>Select all</button>
+        <button className="btn btn-save btn-save--dirty" onClick={openSupport}>Open support</button>
       </div>
-
-      {/* Unit pickers */}
       <div className="snipe-units">
         {candidate.allowedUnits.map((unit) => {
           const avail = candidate.src.troops[unit] ?? 0;
           const val   = amounts[unit] ?? 0;
-          const on    = val > 0;
           return (
-            <div key={unit} className={`snipe-unitbox${on ? " snipe-unitbox--on" : ""}`}>
-              <img
-                src={unitIconUrl(unit)}
-                alt={unit}
-                className="snipe-unit-icon"
-                onClick={() => toggleUnit(unit)}
-                title={`Click to toggle all ${unit}`}
-              />
+            <div key={unit} className={`snipe-unitbox${val > 0 ? " snipe-unitbox--on" : ""}`}>
+              <img src={unitIconUrl(unit)} alt={unit} className="snipe-unit-icon"
+                   onClick={() => toggleUnit(unit)} title={`Click to toggle all ${unit}`} />
               <div className="snipe-unit-avail">{avail}</div>
-              <input
-                className="snipe-unit-input"
-                type="number"
-                min={0}
-                max={avail}
-                step={1}
+              <input className="snipe-unit-input" type="number" min={0} max={avail} step={1}
                 value={drafts[unit] ?? String(val)}
                 onChange={(e) => {
                   const raw = e.target.value;
-                  setDrafts((prev) => ({ ...prev, [unit]: raw }));
+                  setDrafts((p) => ({ ...p, [unit]: raw }));
                   const n = clampInt(parseInt(raw, 10), 0, avail);
-                  if (Number.isFinite(n)) setAmounts((prev) => ({ ...prev, [unit]: n }));
+                  if (Number.isFinite(n)) setAmounts((p) => ({ ...p, [unit]: n }));
                 }}
                 onBlur={() => {
                   const n = parseInt(drafts[unit] ?? "0", 10);
-                  const clamped = Number.isFinite(n) ? clampInt(n, 0, avail) : val;
-                  setAmounts((prev) => ({ ...prev, [unit]: clamped }));
-                  setDrafts((prev) => ({ ...prev, [unit]: String(clamped) }));
+                  const c = Number.isFinite(n) ? clampInt(n, 0, avail) : val;
+                  setAmounts((p) => ({ ...p, [unit]: c }));
+                  setDrafts((p) => ({ ...p, [unit]: String(c) }));
                 }}
               />
             </div>
@@ -430,101 +401,267 @@ function CandidateCard({
 }
 
 /* ─── GapPill ─────────────────────────────────────────────────────────────── */
-function GapPill({
-  idx, afterMs, beforeMs, selected, onClick,
-}: {
-  idx: number; afterMs: number; beforeMs: number;
-  selected: boolean; onClick: () => void;
+function GapPill({ label, afterMs, beforeMs, selected, onClick }: {
+  label: string; afterMs: number; beforeMs: number; selected: boolean; onClick: () => void;
 }) {
-  const gapMs = beforeMs - afterMs;
   return (
-    <button
-      className={`snipe-gap-pill${selected ? " snipe-gap-pill--selected" : ""}`}
-      onClick={onClick}
-    >
-      <span className="snipe-gap-label">Gap #{idx + 1}</span>
+    <button className={`snipe-gap-pill${selected ? " snipe-gap-pill--selected" : ""}`} onClick={onClick}>
+      <span className="snipe-gap-label">{label}</span>
       <span className="snipe-gap-time">
         {fmtDateMs(afterMs).split(" ")[1]} → {fmtDateMs(beforeMs).split(" ")[1]}
       </span>
-      <span className="snipe-gap-width">{(gapMs / 1000).toFixed(1)}s</span>
+      <span className="snipe-gap-width">{((beforeMs - afterMs) / 1000).toFixed(1)}s</span>
     </button>
+  );
+}
+
+/* ─── GapBlock — one gap + its candidates (manual tab) ───────────────────── */
+function GapBlock({ incomings, gapIdx, troops, target, speedFactor }: {
+  incomings: Incoming[]; gapIdx: number; troops: VillageTroops[];
+  target: Coord; speedFactor: number;
+}) {
+  const a = incomings[gapIdx];
+  const b = incomings[gapIdx + 1];
+  if (!a || !b) return null;
+  const midGapMs   = Math.floor((a.arrivalMs + b.arrivalMs) / 2);
+  const candidates = computeCandidates(incomings, gapIdx, troops, target, speedFactor);
+  return (
+    <div className="snipe-gap-block">
+      <div className="snipe-gap-block-header">
+        Gap {gapIdx + 1}: {fmtDateMs(a.arrivalMs).split(" ")[1]} → {fmtDateMs(b.arrivalMs).split(" ")[1]}
+        <span>CStime(mid): {fmtDateMs(midGapMs).split(" ")[1]}</span>
+        <span>{candidates.length} village{candidates.length !== 1 ? "s" : ""}</span>
+      </div>
+      {candidates.length === 0 ? (
+        <div className="state-msg" style={{ fontSize: 11 }}>
+          No feasible candidates — all in the past or no troops in range.
+        </div>
+      ) : (
+        candidates.map((c, i) => (
+          <CandidateCard
+            key={`${c.src.villageId ?? i}-${c.sendMs}`}
+            candidate={c} target={target} midGapArrivalMs={midGapMs}
+          />
+        ))
+      )}
+    </div>
+  );
+}
+
+/* ─── ManualTab ───────────────────────────────────────────────────────────── */
+function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor }: {
+  troops: VillageTroops[]; loadingTroops: boolean;
+  onLoadTroops: () => void; speedFactor: number;
+}) {
+  const [targetStr, setTargetStr] = useState(() => loadManualState().target);
+  const [rows, setRows] = useState<TimingRow[]>(() => {
+    const saved = loadManualState().timings;
+    if (!saved.length) return [{ id: makeId(), dt: toDatetimeLocalMs(Date.now() + 3_600_000), ms: 0 }];
+    return saved.map((r) => ({ id: makeId(), dt: r.dt, ms: r.ms }));
+  });
+
+  const [incomings,     setIncomings]    = useState<Incoming[]>([]);
+  const [computeError,  setComputeError] = useState<string | null>(null);
+  const [computed,      setComputed]     = useState(false);
+
+  // Debounced persist
+  const persistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (persistRef.current) clearTimeout(persistRef.current);
+    persistRef.current = setTimeout(() => {
+      saveManualState({ target: targetStr, timings: rows.map((r) => ({ dt: r.dt, ms: r.ms })) });
+    }, 300);
+    return () => { if (persistRef.current) clearTimeout(persistRef.current); };
+  }, [targetStr, rows]);
+
+  function addRow() {
+    setRows((p) => [...p, { id: makeId(), dt: toDatetimeLocalMs(Date.now() + 3_600_000), ms: 0 }]);
+  }
+  function delRow(id: string) { setRows((p) => p.filter((r) => r.id !== id)); }
+  function setDt(id: string, dt: string) { setRows((p) => p.map((r) => r.id === id ? { ...r, dt } : r)); }
+  function setMs(id: string, ms: number) { setRows((p) => p.map((r) => r.id === id ? { ...r, ms: clampInt(ms, 0, 999) } : r)); }
+
+  function compute() {
+    setComputeError(null); setComputed(false);
+    const target = parseCoord(targetStr);
+    if (!target) { setComputeError("Invalid target coords. Use format 451|601."); return; }
+    const list: Incoming[] = [];
+    for (const row of rows) {
+      if (!row.dt) continue;
+      const baseMs = new Date(row.dt).getTime();
+      if (isNaN(baseMs)) continue;
+      list.push({ arrivalMs: baseMs + (row.ms || 0), label: "", target });
+    }
+    list.sort((a, b) => a.arrivalMs - b.arrivalMs);
+    if (list.length < 2) { setComputeError("Need at least 2 attack timings to form a gap."); return; }
+    setIncomings(list);
+    setComputed(true);
+    if (!troops.length && !loadingTroops) onLoadTroops();
+  }
+
+  const target    = parseCoord(targetStr);
+  const gapCount  = computed ? Math.max(0, incomings.length - 1) : 0;
+
+  return (
+    <div>
+      {/* Target */}
+      <div className="cfg-section snipe-manual-section">
+        <div className="snipe-manual-label">Target village</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <input className="input" type="text" placeholder="451|601" value={targetStr}
+            style={{ width: 120, fontFamily: "monospace" }}
+            onChange={(e) => { setTargetStr(e.target.value); setComputed(false); }}
+          />
+          <span style={{ fontSize: 11, color: "#6b7280" }}>village your teammate is nobling</span>
+        </div>
+      </div>
+
+      {/* Timings */}
+      <div className="cfg-section snipe-manual-section">
+        <div className="snipe-manual-label">
+          Attack timings
+          <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 400, marginLeft: 8 }}>
+            arrival time of each attack at the target
+          </span>
+        </div>
+        {rows.map((row, idx) => (
+          <div key={row.id} className="snipe-timing-row">
+            <span style={{ fontSize: 11, color: "#6b7280", minWidth: 18 }}>{idx + 1}.</span>
+            <input className="snipe-timing-dt input" type="datetime-local" step="0.001"
+              value={row.dt}
+              onChange={(e) => { setDt(row.id, e.target.value); setComputed(false); }}
+            />
+            <span className="snipe-timing-ms-label">+ms:</span>
+            <input className="snipe-timing-ms input" type="number" min={0} max={999} step={1}
+              value={row.ms}
+              onChange={(e) => { setMs(row.id, parseInt(e.target.value, 10) || 0); setComputed(false); }}
+            />
+            <button className="snipe-timing-del" title="Remove"
+              onClick={() => { delRow(row.id); setComputed(false); }}
+              disabled={rows.length <= 1}
+            >✕</button>
+          </div>
+        ))}
+        <div className="snipe-manual-actions">
+          <button className="btn btn-ghost" onClick={addRow}>+ Add timing</button>
+          <button className="btn btn-ghost" style={{ color: "#ef4444" }}
+            onClick={() => {
+              setRows([{ id: makeId(), dt: toDatetimeLocalMs(Date.now() + 3_600_000), ms: 0 }]);
+              setComputed(false); setComputeError(null);
+            }}
+          >Clear all</button>
+        </div>
+      </div>
+
+      {/* Compute */}
+      <div className="cfg-section snipe-manual-section">
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button className="btn btn-save btn-save--dirty" onClick={compute} disabled={loadingTroops}>
+            Compute gaps
+          </button>
+          {!troops.length && !loadingTroops && (
+            <button className="btn btn-ghost" onClick={onLoadTroops}>Load troops first</button>
+          )}
+        </div>
+      </div>
+
+      {computeError && <div className="cfg-section"><div className="snipe-error">{computeError}</div></div>}
+
+      {/* Results */}
+      {computed && target && gapCount > 0 && (
+        <div className="cfg-section">
+          <div className="section-label">
+            {gapCount} gap{gapCount !== 1 ? "s" : ""}
+            {troops.length === 0 && (
+              <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 400, marginLeft: 8 }}>
+                — load troops to see candidates
+              </span>
+            )}
+          </div>
+          {Array.from({ length: gapCount }, (_, i) => (
+            <GapBlock key={i} incomings={incomings} gapIdx={i}
+              troops={troops} target={target} speedFactor={speedFactor} />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
 /* ─── SnipeView ───────────────────────────────────────────────────────────── */
 export function SnipeView({ visible, onBack }: {
-  visible: boolean;
-  onBack: () => void;
+  visible: boolean; onBack: () => void;
 }) {
-  const [gameSpeed, setGameSpeed] = useState(1.4);
-  const [unitSpeed, setUnitSpeed] = useState(0.75);
-  // Draft strings so inputs can be cleared without snapping back
+  const [tab, setTab] = useState<Tab>("auto");
+
+  const [gameSpeed,      setGameSpeed]      = useState(1.4);
+  const [unitSpeed,      setUnitSpeed]      = useState(0.75);
   const [gameSpeedDraft, setGameSpeedDraft] = useState("1.4");
   const [unitSpeedDraft, setUnitSpeedDraft] = useState("0.75");
 
-  const [loading,   setLoading]   = useState(false);
+  /* Troops are shared between both tabs */
+  const [troops,        setTroops]        = useState<VillageTroops[]>([]);
+  const [loadingTroops, setLoadingTroops] = useState(false);
+  const [troopsError,   setTroopsError]   = useState<string | null>(null);
+
+  /* Auto tab state */
   const [error,     setError]     = useState<string | null>(null);
-  const [target,    setTarget]    = useState<Coord | null>(null);
   const [incomings, setIncomings] = useState<Incoming[]>([]);
-  const [troops,    setTroops]    = useState<VillageTroops[]>([]);
   const [gapIdx,    setGapIdx]    = useState(0);
 
-  const speedFactor  = 1 / (gameSpeed * unitSpeed);
-  const candidates   = target && incomings.length >= 2
-    ? computeCandidates(incomings, gapIdx, troops, target, speedFactor)
+  const coordKey = (c: Coord) => `${c.x}|${c.y}`;
+
+  const canonicalTarget: Coord | null = (() => {
+    if (!incomings.length) return null;
+    const tally: Record<string, number> = {};
+    for (const inc of incomings) { const k = coordKey(inc.target); tally[k] = (tally[k] ?? 0) + 1; }
+    const best = Object.entries(tally).sort((a, b) => b[1] - a[1])[0];
+    return best ? incomings.find(i => coordKey(i.target) === best[0])!.target : null;
+  })();
+
+  const filteredIncomings = canonicalTarget
+    ? incomings.filter(i => coordKey(i.target) === coordKey(canonicalTarget))
+    : incomings;
+
+  interface Gap { afterIdx: number; beforeIdx: number; label: string; }
+  const gaps: Gap[] = filteredIncomings.slice(0, -1).map((_, i) => ({
+    afterIdx: i, beforeIdx: i + 1,
+    label: filteredIncomings[i + 1]!.label || `Gap #${i + 1}`,
+  }));
+
+  const activeGap = gaps.find(g => g.afterIdx === gapIdx) ?? gaps[0];
+  const gapA      = activeGap ? filteredIncomings[activeGap.afterIdx]  : undefined;
+  const gapB      = activeGap ? filteredIncomings[activeGap.beforeIdx] : undefined;
+  const midGapMs  = gapA && gapB ? Math.floor((gapA.arrivalMs + gapB.arrivalMs) / 2) : 0;
+
+  const speedFactor = 1 / (gameSpeed * unitSpeed);
+  const candidates  = canonicalTarget && gapA && gapB
+    ? computeCandidates(filteredIncomings, activeGap!.afterIdx, troops, canonicalTarget, speedFactor)
     : [];
 
-  const gapA         = incomings[gapIdx];
-  const gapB         = incomings[gapIdx + 1];
-  const midGapMs     = gapA && gapB
-    ? Math.floor((gapA.arrivalMs + gapB.arrivalMs) / 2) : 0;
+  function applyIncomings(raw: Incoming[]) { setIncomings(raw); setGapIdx(0); setError(null); }
 
-  // On visibility — auto-load incomings from DOM (cheap, no fetch)
-  useEffect(() => {
-    if (!visible) return;
-    const inc  = readIncomingsFromDOM();
-    const tgt  = readTargetCoord();
-    setIncomings(inc);
-    setTarget(tgt);
-    setGapIdx(0);
-    setTroops([]);
-    setError(null);
-  }, [visible]);
+  useEffect(() => { if (!visible) return; applyIncomings(readIncomingsFromDOM()); }, [visible]);
 
-  // When speed params change and we have troops, candidates recompute automatically
-  // (they're derived synchronously from state, no need to re-fetch)
-
-  const load = useCallback(async () => {
+  const loadTroops = useCallback(async () => {
     const vid = readCurrentVillageId();
-    if (!vid) { setError("Could not detect current village id."); return; }
-    setLoading(true); setError(null);
-    try {
-      const t = await fetchOwnHomeTroops(vid);
-      setTroops(t);
-    } catch (e) {
-      setError(`Failed to fetch troops: ${(e as Error).message}`);
-    } finally {
-      setLoading(false);
-    }
+    if (!vid) { setTroopsError("Could not detect current village id."); return; }
+    setLoadingTroops(true); setTroopsError(null);
+    try { setTroops(await fetchOwnHomeTroops(vid)); }
+    catch (e) { setTroopsError(`Failed to fetch troops: ${(e as Error).message}`); }
+    finally { setLoadingTroops(false); }
   }, []);
 
-  const reload = useCallback(() => {
-    const inc = readIncomingsFromDOM();
-    const tgt = readTargetCoord();
-    setIncomings(inc);
-    setTarget(tgt);
-    setGapIdx(0);
-    setTroops([]);
-    setError(null);
-  }, []);
+  const reload = useCallback(() => applyIncomings(readIncomingsFromDOM()), []);
 
-  const isOverview = Boolean(document.querySelector("#commands_incomings"));
+  const isOverview = Boolean(
+    document.querySelector("#commands_incomings") ||
+    document.querySelector("#incomings_table")
+  );
 
   return (
-    <div className={`cfg-view${visible ? " in" : ""}`}
-         style={{ display: visible ? "flex" : "none" }}>
+    <div className={`cfg-view${visible ? " in" : ""}`} style={{ display: visible ? "flex" : "none" }}>
 
-      {/* Header — same pattern as FakeSenderView */}
       <div className="cfg-header">
         <button className="back-btn" onClick={onBack}>
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -536,161 +673,144 @@ export function SnipeView({ visible, onBack }: {
         <div className="cfg-header-text">
           <span className="cfg-title">Snipe Scheduler</span>
           <span className="cfg-subtitle">
-            {target ? `target ${target.x}|${target.y}` : "gap snipe planner"}
+            {tab === "manual" ? "teammate support" :
+             canonicalTarget ? `target ${canonicalTarget.x}|${canonicalTarget.y}` :
+             "gap snipe planner"}
           </span>
         </div>
       </div>
 
       <div className="cfg-body snipe-body">
 
-        {/* ── Not on overview guard ── */}
-        {!isOverview && (
-          <div className="cfg-section">
-            <div className="state-msg">
-              Navigate to an overview page with incomings to use this panel.
-            </div>
+        {/* Tab bar */}
+        <div className="snipe-tab-bar">
+          <button className={`snipe-tab${tab === "auto" ? " snipe-tab--active" : ""}`}
+                  onClick={() => setTab("auto")}>🏹 Auto</button>
+          <button className={`snipe-tab${tab === "manual" ? " snipe-tab--active" : ""}`}
+                  onClick={() => setTab("manual")}>✏️ Manual</button>
+        </div>
+
+        {/* Speed settings — shared */}
+        <div className="cfg-section">
+          <div className="section-label">Speed settings</div>
+          <div className="snipe-speed-row">
+            <label className="snipe-speed-label">
+              Game speed
+              <input className="input snipe-speed-input" type="number" step={0.01} min={0.1} max={10}
+                value={gameSpeedDraft}
+                onChange={(e) => { setGameSpeedDraft(e.target.value); const n = parseFloat(e.target.value); if (Number.isFinite(n) && n > 0) setGameSpeed(n); }}
+                onBlur={() => { const n = parseFloat(gameSpeedDraft); if (!Number.isFinite(n) || n <= 0) setGameSpeedDraft(String(gameSpeed)); }}
+              />
+            </label>
+            <label className="snipe-speed-label">
+              Unit speed
+              <input className="input snipe-speed-input" type="number" step={0.01} min={0.1} max={2}
+                value={unitSpeedDraft}
+                onChange={(e) => { setUnitSpeedDraft(e.target.value); const n = parseFloat(e.target.value); if (Number.isFinite(n) && n > 0) setUnitSpeed(n); }}
+                onBlur={() => { const n = parseFloat(unitSpeedDraft); if (!Number.isFinite(n) || n <= 0) setUnitSpeedDraft(String(unitSpeed)); }}
+              />
+            </label>
+            {tab === "auto" && <button className="btn btn-ghost" onClick={reload}>↺ Refresh</button>}
           </div>
-        )}
+        </div>
 
-        {isOverview && (
+        {/* Troops — shared */}
+        <div className="cfg-section">
+          <div className="snipe-summary-row">
+            <span className="snipe-summary-item">Villages loaded: <strong>{troops.length}</strong></span>
+          </div>
+          {troopsError && <div className="snipe-error" style={{ marginTop: 4 }}>{troopsError}</div>}
+          <button className="btn btn-save btn-save--dirty" onClick={loadTroops}
+            disabled={loadingTroops} style={{ marginTop: 6 }}>
+            {loadingTroops
+              ? <><span className="spinner" /> Loading troops…</>
+              : troops.length ? "↺ Reload troops" : "Load troops"}
+          </button>
+        </div>
+
+        {/* ── AUTO TAB ── */}
+        {tab === "auto" && (
           <>
-            {/* ── Speed settings ── */}
-            <div className="cfg-section">
-              <div className="section-label">Speed settings</div>
-              <div className="snipe-speed-row">
-                <label className="snipe-speed-label">
-                  Game speed
-                  <input
-                    className="input snipe-speed-input"
-                    type="number" step={0.01} min={0.1} max={10}
-                    value={gameSpeedDraft}
-                    onChange={(e) => {
-                      setGameSpeedDraft(e.target.value);
-                      const n = parseFloat(e.target.value);
-                      if (Number.isFinite(n) && n > 0) setGameSpeed(n);
-                    }}
-                    onBlur={() => {
-                      const n = parseFloat(gameSpeedDraft);
-                      if (!Number.isFinite(n) || n <= 0) setGameSpeedDraft(String(gameSpeed));
-                    }}
-                  />
-                </label>
-                <label className="snipe-speed-label">
-                  Unit speed
-                  <input
-                    className="input snipe-speed-input"
-                    type="number" step={0.01} min={0.1} max={2}
-                    value={unitSpeedDraft}
-                    onChange={(e) => {
-                      setUnitSpeedDraft(e.target.value);
-                      const n = parseFloat(e.target.value);
-                      if (Number.isFinite(n) && n > 0) setUnitSpeed(n);
-                    }}
-                    onBlur={() => {
-                      const n = parseFloat(unitSpeedDraft);
-                      if (!Number.isFinite(n) || n <= 0) setUnitSpeedDraft(String(unitSpeed));
-                    }}
-                  />
-                </label>
-                <button className="btn btn-ghost" onClick={reload}>↺ Refresh</button>
-              </div>
-            </div>
-
-            {/* ── Status line ── */}
-            {error && (
+            {!isOverview && (
               <div className="cfg-section">
-                <div className="snipe-error">{error}</div>
+                <div className="state-msg">Navigate to an overview page with incomings to use this tab.</div>
               </div>
             )}
-
-            {/* ── Target + incoming summary ── */}
-            <div className="cfg-section">
-              <div className="snipe-summary-row">
-                <span className="snipe-summary-item">
-                  Target: <strong>{target ? `${target.x}|${target.y}` : "—"}</strong>
-                </span>
-                <span className="snipe-summary-item">
-                  Incomings: <strong>{incomings.length}</strong>
-                </span>
-                <span className="snipe-summary-item">
-                  Villages loaded: <strong>{troops.length}</strong>
-                </span>
-              </div>
-              <button
-                className="btn btn-save btn-save--dirty"
-                onClick={load}
-                disabled={loading}
-                style={{ marginTop: 8 }}
-              >
-                {loading ? <><span className="spinner" /> Loading troops…</> : "Load troops"}
-              </button>
-            </div>
-
-            {/* ── Gap list ── */}
-            {incomings.length >= 2 && (
-              <div className="cfg-section">
-                <div className="section-label">
-                  Gaps ({incomings.length - 1})
-                </div>
-                <div className="snipe-gap-list">
-                  {incomings.slice(0, -1).map((inc, i) => (
-                    <GapPill
-                      key={i}
-                      idx={i}
-                      afterMs={inc.arrivalMs}
-                      beforeMs={incomings[i + 1]!.arrivalMs}
-                      selected={gapIdx === i}
-                      onClick={() => setGapIdx(i)}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {incomings.length < 2 && (
-              <div className="cfg-section">
-                <div className="state-msg">Need at least 2 incomings to compute gaps.</div>
-              </div>
-            )}
-
-            {/* ── Candidates ── */}
-            {incomings.length >= 2 && gapA && gapB && (
-              <div className="cfg-section">
-                <div className="section-label">
-                  Gap #{gapIdx + 1} candidates
-                  {candidates.length > 0 && (
-                    <span className="snipe-candidate-meta">
-                      &nbsp;·&nbsp;
-                      mid-gap: {fmtDateMs(midGapMs).split(" ")[1]}
-                      &nbsp;·&nbsp;
-                      {candidates.length} village{candidates.length !== 1 ? "s" : ""}
+            {isOverview && (
+              <>
+                {error && <div className="cfg-section"><div className="snipe-error">{error}</div></div>}
+                <div className="cfg-section">
+                  <div className="snipe-summary-row">
+                    <span className="snipe-summary-item">
+                      Target: <strong>{canonicalTarget ? `${canonicalTarget.x}|${canonicalTarget.y}` : "—"}</strong>
                     </span>
-                  )}
+                    <span className="snipe-summary-item">Incomings: <strong>{incomings.length}</strong></span>
+                  </div>
                 </div>
 
-                {troops.length === 0 && (
-                  <div className="state-msg">Press "Load troops" to compute candidates.</div>
-                )}
-
-                {troops.length > 0 && candidates.length === 0 && (
-                  <div className="state-msg">
-                    No feasible commands for this gap — try another gap or check speed settings.
+                {gaps.length > 0 && (
+                  <div className="cfg-section">
+                    <div className="section-label">Gaps ({gaps.length})</div>
+                    <div className="snipe-gap-list">
+                      {gaps.map((gap) => (
+                        <GapPill key={gap.afterIdx} label={gap.label}
+                          afterMs={filteredIncomings[gap.afterIdx]!.arrivalMs}
+                          beforeMs={filteredIncomings[gap.beforeIdx]!.arrivalMs}
+                          selected={gapIdx === gap.afterIdx}
+                          onClick={() => setGapIdx(gap.afterIdx)}
+                        />
+                      ))}
+                    </div>
                   </div>
                 )}
 
-                {candidates.map((c, i) => (
-                  <CandidateCard
-                    key={`${c.src.villageId ?? i}-${c.sendMs}`}
-                    candidate={c}
-                    gapIdx={gapIdx}
-                    target={target!}
-                    midGapArrivalMs={midGapMs}
-                  />
-                ))}
-              </div>
+                {incomings.length === 0 && (
+                  <div className="cfg-section">
+                    <div className="state-msg">No "Nobre" labelled incomings found.</div>
+                  </div>
+                )}
+                {incomings.length > 0 && gaps.length === 0 && (
+                  <div className="cfg-section">
+                    <div className="state-msg">Need at least 2 "Nobre" incomings to the same target.</div>
+                  </div>
+                )}
+
+                {gaps.length > 0 && gapA && gapB && (
+                  <div className="cfg-section">
+                    <div className="section-label">
+                      {activeGap?.label ?? "Candidates"}
+                      {candidates.length > 0 && (
+                        <span className="snipe-candidate-meta">
+                          &nbsp;·&nbsp;mid-gap: {fmtDateMs(midGapMs).split(" ")[1]}
+                          &nbsp;·&nbsp;{candidates.length} village{candidates.length !== 1 ? "s" : ""}
+                        </span>
+                      )}
+                    </div>
+                    {troops.length === 0 && <div className="state-msg">Press "Load troops" to compute candidates.</div>}
+                    {troops.length > 0 && candidates.length === 0 && (
+                      <div className="state-msg">No feasible commands for this gap.</div>
+                    )}
+                    {candidates.map((c, i) => (
+                      <CandidateCard key={`${c.src.villageId ?? i}-${c.sendMs}`}
+                        candidate={c} target={canonicalTarget!} midGapArrivalMs={midGapMs} />
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </>
         )}
+
+        {/* ── MANUAL TAB ── */}
+        {tab === "manual" && (
+          <ManualTab
+            troops={troops}
+            loadingTroops={loadingTroops}
+            onLoadTroops={loadTroops}
+            speedFactor={speedFactor}
+          />
+        )}
+
       </div>
     </div>
   );

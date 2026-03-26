@@ -264,6 +264,7 @@
     // ---------------- PP ROUTES + TIMER PERSISTENCE ----------------
     const PP_LOCKS_KEY = "tm_whbalancer_pp_locks_v2";
     const PP_PLANS_KEY = "tm_whbalancer_pp_plans_v2";
+    const HQ_STALENESS_MS = 30 * 60 * 1000; // 30 minutes — re-fetch HQ data when stale
 
     function safeJsonParse(raw, fallback) {
       try { return raw ? JSON.parse(raw) : fallback; } catch (e) { return fallback; }
@@ -733,6 +734,16 @@
       // stock and credit it to the receiver — preventing duplicate routes
       // when re-running before shipments appear in the prod overview.
       if (state && state.pendingSends) {
+        // Compute distance for ETA-aware expiry
+        let sendDistance = 50;
+        if (state.villagesData) {
+          const byId = new Map(state.villagesData.map(v => [String(v.id), v]));
+          const srcV = byId.get(String(sourceID));
+          const tgtV = byId.get(String(targetID));
+          const c1 = srcV ? coordsFromVillageName(srcV.name) : null;
+          const c2 = tgtV ? coordsFromVillageName(tgtV.name) : null;
+          if (c1 && c2) sendDistance = dist(c1, c2);
+        }
         state.pendingSends.push({
           source: String(sourceID),
           target: String(targetID),
@@ -740,33 +751,9 @@
           stone: stoneAmount || 0,
           iron:  ironAmount  || 0,
           sentAt: Date.now(),
+          distance: sendDistance,
         });
       }
-    }
-
-    async function doInstantTrade(villageId, giveRes, wantRes, wantAmount) {
-      wantAmount = Math.floor((wantAmount || 0) / 1000) * 1000;
-      if (wantAmount <= 0) throw new Error("Instant trade aborted: amount must be > 0");
-      if (giveRes === wantRes) throw new Error("Instant trade aborted: giveRes and wantRes are the same");
-
-      const pageUrl = makeURL({ village: villageId, screen: "market", mode: "other_offer" });
-      const postUrl = makeURL({ village: villageId, screen: "market", mode: "other_offer", action: "merchantexchange" });
-
-      const page = await $.get(pageUrl);
-      const $page = $(page);
-
-      const h = $page.find("form#offer_filter input[name='h']").val();
-      if (!h) throw new Error("Instant trade failed: CSRF token (h) not found");
-
-      const payload = { res_buy: giveRes, res_sell: wantRes, sell: String(wantAmount), h };
-
-      const respHtml = await $.post(postUrl, payload);
-      const $r = $(respHtml);
-
-      const err = $r.find(".error_box, .error, .error_message").first().text().trim();
-      if (err) throw new Error(err);
-
-      return true;
     }
 
     // ---------------- FETCH / PARSERS ----------------
@@ -1139,22 +1126,22 @@
           tempIron  = -(needsCap - v.iron  - inc.iron);
         }
 
-        // Fix #5: overflow → urgent donor (was misclassified as receiver in original).
-        // When current + incoming >= warehouse capacity the village must donate, not receive.
-        // Exception: low-points (priority) villages are NEVER forced into donor role —
-        // they should always be receivers regardless of their current fill level.
+        // Fix #5 (extended): near-overflow → urgent donor at 95%+ fill.
+        // Triggers at 95% to prevent warehouses from reaching capacity between runs.
+        // Exception: low-points (priority) villages are NEVER forced into donor role.
         if (v.points >= s.lowPoints) {
-          const wh_leave_ov = s.builtOutPercentage * wh;
+          const wh_leave_ov  = s.builtOutPercentage * wh;
           const res_leave_ov = s.reservePerVillage || 0;
-          if (v.wood  + inc.wood  >= wh) {
+          const ovThreshold  = 0.95 * wh;
+          if (v.wood  + inc.wood  >= ovThreshold) {
             const ovLeave = (v.wood  + inc.wood)  > wh_leave_ov ? wh_leave_ov : res_leave_ov;
             tempWood  = Math.round((v.wood  + inc.wood)  - ovLeave);
           }
-          if (v.stone + inc.stone >= wh) {
+          if (v.stone + inc.stone >= ovThreshold) {
             const ovLeave = (v.stone + inc.stone) > wh_leave_ov ? wh_leave_ov : res_leave_ov;
             tempStone = Math.round((v.stone + inc.stone) - ovLeave);
           }
-          if (v.iron  + inc.iron  >= wh) {
+          if (v.iron  + inc.iron  >= ovThreshold) {
             const ovLeave = (v.iron  + inc.iron)  > wh_leave_ov ? wh_leave_ov : res_leave_ov;
             tempIron  = Math.round((v.iron  + inc.iron)  - ovLeave);
           }
@@ -1331,16 +1318,25 @@
         { res: "iron",  sIdx: 2, eIdx: 2 },
       ];
 
+      const lowPts = state?.settings?.lowPoints || 0;
+
       for (const { res, sIdx } of RES) {
-        // Build receiver list sorted by shortage descending
-        const receivers = [];
+        // Split receivers into priority (low-points) and normal tiers.
+        // Priority villages are served first to guarantee they always receive resources.
+        const priorityReceivers = [];
+        const normalReceivers   = [];
         for (let q = 0; q < shortageResources.length; q++) {
           const need = shortageResources[q][sIdx][res] || 0;
-          if (need > 0) receivers.push({ q, need });
+          if (need <= 0) continue;
+          if (villagesData[q] && villagesData[q].points < lowPts)
+            priorityReceivers.push({ q, need });
+          else
+            normalReceivers.push({ q, need });
         }
-        receivers.sort((a, b) => b.need - a.need);
+        priorityReceivers.sort((a, b) => b.need - a.need);
+        normalReceivers.sort((a, b) => b.need - a.need);
 
-        for (const rcv of receivers) {
+        for (const rcv of [...priorityReceivers, ...normalReceivers]) {
           const { q } = rcv;
           let remaining = shortageResources[q][sIdx][res];
           if (remaining <= 0) continue;
@@ -1405,6 +1401,50 @@
       }
       cleanLinks.sort((a, b) => a.distance - b.distance);
       return cleanLinks;
+    }
+
+    // ---------------- CIRCULAR ROUTE REMOVAL ----------------
+    // If A→B and B→A both exist, keep only the net direction per resource.
+    // Mixed-direction resources (A sends wood to B while B sends wood to A)
+    // waste merchants — collapse them into a single net shipment.
+    function removeCircularRoutes(links) {
+      const map = new Map();
+      for (const l of links) map.set(`${l.source}:${l.target}`, l);
+
+      const toRemove = new Set();
+      const processed = new Set();
+
+      for (const l of links) {
+        const key     = `${l.source}:${l.target}`;
+        const revKey  = `${l.target}:${l.source}`;
+        if (processed.has(key) || processed.has(revKey)) continue;
+        processed.add(key);
+
+        const rev = map.get(revKey);
+        if (!rev) continue;
+
+        processed.add(revKey);
+
+        // Net per resource (positive = l direction, negative = rev direction)
+        const netWood  = (l.wood  || 0) - (rev.wood  || 0);
+        const netStone = (l.stone || 0) - (rev.stone || 0);
+        const netIron  = (l.iron  || 0) - (rev.iron  || 0);
+
+        // Update forward link to carry only the net forward amounts
+        l.wood  = Math.max(0, netWood);
+        l.stone = Math.max(0, netStone);
+        l.iron  = Math.max(0, netIron);
+
+        // Update reverse link to carry only the net reverse amounts
+        rev.wood  = Math.max(0, -netWood);
+        rev.stone = Math.max(0, -netStone);
+        rev.iron  = Math.max(0, -netIron);
+
+        if (l.wood   + l.stone   + l.iron   === 0) toRemove.add(key);
+        if (rev.wood + rev.stone + rev.iron === 0) toRemove.add(revKey);
+      }
+
+      return links.filter(l => !toRemove.has(`${l.source}:${l.target}`));
     }
 
     // ---------------- PP PLAN BUILDER ----------------
@@ -1829,21 +1869,16 @@
       // ensure persisted
       upsertPpPlan(plan);
 
-      // Instant trade: no shipping needed, execute immediately
+      // Instant trade: no shipping needed — show manual trade link
       if (plan.instant || plan.shipments.length === 0) {
-        renderTimerBoxForPlan(plan, "Resources already available — executing instant trade now…", "00:00:00", null);
-        UI.SuccessMessage("Executing instant trade (no shipping needed)…");
-        try {
-          await doInstantTrade(plan.targetVillageId, plan.payRes, plan.neededRes, plan.tradeAmount);
-          UI.SuccessMessage("Instant trade executed. Re-running balancer…");
-          removePpPlan(plan.id);
-          removePpLock({ villageId: plan.targetVillageId, res: plan.payRes });
-          await runComputationAndRender();
-        } catch (e) {
-          // eslint-disable-next-line no-console
-          console.error(e);
-          alert("Instant trade failed: " + (e.message || e));
-        }
+        const tradeUrl = makeURL({ village: plan.targetVillageId, screen: "market", mode: "other_offer" });
+        renderTimerBoxForPlan(
+          plan,
+          `Resources already available — <a class="tmLink" href="${tradeUrl}" target="_self">click here to execute the Merchant Exchange manually</a>`,
+          "00:00:00",
+          null
+        );
+        UI.SuccessMessage("Resources ready — open the market to execute the Merchant Exchange manually.");
         return;
       }
 
@@ -1872,7 +1907,7 @@
           try {
             const eta = await fetchIncomingLastArrivalSecondsForPlan(plan);
             if (eta === null) {
-              plan.lastRefreshMs = nowServer;
+              plan.lastRefreshMs = getNowMs();
               upsertPpPlan(plan);
 
               renderTimerBoxForPlan(
@@ -1909,19 +1944,14 @@
 
         if (remainingSec != null && remainingSec <= 0) {
           stopPlanTimer(plan.id);
-          renderTimerBoxForPlan(plan, "Arrived. Executing instant trade now...", "00:00:00", "ETA until trade: 00:00:00");
-          UI.SuccessMessage("Incoming arrived. Executing instant trade...");
-
-          try {
-            await doInstantTrade(plan.targetVillageId, plan.payRes, plan.neededRes, plan.tradeAmount);
-            UI.SuccessMessage("Instant trade executed. Re-running balancer...");
-            removePpPlan(plan.id);
-            await runComputationAndRender();
-          } catch (e) {
-            // eslint-disable-next-line no-console
-            console.error(e);
-            alert("Instant trade failed: " + (e.message || e));
-          }
+          const tradeUrl = makeURL({ village: plan.targetVillageId, screen: "market", mode: "other_offer" });
+          renderTimerBoxForPlan(
+            plan,
+            `Shipments arrived — <a class="tmLink" href="${tradeUrl}" target="_self">click here to execute the Merchant Exchange manually</a>`,
+            "00:00:00",
+            "ETA until trade: 00:00:00"
+          );
+          UI.SuccessMessage("Incoming arrived — open the market to execute the Merchant Exchange manually.");
           return;
         }
 
@@ -2926,12 +2956,34 @@
       const costStone = parseInt($row.find("td.cost_stone").attr("data-cost") || "0", 10) || 0;
       const costIron  = parseInt($row.find("td.cost_iron").attr("data-cost")  || "0", 10) || 0;
 
+      // Extract production rates per hour from the main page.
+      // TW PT exposes these in #wood_prod, #stone_prod, #iron_prod spans.
+      // Falls back to 0 (conservative) if the elements are not found.
+      const tryProdRate = ($ctx, res) => {
+        const candidates = [
+          $ctx.find(`#${res}_prod`),
+          $ctx.find(`.${res}_prod`),
+          $ctx.find(`[id*="${res}_prod"]`).first(),
+        ];
+        for (const $el of candidates) {
+          if ($el.length) {
+            const val = parseIntSafe(String($el.text()).replace(/[^\d]/g, ""));
+            if (val > 0) return val;
+          }
+        }
+        return 0;
+      };
+      const prodWoodPerHr  = tryProdRate($main, "wood");
+      const prodStonePerHr = tryProdRate($main, "stone");
+      const prodIronPerHr  = tryProdRate($main, "iron");
+
       return {
         villageId: String(villageId),
         queueEndsSec,
         buildingName,
         buildingId,
         costWood, costStone, costIron,
+        prodWoodPerHr, prodStonePerHr, prodIronPerHr,
       };
     }
 
@@ -2940,19 +2992,21 @@
     // Production rates come from villageData (already fetched from the prod overview)
     // since the accountmanager page does not expose per-hour production rates.
     function computeHqReadiness(villageData, hqResult) {
-      const { queueEndsSec, costWood, costStone, costIron, buildingName } = hqResult;
+      const {
+        queueEndsSec, costWood, costStone, costIron, buildingName,
+        prodWoodPerHr = 0, prodStonePerHr = 0, prodIronPerHr = 0,
+      } = hqResult;
 
       if (!buildingName || (costWood + costStone + costIron === 0)) return null;
 
       const hrs = queueEndsSec / 3600;
       const wh  = villageData.warehouseCapacity;
 
-      // Production rate: TW production overview doesn't give per-hour rate directly,
-      // but we can estimate: the prod overview shows current stock. We don't have
-      // hourly rates in villageData, so we use 0 (conservative — no production credit).
-      // If the village produces enough in time it's a bonus; we flag the worst case.
-      // This is intentionally conservative to avoid false "ready" signals.
-      const prodWood = 0, prodStone = 0, prodIron = 0;
+      // Use production rates fetched from screen=main when available.
+      // Falls back to 0 (conservative) when rates could not be parsed.
+      const prodWood  = prodWoodPerHr  || 0;
+      const prodStone = prodStonePerHr || 0;
+      const prodIron  = prodIronPerHr  || 0;
 
       const projWood  = Math.min(wh, villageData.wood  + prodWood  * hrs);
       const projStone = Math.min(wh, villageData.stone + prodStone * hrs);
@@ -2994,7 +3048,9 @@
 
       if (cachedHqData && cachedHqData.size > 0) {
         // Use cached data from the last Run — instant, no HTTP requests
-        $panel.html(`<div class="twmuted">Using data from last Run…</div>`);
+        const ageMin = state.hqLastFetchMs ? Math.floor((Date.now() - state.hqLastFetchMs) / 60000) : null;
+        const ageStr = ageMin !== null ? ` — data from ${ageMin} min ago` : "";
+        $panel.html(`<div class="twmuted">Using cached HQ data${ageStr}. <span style="color:#a40000">Press "Check HQ" to refresh.</span></div>`);
         const maxPts = state.settings.maxedOutPoints || 10471;
         for (const v of villagesData) {
           if (v.points >= maxPts) continue;
@@ -3026,6 +3082,7 @@
         const freshMap = new Map();
         results.forEach(({ v, hq }) => freshMap.set(String(v.id), hq));
         state.hqData = freshMap;
+        state.hqLastFetchMs = Date.now();
       }
 
       if (!results.length) {
@@ -3113,7 +3170,14 @@
       // Sends older than 2 hours are dropped (shipment long since arrived).
       const nowMs   = Date.now();
       const twoHrsMs = 2 * 60 * 60 * 1000;
-      state.pendingSends = (state.pendingSends || []).filter(s => nowMs - s.sentAt < twoHrsMs);
+      // ETA-aware expiry: base expiry on distance × merchant speed rather than a flat 2 hours.
+      // TW merchant base speed ≈ 16 fields/hour at speed 1; use 1.5× buffer for safety.
+      const merchantSpeedFPH = ((typeof game_data !== "undefined" && game_data.speed) || 1) * 16;
+      state.pendingSends = (state.pendingSends || []).filter(s => {
+        const distFields = s.distance || 50;
+        const etaMs = Math.max(twoHrsMs, (distFields / merchantSpeedFPH) * 3600 * 1000 * 1.5);
+        return nowMs - s.sentAt < etaMs;
+      });
 
       if (state.pendingSends.length) {
         const vById = new Map(villagesData.map(v => [String(v.id), v]));
@@ -3143,20 +3207,27 @@
       applyManualCoordLocks({ villagesData, excessResources, shortageResources });
       applyPpResourceLock({ villagesData, excessResources, shortageResources });
 
-      // HQ priority: fetch build queues sequentially (rate-limit safe) then boost
-      // empty-queue villages. Parallel requests (Promise.allSettled) hammered the
-      // server with ~3 × N requests at once and caused 429 errors for all of them.
-      // Sequential with a 300ms gap keeps well within TW's rate limit.
-      let hqData = null;
-      if (state.settings.hqPriorityEnabled) {
+      // HQ data strategy:
+      //   First run of session → always fetch fresh HQ data (regardless of hqPriorityEnabled)
+      //   Subsequent runs → only re-fetch if hqPriorityEnabled AND data is stale (>30 min)
+      // This gives the player accurate build-queue info on first open and avoids repeated
+      // HTTP floods on quick re-runs.
+      const isFirstHqRun = !state.hqLastFetchMs;
+      const isHqStale    = (nowMs - (state.hqLastFetchMs || 0)) > HQ_STALENESS_MS;
+      const shouldFetchHq = isFirstHqRun || (state.settings.hqPriorityEnabled && isHqStale);
+
+      let hqData = state.hqData || null;
+
+      if (shouldFetchHq) {
         hqData = new Map();
         const maxPts = state.settings.maxedOutPoints || 10471;
         const lowPts = state.settings.lowPoints || 0;
         const hqCandidates = villagesData.filter(v => v.points >= lowPts && v.points < maxPts);
         const hqSkipped    = villagesData.length - hqCandidates.length;
+        const fetchReason  = isFirstHqRun ? "first run" : "data stale";
         for (let i = 0; i < hqCandidates.length; i++) {
           const v = hqCandidates[i];
-          $("#tmwh_summary").text(`Checking HQ build queues… (${i + 1}/${hqCandidates.length}${hqSkipped > 0 ? `, ${hqSkipped} maxed skipped` : ""})`);
+          $("#tmwh_summary").text(`Checking HQ build queues (${fetchReason})… (${i + 1}/${hqCandidates.length}${hqSkipped > 0 ? `, ${hqSkipped} maxed skipped` : ""})`);
           try {
             const hq = await fetchHqNextBuilding(v.id);
             if (hq?.villageId) hqData.set(hq.villageId, hq);
@@ -3166,17 +3237,29 @@
           if (i < hqCandidates.length - 1) await new Promise(res => setTimeout(res, 300));
         }
         state.hqData = hqData;
+        state.hqLastFetchMs = nowMs;
+      }
+
+      if ((state.settings.hqPriorityEnabled || isFirstHqRun) && hqData && hqData.size > 0) {
         applyHqBuildPriority({ villagesData, excessResources, shortageResources, incomingRes, hqData });
-      } else {
-        state.hqData = null;
       }
 
       const { links } = assignMerchantsAndBuildLinks(villagesData, excessResources, shortageResources, villageID);
-      let cleanLinks = addDistanceToLinks(normalizeAndCombineLinks(links), villagesData);
+      let cleanLinks = removeCircularRoutes(addDistanceToLinks(normalizeAndCombineLinks(links), villagesData));
 
-      // Apply global max distance filter
-      const maxDist = Math.max(1, state.settings.maxDistance || 9999);
-      if (maxDist < 9999) cleanLinks = cleanLinks.filter(l => (l.distance || 0) <= maxDist);
+      // Apply global max distance filter.
+      // Low-points (priority) villages are exempt — they must receive resources
+      // regardless of distance to avoid being left with empty warehouses.
+      const maxDist  = Math.max(1, state.settings.maxDistance || 9999);
+      const lowPts   = state.settings.lowPoints || 0;
+      const vByIdMap = new Map(villagesData.map(v => [String(v.id), v]));
+      if (maxDist < 9999) {
+        cleanLinks = cleanLinks.filter(l => {
+          if ((l.distance || 0) <= maxDist) return true;
+          const tgt = vByIdMap.get(String(l.target));
+          return tgt && tgt.points < lowPts; // exempt priority villages
+        });
+      }
 
       state.incomingRes = incomingRes;
       state.villagesData = villagesData;
@@ -3218,6 +3301,7 @@
         averages: null,
         cleanLinks: [],
         hqData: null,
+        hqLastFetchMs: 0,   // tracks when HQ data was last fetched; 0 = never (first run)
         pendingSends: [],   // sends dispatched this session, not yet visible in prod overview
         sendAllTimer: null
       };

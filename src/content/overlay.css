@@ -765,6 +765,101 @@ select.input {
 }
 
 /* ── Snipe Scheduler ─────────────────────────────────────────────────────── */
+/* ── Snipe tab bar ───────────────────────────────────────────────────────── */
+.snipe-tab-bar {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid #bfdbfe;
+  margin-bottom: 2px;
+  flex-shrink: 0;
+}
+.snipe-tab {
+  flex: 1;
+  padding: 7px 10px;
+  background: #dbeafe;
+  border: none;
+  border-radius: 6px 6px 0 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: #1e40af;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  transition: background 0.15s;
+}
+.snipe-tab:hover { background: #bfdbfe; }
+.snipe-tab--active {
+  background: #f0f7ff;
+  border-bottom-color: #f0f7ff;
+  font-weight: 700;
+  color: #1d4ed8;
+}
+
+/* Manual tab */
+.snipe-manual-section { margin-bottom: 10px; }
+.snipe-manual-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 4px;
+}
+.snipe-timing-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.snipe-timing-dt {
+  font-size: 11px;
+  font-family: monospace;
+  width: 210px;
+  padding: 2px 4px;
+}
+.snipe-timing-ms-label {
+  font-size: 11px;
+  color: #6b7280;
+  white-space: nowrap;
+}
+.snipe-timing-ms {
+  width: 54px;
+  font-size: 11px;
+  padding: 2px 4px;
+}
+.snipe-timing-del {
+  background: none;
+  border: none;
+  color: #ef4444;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+  line-height: 1;
+}
+.snipe-timing-del:hover { color: #b91c1c; }
+.snipe-manual-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.snipe-gap-block {
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  background: rgba(255,255,255,0.6);
+}
+.snipe-gap-block-header {
+  font-size: 11px;
+  font-weight: 700;
+  color: #1e40af;
+  margin-bottom: 6px;
+}
+.snipe-gap-block-header span {
+  font-weight: 400;
+  color: #4b5563;
+  margin-left: 8px;
+}
+
 /* Light blue body background for the snipe panel */
 .snipe-body {
   background: #f0f7ff;

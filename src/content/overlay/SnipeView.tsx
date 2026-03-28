@@ -2,12 +2,11 @@
  * SnipeView — in-overlay panel for the Gap Snipe Scheduler.
  *
  * Two tabs:
- *   Auto   — reads Nobre-labelled incomings from the DOM (existing behaviour)
+ *   Auto   — reads Nobre-labelled incomings from DOM (fetches coords via info_command)
  *   Manual — user enters target coords + attack timings for teammate support
  *
  * The place-page automator stays in tw_snipe_scheduler.user.js.
- * Manual timings persist in localStorage under tw_snipe_manual_timings_v1
- * (shared key with the userscript version).
+ * Manual timings persist in localStorage under STORAGE_KEY_MANUAL.
  */
 
 import React, {
@@ -69,7 +68,7 @@ function fmtDateMs(ms: number) {
 function fmtCountdown(diffMs: number) {
   const sign = diffMs < 0 ? "-" : "";
   const abs  = Math.abs(diffMs);
-  const ms   = Math.floor(abs) % 1000;
+  const ms   = Math.floor(abs % 1000);
   const s    = Math.floor(abs / 1000);
   const hh   = Math.floor(s / 3600);
   const mm   = Math.floor((s % 3600) / 60);
@@ -86,7 +85,7 @@ function toDatetimeLocalMs(ms: number) {
 
 function parseCoord(str: string): Coord | null {
   const m = str.match(/(\d{3})\|(\d{3})/);
-  return m ? { x: +m[1], y: +m[2] } : null;
+  return m ? { x: +m[1]!, y: +m[2]! } : null;
 }
 
 function euclidean(a: Coord, b: Coord) {
@@ -166,7 +165,23 @@ function getRowTargetCoord(tr: HTMLElement): Coord | null {
   return found;
 }
 
-function readIncomingsFromDOM(): Incoming[] {
+async function fetchCoordFromInfoCommand(commandId: string, villageId: string): Promise<Coord | null> {
+  const url = `${location.origin}/game.php?village=${villageId}&screen=info_command&id=${commandId}&type=other`;
+  const html = await fetch(url, { credentials: "include" }).then((r) => r.text());
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  let coord: Coord | null = null;
+  doc.querySelectorAll<HTMLElement>("b.nowrap").forEach((el) => {
+    if (!coord) coord = parseCoord(el.textContent ?? "");
+  });
+  if (!coord) {
+    doc.querySelectorAll<HTMLAnchorElement>("a[href*='info_village']").forEach((a) => {
+      if (!coord) coord = parseCoord(a.textContent ?? "") ?? parseCoord(a.getAttribute("href") ?? "");
+    });
+  }
+  return coord;
+}
+
+async function readIncomingsFromDOM(): Promise<Incoming[]> {
   const rows: HTMLElement[] = [];
   const cmdWrap  = document.querySelector("#commands_incomings");
   const incTable = document.querySelector("#incomings_table");
@@ -179,21 +194,41 @@ function readIncomingsFromDOM(): Incoming[] {
     source.forEach((tr) => rows.push(tr));
   }
 
+  const villageId = readCurrentVillageId();
   const list: Incoming[] = [];
+
   for (const tr of rows) {
     const cmdType = (
       tr.getAttribute("data-command-type") ??
       tr.querySelector("[data-command-type]")?.getAttribute("data-command-type") ?? ""
     ).toLowerCase();
     if (cmdType === "support") continue;
+
     const label = getRowLabel(tr);
     if (!label.toLowerCase().includes("nobre")) continue;
+
     const endSpan = tr.querySelector<HTMLElement>("span[data-endtime]");
     const endSec  = parseInt(endSpan?.getAttribute("data-endtime") ?? "", 10);
     if (!endSec) continue;
+
     const greyEl = tr.querySelector<HTMLElement>("span.grey.small");
     const ms     = clampInt(parseInt(greyEl?.textContent?.trim() ?? "0", 10), 0, 999);
-    const target = getRowTargetCoord(tr);
+
+    let target = getRowTargetCoord(tr);
+
+    if (!target && villageId) {
+      const commandId =
+        tr.querySelector<HTMLElement>("span.quickedit[data-id]")?.getAttribute("data-id") ??
+        (() => {
+          const href = tr.querySelector<HTMLAnchorElement>("a[href*='info_command']")?.getAttribute("href") ?? "";
+          const match = href.match(/[?&]id=(\d+)/);
+          return match ? match[1] ?? null : null;
+        })();
+      if (commandId) {
+        target = await fetchCoordFromInfoCommand(commandId, villageId);
+      }
+    }
+
     if (!target) continue;
     list.push({ arrivalMs: endSec * 1000 + ms, label, target });
   }
@@ -203,7 +238,7 @@ function readIncomingsFromDOM(): Incoming[] {
 }
 
 async function fetchOwnHomeTroops(villageId: string): Promise<VillageTroops[]> {
-  const url  = `game.php?village=${encodeURIComponent(villageId)}&screen=overview_villages&mode=units&type=own_home`;
+  const url = `${location.origin}/game.php?village=${encodeURIComponent(villageId)}&screen=overview_villages&mode=units&type=own_home`;
   const html = await fetch(url, { credentials: "include" }).then((r) => r.text());
   const doc  = new DOMParser().parseFromString(html, "text/html");
 
@@ -347,7 +382,10 @@ function CandidateCard({ candidate, target, midGapArrivalMs }: {
       sourceVillageId: candidate.src.villageId,
       target, unitsToSend: units, midGapArrivalMs,
     }));
-    window.open(`game.php?village=${encodeURIComponent(candidate.src.villageId!)}&screen=place`, "_blank", "noopener,noreferrer");
+    window.open(
+      `${location.origin}/game.php?village=${encodeURIComponent(candidate.src.villageId!)}&screen=place`,
+      "_blank", "noopener,noreferrer"
+    );
   }, [candidate, amounts, target, midGapArrivalMs]);
 
   const { x, y } = candidate.src.coord;
@@ -364,7 +402,9 @@ function CandidateCard({ candidate, target, midGapArrivalMs }: {
         <button className="btn btn-ghost snipe-timer-btn" onClick={() => setTimerActive((t) => !t)}>
           {timerActive ? "Stop" : "Timer"}
         </button>
-        {timerActive && <span className={`snipe-countdown${past ? " snipe-countdown--past" : ""}`}>{display}</span>}
+        {timerActive && (
+          <span className={`snipe-countdown${past ? " snipe-countdown--past" : ""}`}>{display}</span>
+        )}
         <button className="btn btn-ghost" onClick={selectAll}>Select all</button>
         <button className="btn btn-save btn-save--dirty" onClick={openSupport}>Open support</button>
       </div>
@@ -377,7 +417,9 @@ function CandidateCard({ candidate, target, midGapArrivalMs }: {
               <img src={unitIconUrl(unit)} alt={unit} className="snipe-unit-icon"
                    onClick={() => toggleUnit(unit)} title={`Click to toggle all ${unit}`} />
               <div className="snipe-unit-avail">{avail}</div>
-              <input className="snipe-unit-input" type="number" min={0} max={avail} step={1}
+              <input
+                className="snipe-unit-input"
+                type="number" min={0} max={avail} step={1}
                 value={drafts[unit] ?? String(val)}
                 onChange={(e) => {
                   const raw = e.target.value;
@@ -387,9 +429,9 @@ function CandidateCard({ candidate, target, midGapArrivalMs }: {
                 }}
                 onBlur={() => {
                   const n = parseInt(drafts[unit] ?? "0", 10);
-                  const c = Number.isFinite(n) ? clampInt(n, 0, avail) : val;
-                  setAmounts((p) => ({ ...p, [unit]: c }));
-                  setDrafts((p) => ({ ...p, [unit]: String(c) }));
+                  const clamped = Number.isFinite(n) ? clampInt(n, 0, avail) : val;
+                  setAmounts((p) => ({ ...p, [unit]: clamped }));
+                  setDrafts((p) => ({ ...p, [unit]: String(clamped) }));
                 }}
               />
             </div>
@@ -401,12 +443,16 @@ function CandidateCard({ candidate, target, midGapArrivalMs }: {
 }
 
 /* ─── GapPill ─────────────────────────────────────────────────────────────── */
-function GapPill({ label, afterMs, beforeMs, selected, onClick }: {
-  label: string; afterMs: number; beforeMs: number; selected: boolean; onClick: () => void;
+function GapPill({ idx, label, afterMs, beforeMs, selected, onClick }: {
+  idx: number; label: string; afterMs: number; beforeMs: number;
+  selected: boolean; onClick: () => void;
 }) {
   return (
-    <button className={`snipe-gap-pill${selected ? " snipe-gap-pill--selected" : ""}`} onClick={onClick}>
-      <span className="snipe-gap-label">{label}</span>
+    <button
+      className={`snipe-gap-pill${selected ? " snipe-gap-pill--selected" : ""}`}
+      onClick={onClick}
+    >
+      <span className="snipe-gap-label">{label || `Gap #${idx + 1}`}</span>
       <span className="snipe-gap-time">
         {fmtDateMs(afterMs).split(" ")[1]} → {fmtDateMs(beforeMs).split(" ")[1]}
       </span>
@@ -415,56 +461,27 @@ function GapPill({ label, afterMs, beforeMs, selected, onClick }: {
   );
 }
 
-/* ─── GapBlock — one gap + its candidates (manual tab) ───────────────────── */
-function GapBlock({ incomings, gapIdx, troops, target, speedFactor }: {
-  incomings: Incoming[]; gapIdx: number; troops: VillageTroops[];
-  target: Coord; speedFactor: number;
-}) {
-  const a = incomings[gapIdx];
-  const b = incomings[gapIdx + 1];
-  if (!a || !b) return null;
-  const midGapMs   = Math.floor((a.arrivalMs + b.arrivalMs) / 2);
-  const candidates = computeCandidates(incomings, gapIdx, troops, target, speedFactor);
-  return (
-    <div className="snipe-gap-block">
-      <div className="snipe-gap-block-header">
-        Gap {gapIdx + 1}: {fmtDateMs(a.arrivalMs).split(" ")[1]} → {fmtDateMs(b.arrivalMs).split(" ")[1]}
-        <span>CStime(mid): {fmtDateMs(midGapMs).split(" ")[1]}</span>
-        <span>{candidates.length} village{candidates.length !== 1 ? "s" : ""}</span>
-      </div>
-      {candidates.length === 0 ? (
-        <div className="state-msg" style={{ fontSize: 11 }}>
-          No feasible candidates — all in the past or no troops in range.
-        </div>
-      ) : (
-        candidates.map((c, i) => (
-          <CandidateCard
-            key={`${c.src.villageId ?? i}-${c.sendMs}`}
-            candidate={c} target={target} midGapArrivalMs={midGapMs}
-          />
-        ))
-      )}
-    </div>
-  );
-}
-
 /* ─── ManualTab ───────────────────────────────────────────────────────────── */
 function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor }: {
-  troops: VillageTroops[]; loadingTroops: boolean;
-  onLoadTroops: () => void; speedFactor: number;
+  troops: VillageTroops[];
+  loadingTroops: boolean;
+  onLoadTroops: () => void;
+  speedFactor: number;
 }) {
-  const [targetStr, setTargetStr] = useState(() => loadManualState().target);
-  const [rows, setRows] = useState<TimingRow[]>(() => {
-    const saved = loadManualState().timings;
-    if (!saved.length) return [{ id: makeId(), dt: toDatetimeLocalMs(Date.now() + 3_600_000), ms: 0 }];
-    return saved.map((r) => ({ id: makeId(), dt: r.dt, ms: r.ms }));
+  const saved = loadManualState();
+
+  const [targetStr,    setTargetStr]    = useState(saved.target ?? "");
+  const [rows,         setRows]         = useState<TimingRow[]>(() => {
+    const t = saved.timings ?? [];
+    if (!t.length) return [{ id: makeId(), dt: toDatetimeLocalMs(Date.now() + 3_600_000), ms: 0 }];
+    return t.map((r) => ({ id: makeId(), dt: r.dt, ms: r.ms }));
   });
+  const [incomings,    setIncomings]    = useState<Incoming[]>([]);
+  const [gapIdx,       setGapIdx]       = useState(0);
+  const [computed,     setComputed]     = useState(false);
+  const [computeError, setComputeError] = useState<string | null>(null);
 
-  const [incomings,     setIncomings]    = useState<Incoming[]>([]);
-  const [computeError,  setComputeError] = useState<string | null>(null);
-  const [computed,      setComputed]     = useState(false);
-
-  // Debounced persist
+  // Persist to localStorage on any change (debounced)
   const persistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (persistRef.current) clearTimeout(persistRef.current);
@@ -476,15 +493,25 @@ function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor }: {
 
   function addRow() {
     setRows((p) => [...p, { id: makeId(), dt: toDatetimeLocalMs(Date.now() + 3_600_000), ms: 0 }]);
+    setComputed(false);
   }
-  function delRow(id: string) { setRows((p) => p.filter((r) => r.id !== id)); }
-  function setDt(id: string, dt: string) { setRows((p) => p.map((r) => r.id === id ? { ...r, dt } : r)); }
-  function setMs(id: string, ms: number) { setRows((p) => p.map((r) => r.id === id ? { ...r, ms: clampInt(ms, 0, 999) } : r)); }
+  function delRow(id: string) {
+    setRows((p) => p.filter((r) => r.id !== id));
+    setComputed(false);
+  }
+  function setDt(id: string, dt: string) {
+    setRows((p) => p.map((r) => r.id === id ? { ...r, dt } : r));
+    setComputed(false);
+  }
+  function setMs(id: string, ms: number) {
+    setRows((p) => p.map((r) => r.id === id ? { ...r, ms: clampInt(ms, 0, 999) } : r));
+    setComputed(false);
+  }
 
   function compute() {
     setComputeError(null); setComputed(false);
     const target = parseCoord(targetStr);
-    if (!target) { setComputeError("Invalid target coords. Use format 451|601."); return; }
+    if (!target) { setComputeError("Invalid target coords — use format 451|601."); return; }
     const list: Incoming[] = [];
     for (const row of rows) {
       if (!row.dt) continue;
@@ -493,23 +520,34 @@ function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor }: {
       list.push({ arrivalMs: baseMs + (row.ms || 0), label: "", target });
     }
     list.sort((a, b) => a.arrivalMs - b.arrivalMs);
-    if (list.length < 2) { setComputeError("Need at least 2 attack timings to form a gap."); return; }
+    if (list.length < 2) { setComputeError("Need at least 2 timings to form a gap."); return; }
     setIncomings(list);
+    setGapIdx(0);
     setComputed(true);
     if (!troops.length && !loadingTroops) onLoadTroops();
   }
 
-  const target    = parseCoord(targetStr);
-  const gapCount  = computed ? Math.max(0, incomings.length - 1) : 0;
+  const target     = parseCoord(targetStr);
+  const gapCount   = computed ? Math.max(0, incomings.length - 1) : 0;
+  const gapA       = incomings[gapIdx];
+  const gapB       = incomings[gapIdx + 1];
+  const midGapMs   = gapA && gapB ? Math.floor((gapA.arrivalMs + gapB.arrivalMs) / 2) : 0;
+  const candidates = computed && target && gapA && gapB
+    ? computeCandidates(incomings, gapIdx, troops, target, speedFactor)
+    : [];
 
   return (
     <div>
       {/* Target */}
-      <div className="cfg-section snipe-manual-section">
-        <div className="snipe-manual-label">Target village</div>
+      <div className="cfg-section">
+        <div className="section-label">Target village</div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <input className="input" type="text" placeholder="451|601" value={targetStr}
-            style={{ width: 120, fontFamily: "monospace" }}
+          <input
+            className="input"
+            type="text"
+            placeholder="451|601"
+            value={targetStr}
+            style={{ width: 110, fontFamily: "monospace" }}
             onChange={(e) => { setTargetStr(e.target.value); setComputed(false); }}
           />
           <span style={{ fontSize: 11, color: "#6b7280" }}>village your teammate is nobling</span>
@@ -517,34 +555,46 @@ function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor }: {
       </div>
 
       {/* Timings */}
-      <div className="cfg-section snipe-manual-section">
-        <div className="snipe-manual-label">
+      <div className="cfg-section">
+        <div className="section-label">
           Attack timings
           <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 400, marginLeft: 8 }}>
             arrival time of each attack at the target
           </span>
         </div>
         {rows.map((row, idx) => (
-          <div key={row.id} className="snipe-timing-row">
+          <div key={row.id} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
             <span style={{ fontSize: 11, color: "#6b7280", minWidth: 18 }}>{idx + 1}.</span>
-            <input className="snipe-timing-dt input" type="datetime-local" step="0.001"
+            <input
+              className="input"
+              type="datetime-local"
+              step="0.001"
               value={row.dt}
-              onChange={(e) => { setDt(row.id, e.target.value); setComputed(false); }}
+              style={{ fontFamily: "monospace", fontSize: 12 }}
+              onChange={(e) => setDt(row.id, e.target.value)}
             />
-            <span className="snipe-timing-ms-label">+ms:</span>
-            <input className="snipe-timing-ms input" type="number" min={0} max={999} step={1}
+            <span style={{ fontSize: 11, color: "#6b7280" }}>+ms:</span>
+            <input
+              className="input"
+              type="number"
+              min={0} max={999} step={1}
               value={row.ms}
-              onChange={(e) => { setMs(row.id, parseInt(e.target.value, 10) || 0); setComputed(false); }}
+              style={{ width: 52, fontSize: 12 }}
+              onChange={(e) => setMs(row.id, parseInt(e.target.value, 10) || 0)}
             />
-            <button className="snipe-timing-del" title="Remove"
-              onClick={() => { delRow(row.id); setComputed(false); }}
+            <button
+              className="btn btn-ghost"
+              style={{ fontSize: 11, padding: "1px 6px", color: "#ef4444" }}
+              onClick={() => delRow(row.id)}
               disabled={rows.length <= 1}
             >✕</button>
           </div>
         ))}
-        <div className="snipe-manual-actions">
+        <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
           <button className="btn btn-ghost" onClick={addRow}>+ Add timing</button>
-          <button className="btn btn-ghost" style={{ color: "#ef4444" }}
+          <button
+            className="btn btn-ghost"
+            style={{ color: "#ef4444" }}
             onClick={() => {
               setRows([{ id: makeId(), dt: toDatetimeLocalMs(Date.now() + 3_600_000), ms: 0 }]);
               setComputed(false); setComputeError(null);
@@ -554,7 +604,7 @@ function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor }: {
       </div>
 
       {/* Compute */}
-      <div className="cfg-section snipe-manual-section">
+      <div className="cfg-section">
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <button className="btn btn-save btn-save--dirty" onClick={compute} disabled={loadingTroops}>
             Compute gaps
@@ -563,24 +613,52 @@ function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor }: {
             <button className="btn btn-ghost" onClick={onLoadTroops}>Load troops first</button>
           )}
         </div>
+        {computeError && (
+          <div className="snipe-error" style={{ marginTop: 6 }}>{computeError}</div>
+        )}
       </div>
 
-      {computeError && <div className="cfg-section"><div className="snipe-error">{computeError}</div></div>}
+      {/* Gap pills */}
+      {computed && gapCount > 0 && (
+        <div className="cfg-section">
+          <div className="section-label">Gaps ({gapCount})</div>
+          <div className="snipe-gap-list">
+            {incomings.slice(0, -1).map((inc, i) => (
+              <GapPill
+                key={i} idx={i} label={`Gap #${i + 1}`}
+                afterMs={inc.arrivalMs}
+                beforeMs={incomings[i + 1]!.arrivalMs}
+                selected={gapIdx === i}
+                onClick={() => setGapIdx(i)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
-      {/* Results */}
-      {computed && target && gapCount > 0 && (
+      {/* Candidates */}
+      {computed && target && gapA && gapB && (
         <div className="cfg-section">
           <div className="section-label">
-            {gapCount} gap{gapCount !== 1 ? "s" : ""}
-            {troops.length === 0 && (
-              <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 400, marginLeft: 8 }}>
-                — load troops to see candidates
+            Gap #{gapIdx + 1} candidates
+            {candidates.length > 0 && (
+              <span className="snipe-candidate-meta">
+                &nbsp;·&nbsp;mid-gap: {fmtDateMs(midGapMs).split(" ")[1]}
+                &nbsp;·&nbsp;{candidates.length} village{candidates.length !== 1 ? "s" : ""}
               </span>
             )}
           </div>
-          {Array.from({ length: gapCount }, (_, i) => (
-            <GapBlock key={i} incomings={incomings} gapIdx={i}
-              troops={troops} target={target} speedFactor={speedFactor} />
+          {troops.length === 0 && (
+            <div className="state-msg">Press "Load troops" to compute candidates.</div>
+          )}
+          {troops.length > 0 && candidates.length === 0 && (
+            <div className="state-msg">No feasible candidates for this gap.</div>
+          )}
+          {candidates.map((c, i) => (
+            <CandidateCard
+              key={`${c.src.villageId ?? i}-${c.sendMs}`}
+              candidate={c} target={target} midGapArrivalMs={midGapMs}
+            />
           ))}
         </div>
       )}
@@ -599,49 +677,47 @@ export function SnipeView({ visible, onBack }: {
   const [gameSpeedDraft, setGameSpeedDraft] = useState("1.4");
   const [unitSpeedDraft, setUnitSpeedDraft] = useState("0.75");
 
-  /* Troops are shared between both tabs */
+  // Troops shared between both tabs
   const [troops,        setTroops]        = useState<VillageTroops[]>([]);
   const [loadingTroops, setLoadingTroops] = useState(false);
   const [troopsError,   setTroopsError]   = useState<string | null>(null);
 
-  /* Auto tab state */
-  const [error,     setError]     = useState<string | null>(null);
-  const [incomings, setIncomings] = useState<Incoming[]>([]);
-  const [gapIdx,    setGapIdx]    = useState(0);
+  // Auto tab state
+  const [autoError,  setAutoError]  = useState<string | null>(null);
+  const [incomings,  setIncomings]  = useState<Incoming[]>([]);
+  const [gapIdx,     setGapIdx]     = useState(0);
 
   const coordKey = (c: Coord) => `${c.x}|${c.y}`;
 
-  const canonicalTarget: Coord | null = (() => {
+  const target: Coord | null = (() => {
     if (!incomings.length) return null;
     const tally: Record<string, number> = {};
     for (const inc of incomings) { const k = coordKey(inc.target); tally[k] = (tally[k] ?? 0) + 1; }
     const best = Object.entries(tally).sort((a, b) => b[1] - a[1])[0];
-    return best ? incomings.find(i => coordKey(i.target) === best[0])!.target : null;
+    return best ? incomings.find((i) => coordKey(i.target) === best[0])!.target : null;
   })();
 
-  const filteredIncomings = canonicalTarget
-    ? incomings.filter(i => coordKey(i.target) === coordKey(canonicalTarget))
+  const filteredIncomings = target
+    ? incomings.filter((i) => coordKey(i.target) === coordKey(target))
     : incomings;
 
-  interface Gap { afterIdx: number; beforeIdx: number; label: string; }
-  const gaps: Gap[] = filteredIncomings.slice(0, -1).map((_, i) => ({
-    afterIdx: i, beforeIdx: i + 1,
-    label: filteredIncomings[i + 1]!.label || `Gap #${i + 1}`,
-  }));
-
-  const activeGap = gaps.find(g => g.afterIdx === gapIdx) ?? gaps[0];
-  const gapA      = activeGap ? filteredIncomings[activeGap.afterIdx]  : undefined;
-  const gapB      = activeGap ? filteredIncomings[activeGap.beforeIdx] : undefined;
-  const midGapMs  = gapA && gapB ? Math.floor((gapA.arrivalMs + gapB.arrivalMs) / 2) : 0;
-
   const speedFactor = 1 / (gameSpeed * unitSpeed);
-  const candidates  = canonicalTarget && gapA && gapB
-    ? computeCandidates(filteredIncomings, activeGap!.afterIdx, troops, canonicalTarget, speedFactor)
+  const candidates  = target && filteredIncomings.length >= 2
+    ? computeCandidates(filteredIncomings, gapIdx, troops, target, speedFactor)
     : [];
 
-  function applyIncomings(raw: Incoming[]) { setIncomings(raw); setGapIdx(0); setError(null); }
+  const gapA     = filteredIncomings[gapIdx];
+  const gapB     = filteredIncomings[gapIdx + 1];
+  const midGapMs = gapA && gapB ? Math.floor((gapA.arrivalMs + gapB.arrivalMs) / 2) : 0;
 
-  useEffect(() => { if (!visible) return; applyIncomings(readIncomingsFromDOM()); }, [visible]);
+  const loadIncomings = useCallback(() => {
+    setIncomings([]); setGapIdx(0); setAutoError(null);
+    readIncomingsFromDOM().then(setIncomings).catch((e) =>
+      setAutoError(`Failed to read incomings: ${(e as Error).message}`)
+    );
+  }, []);
+
+  useEffect(() => { if (!visible) return; loadIncomings(); }, [visible]);
 
   const loadTroops = useCallback(async () => {
     const vid = readCurrentVillageId();
@@ -652,12 +728,7 @@ export function SnipeView({ visible, onBack }: {
     finally { setLoadingTroops(false); }
   }, []);
 
-  const reload = useCallback(() => applyIncomings(readIncomingsFromDOM()), []);
-
-  const isOverview = Boolean(
-    document.querySelector("#commands_incomings") ||
-    document.querySelector("#incomings_table")
-  );
+  const isOverview = Boolean(document.querySelector("#commands_incomings"));
 
   return (
     <div className={`cfg-view${visible ? " in" : ""}`} style={{ display: visible ? "flex" : "none" }}>
@@ -674,23 +745,28 @@ export function SnipeView({ visible, onBack }: {
           <span className="cfg-title">Snipe Scheduler</span>
           <span className="cfg-subtitle">
             {tab === "manual" ? "teammate support" :
-             canonicalTarget ? `target ${canonicalTarget.x}|${canonicalTarget.y}` :
-             "gap snipe planner"}
+             target ? `target ${target.x}|${target.y}` : "gap snipe planner"}
           </span>
         </div>
       </div>
 
       <div className="cfg-body snipe-body">
 
-        {/* Tab bar */}
-        <div className="snipe-tab-bar">
-          <button className={`snipe-tab${tab === "auto" ? " snipe-tab--active" : ""}`}
-                  onClick={() => setTab("auto")}>🏹 Auto</button>
-          <button className={`snipe-tab${tab === "manual" ? " snipe-tab--active" : ""}`}
-                  onClick={() => setTab("manual")}>✏️ Manual</button>
+        {/* ── Tab bar — uses existing btn classes only, no new CSS ── */}
+        <div className="cfg-section" style={{ paddingBottom: 0 }}>
+          <div style={{ display: "flex", gap: 4 }}>
+            <button
+              className={`btn${tab === "auto" ? " btn-save" : " btn-ghost"}`}
+              onClick={() => setTab("auto")}
+            >🏹 Auto</button>
+            <button
+              className={`btn${tab === "manual" ? " btn-save" : " btn-ghost"}`}
+              onClick={() => setTab("manual")}
+            >✏️ Manual</button>
+          </div>
         </div>
 
-        {/* Speed settings — shared */}
+        {/* ── Speed settings — shared ── */}
         <div className="cfg-section">
           <div className="section-label">Speed settings</div>
           <div className="snipe-speed-row">
@@ -710,18 +786,24 @@ export function SnipeView({ visible, onBack }: {
                 onBlur={() => { const n = parseFloat(unitSpeedDraft); if (!Number.isFinite(n) || n <= 0) setUnitSpeedDraft(String(unitSpeed)); }}
               />
             </label>
-            {tab === "auto" && <button className="btn btn-ghost" onClick={reload}>↺ Refresh</button>}
+            {tab === "auto" && (
+              <button className="btn btn-ghost" onClick={loadIncomings}>↺ Refresh</button>
+            )}
           </div>
         </div>
 
-        {/* Troops — shared */}
+        {/* ── Troops — shared ── */}
         <div className="cfg-section">
           <div className="snipe-summary-row">
             <span className="snipe-summary-item">Villages loaded: <strong>{troops.length}</strong></span>
           </div>
           {troopsError && <div className="snipe-error" style={{ marginTop: 4 }}>{troopsError}</div>}
-          <button className="btn btn-save btn-save--dirty" onClick={loadTroops}
-            disabled={loadingTroops} style={{ marginTop: 6 }}>
+          <button
+            className="btn btn-save btn-save--dirty"
+            onClick={loadTroops}
+            disabled={loadingTroops}
+            style={{ marginTop: 6 }}
+          >
             {loadingTroops
               ? <><span className="spinner" /> Loading troops…</>
               : troops.length ? "↺ Reload troops" : "Load troops"}
@@ -738,26 +820,31 @@ export function SnipeView({ visible, onBack }: {
             )}
             {isOverview && (
               <>
-                {error && <div className="cfg-section"><div className="snipe-error">{error}</div></div>}
+                {autoError && <div className="cfg-section"><div className="snipe-error">{autoError}</div></div>}
+
                 <div className="cfg-section">
                   <div className="snipe-summary-row">
                     <span className="snipe-summary-item">
-                      Target: <strong>{canonicalTarget ? `${canonicalTarget.x}|${canonicalTarget.y}` : "—"}</strong>
+                      Target: <strong>{target ? `${target.x}|${target.y}` : "—"}</strong>
                     </span>
-                    <span className="snipe-summary-item">Incomings: <strong>{incomings.length}</strong></span>
+                    <span className="snipe-summary-item">
+                      Incomings: <strong>{filteredIncomings.length}</strong>
+                    </span>
                   </div>
                 </div>
 
-                {gaps.length > 0 && (
+                {filteredIncomings.length >= 2 && (
                   <div className="cfg-section">
-                    <div className="section-label">Gaps ({gaps.length})</div>
+                    <div className="section-label">Gaps ({filteredIncomings.length - 1})</div>
                     <div className="snipe-gap-list">
-                      {gaps.map((gap) => (
-                        <GapPill key={gap.afterIdx} label={gap.label}
-                          afterMs={filteredIncomings[gap.afterIdx]!.arrivalMs}
-                          beforeMs={filteredIncomings[gap.beforeIdx]!.arrivalMs}
-                          selected={gapIdx === gap.afterIdx}
-                          onClick={() => setGapIdx(gap.afterIdx)}
+                      {filteredIncomings.slice(0, -1).map((inc, i) => (
+                        <GapPill
+                          key={i} idx={i}
+                          label={filteredIncomings[i + 1]!.label || `Gap #${i + 1}`}
+                          afterMs={inc.arrivalMs}
+                          beforeMs={filteredIncomings[i + 1]!.arrivalMs}
+                          selected={gapIdx === i}
+                          onClick={() => setGapIdx(i)}
                         />
                       ))}
                     </div>
@@ -766,19 +853,19 @@ export function SnipeView({ visible, onBack }: {
 
                 {incomings.length === 0 && (
                   <div className="cfg-section">
-                    <div className="state-msg">No "Nobre" labelled incomings found.</div>
+                    <div className="state-msg">Loading incomings…</div>
                   </div>
                 )}
-                {incomings.length > 0 && gaps.length === 0 && (
+                {incomings.length > 0 && filteredIncomings.length < 2 && (
                   <div className="cfg-section">
                     <div className="state-msg">Need at least 2 "Nobre" incomings to the same target.</div>
                   </div>
                 )}
 
-                {gaps.length > 0 && gapA && gapB && (
+                {filteredIncomings.length >= 2 && gapA && gapB && (
                   <div className="cfg-section">
                     <div className="section-label">
-                      {activeGap?.label ?? "Candidates"}
+                      {filteredIncomings[gapIdx + 1]?.label || `Gap #${gapIdx + 1}`} candidates
                       {candidates.length > 0 && (
                         <span className="snipe-candidate-meta">
                           &nbsp;·&nbsp;mid-gap: {fmtDateMs(midGapMs).split(" ")[1]}
@@ -786,13 +873,17 @@ export function SnipeView({ visible, onBack }: {
                         </span>
                       )}
                     </div>
-                    {troops.length === 0 && <div className="state-msg">Press "Load troops" to compute candidates.</div>}
+                    {troops.length === 0 && (
+                      <div className="state-msg">Press "Load troops" to compute candidates.</div>
+                    )}
                     {troops.length > 0 && candidates.length === 0 && (
                       <div className="state-msg">No feasible commands for this gap.</div>
                     )}
                     {candidates.map((c, i) => (
-                      <CandidateCard key={`${c.src.villageId ?? i}-${c.sendMs}`}
-                        candidate={c} target={canonicalTarget!} midGapArrivalMs={midGapMs} />
+                      <CandidateCard
+                        key={`${c.src.villageId ?? i}-${c.sendMs}`}
+                        candidate={c} target={target!} midGapArrivalMs={midGapMs}
+                      />
                     ))}
                   </div>
                 )}

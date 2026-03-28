@@ -43,14 +43,21 @@ interface FakeRuntime {
   log: LogEntry[];
 }
 
-const SS_PAUSED        = "fake_paused";
-const SS_SENT          = "fake_sent";
-const SS_LOG           = "fake_ui_log";
-const SS_TOTAL         = "fake_total_coords";
-const SS_PENDING       = "fake_pending_target";
+const SS_PAUSED        = "fake_paused";        // volatile – sessionStorage only
+const LS_SENT          = "fake_sent_v1";       // persistent
+const LS_LOG           = "fake_ui_log_v1";     // persistent
+const LS_TOTAL         = "fake_total_coords_v1"; // persistent
+const LS_PENDING       = "fake_pending_target_v1"; // persistent
 const LS_RUN_ID        = "fake_run_id_v1";
 const LS_TARGET_PLAN   = "fake_target_plan_v1";
 const COOKIE_INDEX     = "fake_index";
+
+// Legacy sessionStorage keys written by fakes.user.js — we read both
+// so the overlay stays live during an active tab session.
+const SS_SENT    = "fake_sent";
+const SS_LOG     = "fake_ui_log";
+const SS_TOTAL   = "fake_total_coords";
+const SS_PENDING = "fake_pending_target";
 
 function parseSafe<T>(raw: string | null, fallback: T): T {
   if (!raw) return fallback;
@@ -63,14 +70,27 @@ function getCookieValue(name: string): string {
 }
 
 function readRuntime(): FakeRuntime {
+  // Prefer the live sessionStorage value (written by the injected script each cycle)
+  // but fall back to the persisted localStorage copy so data survives tab closes.
+  const sentRaw   = sessionStorage.getItem(SS_SENT)    ?? localStorage.getItem(LS_SENT)    ?? "0";
+  const totalRaw  = sessionStorage.getItem(SS_TOTAL)   ?? localStorage.getItem(LS_TOTAL)   ?? "0";
+  const pendRaw   = sessionStorage.getItem(SS_PENDING) ?? localStorage.getItem(LS_PENDING) ?? "—";
+  const logRaw    = sessionStorage.getItem(SS_LOG)     ?? localStorage.getItem(LS_LOG)     ?? "[]";
+
+  // Mirror live sessionStorage values into localStorage so next session has them
+  if (sessionStorage.getItem(SS_SENT)    !== null) localStorage.setItem(LS_SENT,    sentRaw);
+  if (sessionStorage.getItem(SS_TOTAL)   !== null) localStorage.setItem(LS_TOTAL,   totalRaw);
+  if (sessionStorage.getItem(SS_PENDING) !== null) localStorage.setItem(LS_PENDING, pendRaw);
+  if (sessionStorage.getItem(SS_LOG)     !== null) localStorage.setItem(LS_LOG,     logRaw);
+
   return {
     paused:        sessionStorage.getItem(SS_PAUSED) === "1",
-    sent:          parseInt(sessionStorage.getItem(SS_SENT) || "0", 10),
-    total:         parseInt(sessionStorage.getItem(SS_TOTAL) || "0", 10),
+    sent:          parseInt(sentRaw, 10) || 0,
+    total:         parseInt(totalRaw, 10) || 0,
     runId:         localStorage.getItem(LS_RUN_ID) || "—",
     index:         parseInt(getCookieValue(COOKIE_INDEX), 10) || 0,
-    pendingTarget: sessionStorage.getItem(SS_PENDING) || "—",
-    log:           parseSafe<LogEntry[]>(sessionStorage.getItem(SS_LOG), []),
+    pendingTarget: pendRaw || "—",
+    log:           parseSafe<LogEntry[]>(logRaw, []),
   };
 }
 
@@ -94,8 +114,11 @@ function useFakeRuntime(active: boolean) {
   const newRun = useCallback(() => {
     const id = String(Date.now());
     localStorage.setItem(LS_RUN_ID, id);
+    // Clear both live and persistent copies
     sessionStorage.setItem(SS_SENT, "0");
+    localStorage.setItem(LS_SENT, "0");
     sessionStorage.removeItem(SS_PENDING);
+    localStorage.removeItem(LS_PENDING);
     localStorage.removeItem(LS_TARGET_PLAN);
     // Reset index cookie
     const expires = new Date(Date.now() + 10 * 365 * 86400 * 1000).toUTCString();
@@ -105,6 +128,7 @@ function useFakeRuntime(active: boolean) {
 
   const clearLog = useCallback(() => {
     sessionStorage.setItem(SS_LOG, "[]");
+    localStorage.setItem(LS_LOG, "[]");
     setRt((prev) => ({ ...prev, log: [] }));
   }, []);
 
@@ -125,7 +149,33 @@ function useFakeCfg(active: boolean) {
   useEffect(() => {
     if (!active) return;
     storageGet([SCHEMA.storageKey]).then((r) => {
-      const merged = { ...defaults, ...((r[SCHEMA.storageKey] as CfgValues) ?? {}) };
+      const synced = (r[SCHEMA.storageKey] as CfgValues) ?? {};
+
+      // If chrome.storage.sync has no coords saved yet, pull them from the
+      // localStorage config written by fakes.user.js ("fake_sender_config_v1").
+      // This covers first-run and cases where coords were only ever set in the
+      // userscript DEFAULT_CONFIG or via a direct localStorage save.
+      if (!synced.coords) {
+        try {
+          const lsRaw = localStorage.getItem("fake_sender_config_v1");
+          if (lsRaw) {
+            const lsCfg = JSON.parse(lsRaw) as CfgValues;
+            if (lsCfg.coords && String(lsCfg.coords).trim()) synced.coords = lsCfg.coords;
+          }
+        } catch {}
+        // Final fallback: live mirror the script writes each cycle
+        if (!synced.coords) {
+          try {
+            const liveRaw = sessionStorage.getItem("xbot_live_cfg_fakes");
+            if (liveRaw) {
+              const live = JSON.parse(liveRaw) as CfgValues;
+              if (live.coords && String(live.coords).trim()) synced.coords = live.coords;
+            }
+          } catch {}
+        }
+      }
+
+      const merged = { ...defaults, ...synced };
       setVals(merged);
       // Seed the live sessionStorage mirror so the script is up-to-date
       try { sessionStorage.setItem("xbot_live_cfg_fakes", JSON.stringify(merged)); } catch {}
@@ -373,6 +423,17 @@ function SettingsTab({ vals, set }: {
   );
 }
 
+/** Keys that should be rendered as an inline pair (side by side). */
+const INLINE_PAIRS: [string, string][] = [
+  ["attackDelay",  "attackRandom"],
+  ["confirmDelay", "confirmRandom"],
+  ["switchDelay",  "switchRandom"],
+];
+
+function isPaired(key: string) {
+  return INLINE_PAIRS.some(([a, b]) => a === key || b === key);
+}
+
 function SettingsSection({ label, fields, vals, set }: {
   label: string;
   fields: FieldDef[];
@@ -384,10 +445,33 @@ function SettingsSection({ label, fields, vals, set }: {
   const checks = fields.filter((f) => f.type === "checkbox");
   const inputs = fields.filter((f) => f.type !== "checkbox");
 
+  // Render inputs, collapsing paired keys into a single row
+  const rendered: React.ReactNode[] = [];
+  const consumed = new Set<string>();
+  for (const f of inputs) {
+    if (consumed.has(f.key)) continue;
+    const pair = INLINE_PAIRS.find(([a]) => a === f.key);
+    if (pair) {
+      const sibling = inputs.find((s) => s.key === pair[1]);
+      if (sibling) {
+        rendered.push(
+          <FieldPairRow key={f.key} left={f} right={sibling} vals={vals} set={set} />
+        );
+        consumed.add(f.key);
+        consumed.add(sibling.key);
+        continue;
+      }
+    }
+    if (!isPaired(f.key) || !consumed.has(f.key)) {
+      rendered.push(<SettingsField key={f.key} f={f} val={vals[f.key]} set={set} />);
+      consumed.add(f.key);
+    }
+  }
+
   return (
     <div className="cfg-section">
       <div className="section-label" dangerouslySetInnerHTML={{ __html: label }} />
-      {inputs.map((f) => <SettingsField key={f.key} f={f} val={vals[f.key]} set={set} />)}
+      {rendered}
       {checks.length > 0 && (
         <div className="cfg-section-checks" style={{ borderBottom: "none" }}>
           {checks.map((f) => <SettingsField key={f.key} f={f} val={vals[f.key]} set={set} />)}
@@ -397,10 +481,29 @@ function SettingsSection({ label, fields, vals, set }: {
   );
 }
 
-function SettingsField({ f, val, set }: {
+function FieldPairRow({ left, right, vals, set }: {
+  left: FieldDef;
+  right: FieldDef;
+  vals: CfgValues;
+  set: (k: string, v: string | number | boolean) => void;
+}) {
+  return (
+    <div style={{ display: "flex", gap: 8, padding: "0 14px 2px", alignItems: "flex-start" }}>
+      <div style={{ flex: 1 }}>
+        <SettingsField f={left}  val={vals[left.key]}  set={set} inline />
+      </div>
+      <div style={{ flex: 1 }}>
+        <SettingsField f={right} val={vals[right.key]} set={set} inline />
+      </div>
+    </div>
+  );
+}
+
+function SettingsField({ f, val, set, inline = false }: {
   f: FieldDef;
   val: unknown;
   set: (k: string, v: string | number | boolean) => void;
+  inline?: boolean;
 }) {
   const v = val !== undefined ? val : f.default;
 
@@ -436,12 +539,12 @@ function SettingsField({ f, val, set }: {
     : "";
 
   return (
-    <div className="field">
+    <div className="field" style={inline ? { padding: "6px 0" } : undefined}>
       <div className="field-top">
         <span className="field-label">{f.label}</span>
         {rangeHint && <span className="field-range">{rangeHint}</span>}
       </div>
-      {f.help && <span className="field-help">{f.help}</span>}
+      {f.help && !inline && <span className="field-help">{f.help}</span>}
       <input
         className="input"
         type={f.type === "time" ? "time" : f.type}
@@ -481,7 +584,7 @@ export function FakeSenderView({ visible, onBack }: {
   return (
     <div
       className={`cfg-view${anim ? " in" : ""}`}
-      style={{ display: visible ? "flex" : "none" }}
+      style={{ display: visible ? "flex" : "none", minWidth: 340, width: 340 }}
     >
       {/* ── Header ── */}
       <div className="cfg-header">

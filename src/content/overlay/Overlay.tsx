@@ -153,10 +153,8 @@ function Field({ f, val, onChange }: {
   );
 
   const isNum = f.type === "number";
-  const rangeHint = isNum
-    ? [f.min !== undefined && f.max !== undefined ? `${f.min}–${f.max}` : "",
-       f.step !== undefined && f.step !== 1 ? `step ${f.step}` : ""]
-        .filter(Boolean).join(", ")
+  const rangeHint = isNum && f.min !== undefined && f.max !== undefined
+    ? `${f.min}–${f.max}`
     : "";
 
   // ── Number / text input: hold a string draft so the box can be cleared

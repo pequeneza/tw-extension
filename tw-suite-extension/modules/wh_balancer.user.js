@@ -273,6 +273,17 @@
     const PP_LOCKS_KEY = "tm_whbalancer_pp_locks_v2";
     const PP_PLANS_KEY = "tm_whbalancer_pp_plans_v2";
     const HQ_STALENESS_MS = 30 * 60 * 1000; // 30 minutes — re-fetch HQ data when stale
+
+    // Debug logging helper — respects the debugMode setting
+    function wbLog(...args) {
+      if (state?.settings?.debugMode) console.log(...args);
+    }
+    function wbGroup(label) {
+      if (state?.settings?.debugMode) console.group(label);
+    }
+    function wbGroupEnd() {
+      if (state?.settings?.debugMode) console.groupEnd();
+    }
     const HQ_DATA_KEY      = "tm_whbalancer_hq_data_v1";
     const HQ_TIMESTAMP_KEY = "tm_whbalancer_hq_timestamp_v1";
 
@@ -521,8 +532,11 @@
           if (!lock[res]) continue;
 
           const i = resIndex[res];
+          const exBefore = excessResources[idx]?.[i]?.[res] || 0;
+          const shBefore = shortageResources[idx]?.[i]?.[res] || 0;
           if (excessResources[idx] && excessResources[idx][i]) excessResources[idx][i][res] = 0;
           if (shortageResources[idx] && shortageResources[idx][i]) shortageResources[idx][i][res] = 0;
+          if (exBefore + shBefore > 0) wbLog(`[WH] coord-lock ${villagesData[idx].name} [${res}]: excess ${exBefore}→0 shortage ${shBefore}→0`);
         }
       }
     }
@@ -596,6 +610,7 @@
         if (typeof s.premiumMaxPlansHardCap === "undefined") s.premiumMaxPlansHardCap = 12;
 
         if (typeof s.sendAllEnabled === "undefined") s.sendAllEnabled = false;
+        if (typeof s.debugMode === "undefined") s.debugMode = false;
         if (typeof s.sendAllIntervalMs === "undefined") s.sendAllIntervalMs = 500;
 
         if (typeof s.settingsOpen === "undefined") s.settingsOpen = false;
@@ -1124,6 +1139,16 @@
       const longQueueHours = s.lowPointsLongQueueHours || 3;           // fallback
       const longQueueSec   = longQueueHours * 3600;
 
+      wbGroup("[WH] computeExcessShortage");
+      wbLog("[WH] settings:", {
+        lowPoints: s.lowPoints, highPoints: s.highPoints, highFarm: s.highFarm,
+        builtOutPercentage: s.builtOutPercentage, needsMorePercentage: s.needsMorePercentage,
+        reservePerVillage: s.reservePerVillage, longQueueHours,
+      });
+      wbLog("[WH] convergent averages:", {
+        wood: averages.actualWoodAverage, stone: averages.actualStoneAverage, iron: averages.actualIronAverage,
+      });
+
       for (let idx = 0; idx < villagesData.length; idx++) {
         const v   = villagesData[idx];
         villageID.push(v.id);
@@ -1147,6 +1172,20 @@
         tempWood  += inc.wood;
         tempStone += inc.stone;
         tempIron  += inc.iron;
+
+        // If the village has a known next building:
+        // - Suppress shortage when stock+incoming already covers the cost (no need to receive more)
+        // - Suppress excess when stock+incoming is still below the cost (resources are earmarked
+        //   for the building and must not be donated, even if above the convergent average)
+        const hqBuilding = state.hqData?.get(String(v.id));
+        if (hqBuilding && hqBuilding.buildingName) {
+          if (tempWood  < 0 && (v.wood  + inc.wood)  >= hqBuilding.costWood)  tempWood  = 0;
+          if (tempStone < 0 && (v.stone + inc.stone) >= hqBuilding.costStone) tempStone = 0;
+          if (tempIron  < 0 && (v.iron  + inc.iron)  >= hqBuilding.costIron)  tempIron  = 0;
+          if (tempWood  > 0 && (v.wood  + inc.wood)  <  hqBuilding.costWood)  tempWood  = 0;
+          if (tempStone > 0 && (v.stone + inc.stone) <  hqBuilding.costStone) tempStone = 0;
+          if (tempIron  > 0 && (v.iron  + inc.iron)  <  hqBuilding.costIron)  tempIron  = 0;
+        }
 
         // Built-out villages (high points or high farm) donate most surplus
         if (v.farmSpaceUsed > s.highFarm || v.points > s.highPoints) {
@@ -1177,10 +1216,14 @@
             // villages) so the shortage magnitude is realistic. The priority just means
             // these villages are served first in assignMerchantsAndBuildLinks — not that
             // they get an inflated warehouse-proportional shortage that starves other receivers.
-            // Clamp to zero if they're already above average (shouldn't donate either).
-            if (tempWood  > 0) tempWood  = 0;
-            if (tempStone > 0) tempStone = 0;
-            if (tempIron  > 0) tempIron  = 0;
+            // Allow excess only on resources where stock exceeds max(buildingCost, avg) —
+            // surplus beyond what the village needs for its next build can be donated.
+            const safeFloorW = hq ? Math.max(averages.actualWoodAverage,  hq.costWood)  : averages.actualWoodAverage;
+            const safeFloorS = hq ? Math.max(averages.actualStoneAverage, hq.costStone) : averages.actualStoneAverage;
+            const safeFloorI = hq ? Math.max(averages.actualIronAverage,  hq.costIron)  : averages.actualIronAverage;
+            if (tempWood  > 0) tempWood  = Math.max(0, Math.round(v.wood  + inc.wood  - safeFloorW));
+            if (tempStone > 0) tempStone = Math.max(0, Math.round(v.stone + inc.stone - safeFloorS));
+            if (tempIron  > 0) tempIron  = Math.max(0, Math.round(v.iron  + inc.iron  - safeFloorI));
           }
           // else → keep the normal temp value (can be positive → donor)
         }
@@ -1217,9 +1260,12 @@
           const hasLongQueue = queueSec > longQueueSec;
 
           if (!hasLongQueue) {
-            if (tempWood  > 0) tempWood  = 0;
-            if (tempStone > 0) tempStone = 0;
-            if (tempIron  > 0) tempIron  = 0;
+            const safeFloorW = hq ? Math.max(averages.actualWoodAverage,  hq.costWood)  : averages.actualWoodAverage;
+            const safeFloorS = hq ? Math.max(averages.actualStoneAverage, hq.costStone) : averages.actualStoneAverage;
+            const safeFloorI = hq ? Math.max(averages.actualIronAverage,  hq.costIron)  : averages.actualIronAverage;
+            if (tempWood  > 0) tempWood  = Math.max(0, Math.round(v.wood  + inc.wood  - safeFloorW));
+            if (tempStone > 0) tempStone = Math.max(0, Math.round(v.stone + inc.stone - safeFloorS));
+            if (tempIron  > 0) tempIron  = Math.max(0, Math.round(v.iron  + inc.iron  - safeFloorI));
           }
         }
 
@@ -1227,6 +1273,31 @@
         if (tempWood  > 0 && tempWood  > v.wood)  tempWood  = v.wood;
         if (tempStone > 0 && tempStone > v.stone) tempStone = v.stone;
         if (tempIron  > 0 && tempIron  > v.iron)  tempIron  = v.iron;
+
+        // Per-village debug log
+        const hqEntry  = state.hqData?.get(String(v.id));
+        const isLowPts = v.points < s.lowPoints;
+        const isHighPts  = v.points > s.highPoints;
+        const isHighFarm = v.farmSpaceUsed > s.highFarm;
+        const qSec       = hqEntry?.queueEndsSec ?? null;
+        const hasLongQ   = qSec !== null && qSec > longQueueSec;
+        const tags = [
+          isLowPts   ? "[LOW]"                                                  : "",
+          isHighPts  ? "[HIGH-PTS]"                                             : "",
+          isHighFarm ? `[HIGH-FARM farm=${v.farmSpaceUsed}/${s.highFarm}]`      : "",
+          hasLongQ   ? `[LONG-Q ${(qSec/3600).toFixed(1)}h]`                   : "",
+        ].filter(Boolean).join(" ");
+        wbLog(`[WH] ${v.name} pts=${v.points}${tags ? " " + tags : ""}`, {
+          stock:    { wood: v.wood, stone: v.stone, iron: v.iron },
+          incoming: { wood: inc.wood, stone: inc.stone, iron: inc.iron },
+          hq: hqEntry ? {
+            building: hqEntry.buildingName, queueEndsSec: hqEntry.queueEndsSec,
+            cost: { wood: hqEntry.costWood, stone: hqEntry.costStone, iron: hqEntry.costIron },
+          } : null,
+          temp:     { wood: tempWood, stone: tempStone, iron: tempIron },
+          excess:   { wood: Math.max(0, Math.floor(tempWood  / 1000) * 1000), stone: Math.max(0, Math.floor(tempStone / 1000) * 1000), iron: Math.max(0, Math.floor(tempIron  / 1000) * 1000) },
+          shortage: { wood: Math.max(0, Math.floor(-tempWood / 1000) * 1000), stone: Math.max(0, Math.floor(-tempStone/ 1000) * 1000), iron: Math.max(0, Math.floor(-tempIron / 1000) * 1000) },
+        });
 
         // Build output arrays (one entry per resource)
         excessResources[idx]   = [];
@@ -1260,6 +1331,7 @@
         }
       }
 
+      wbGroupEnd();
       return { excessResources, shortageResources, villageID };
     }
 
@@ -1276,6 +1348,8 @@
         if (idx < 0) continue;
 
         const resIndex = res === "wood" ? 0 : res === "stone" ? 1 : 2;
+        const exBefore = excessResources[idx]?.[resIndex]?.[res] || 0;
+        const shBefore = shortageResources[idx]?.[resIndex]?.[res] || 0;
 
         if (excessResources[idx] && excessResources[idx][resIndex]) {
           if (res === "wood") excessResources[idx][resIndex].wood = 0;
@@ -1287,6 +1361,7 @@
           if (res === "stone") shortageResources[idx][resIndex].stone = 0;
           if (res === "iron") shortageResources[idx][resIndex].iron = 0;
         }
+        if (exBefore + shBefore > 0) wbLog(`[WH] pp-lock ${villagesData[idx].name} [${res}]: excess ${exBefore}→0 shortage ${shBefore}→0`);
       }
     }
 
@@ -1301,6 +1376,8 @@
     // hqData: Map<villageId string, { queueEndsSec, costWood, costStone, costIron, buildingName }>
     function applyHqBuildPriority({ villagesData, excessResources, shortageResources, incomingRes, hqData, averages }) {
       if (!hqData || !hqData.size) return;
+      wbGroup("[WH] applyHqBuildPriority");
+      const boostedIds = new Set();
 
       // Pre-load both lock sources so we can respect them.
       // Manual locks: keyed by "x|y" coords → { wood, stone, iron }
@@ -1313,7 +1390,6 @@
         const v  = villagesData[idx];
         const hq = hqData.get(String(v.id));
         if (!hq) continue;
-        if (hq.queueEndsSec > 0) continue;        // still building — not ready yet
         if (!hq.buildingName) continue;            // no next building configured
         if (hq.costWood + hq.costStone + hq.costIron === 0) continue; // cost unknown
 
@@ -1324,6 +1400,10 @@
 
         const inc = incomingRes[v.id] || { wood: 0, stone: 0, iron: 0 };
 
+        // Use current stock + incoming only — production rates from screen=main are
+        // unreliable (selector may not match on all server versions) and silently
+        // fall back to 0, making the projection identical to raw stock anyway.
+        // The missing < 1000 guard below handles the sub-1k noise this can cause.
         const RES = [
           { res: "wood",  cost: hq.costWood,  inc: inc.wood,  sIdx: 0, eIdx: 0 },
           { res: "stone", cost: hq.costStone, inc: inc.stone, sIdx: 1, eIdx: 1 },
@@ -1337,14 +1417,19 @@
           if (ppLockSet.has(`${v.id}:${res}`)) continue;
 
           const missing = Math.max(0, cost - (v[res] + incAmt));
-          let need      = Math.ceil(missing / 1000) * 1000;
-          if (need <= 0) continue;
+          const isLowPtsVillage = v.points < (state?.settings?.lowPoints || 0);
+          // Low-points villages: ceil so even small shortfalls trigger a send.
+          // Normal/high villages: round so sub-500 noise (e.g. 503 iron) is suppressed.
+          let need = isLowPtsVillage
+            ? Math.ceil(missing  / 1000) * 1000
+            : Math.round(missing / 1000) * 1000;
+          if (need <= 0) { if (missing > 0) wbLog(`[WH] HQ skip ${v.name} [${res}]: missing=${missing} rounded to 0`); continue; }
 
           // For low-points villages, cap the HQ shortage boost to the same ceiling used
           // in computeExcessShortage: convergent average minus current stock.
           // Without this, large building costs re-introduce the inflated-shortage problem
           // that the low-points fix was designed to prevent.
-          if (v.points < (state?.settings?.lowPoints || 0)) {
+          if (isLowPtsVillage) {
             const avgForRes = res === "wood"  ? averages.actualWoodAverage
                             : res === "stone" ? averages.actualStoneAverage
                             :                   averages.actualIronAverage;
@@ -1353,15 +1438,37 @@
             if (need <= 0) continue;
           }
 
-          // Zero excess — village must not donate a resource it needs for building
-          if (excessResources[idx]?.[eIdx]) excessResources[idx][eIdx][res] = 0;
+          // Cap excess to what's above the building cost — the village keeps enough
+          // for construction and donates only the genuine surplus above that.
+          if (excessResources[idx]?.[eIdx]) {
+            const before = excessResources[idx][eIdx][res];
+            const safeExcess = Math.floor(Math.max(0, v[res] + incAmt - cost) / 1000) * 1000;
+            excessResources[idx][eIdx][res] = Math.min(before, safeExcess);
+            if (excessResources[idx][eIdx][res] !== before) {
+              wbLog(`[WH] HQ cap excess ${v.name} [${res}]: ${before}→${excessResources[idx][eIdx][res]} (cost=${cost} stock=${v[res]} inc=${incAmt})`);
+            }
+          }
 
           // Boost shortage to the building shortfall (only if not already higher)
           if (shortageResources[idx]?.[sIdx]) {
-            shortageResources[idx][sIdx][res] = Math.max(shortageResources[idx][sIdx][res], need);
+            const before = shortageResources[idx][sIdx][res];
+            const boosted = Math.max(before, need);
+            shortageResources[idx][sIdx][res] = boosted;
+            if (boosted > before) boostedIds.add(String(v.id));
+            wbLog(`[WH] HQ boost ${v.name} [${res}]: missing=${missing} need=${need} shortage ${before}→${boosted}`);
           }
         }
+
+        wbLog(`[WH] HQ ${v.name} pts=${v.points}`, {
+          building: hq.buildingName, queueEndsSec: hq.queueEndsSec,
+          cost:     { wood: hq.costWood,  stone: hq.costStone,  iron: hq.costIron  },
+          stock:    { wood: v.wood, stone: v.stone, iron: v.iron },
+          incoming: { wood: inc.wood, stone: inc.stone, iron: inc.iron },
+          isLowPts: v.points < (state?.settings?.lowPoints || 0),
+        });
       }
+      wbGroupEnd();
+      state.hqBoostedIds = boostedIds;
     }
 
     // ---------------- Links build ----------------
@@ -1425,15 +1532,18 @@
         if (!coordsById.has(String(villagesData[p].id))) continue;
 
         const avail = villagesData[p].availableMerchants;
-        const merchantsNeeded = Math.ceil(combined / 1000);
-        const scale = merchantsNeeded <= avail ? 1 : avail / merchantsNeeded;
 
+        // Keep full excess amounts — merchantsLeft is the only constraint.
+        // Pre-scaling proportionally was wrong: it capped e.g. wood to 156k even when
+        // receivers only needed 5k wood, leaving the remaining merchants unable to
+        // send stone instead. The per-send canSend = min(remaining, donor[res], merchantsLeft*1000)
+        // already enforces the merchant limit correctly without pre-capping.
         donors.push({
           id:            String(villagesData[p].id),
           merchantsLeft: avail,
-          wood:  Math.floor(exW * scale / 1000) * 1000,
-          stone: Math.floor(exS * scale / 1000) * 1000,
-          iron:  Math.floor(exI * scale / 1000) * 1000,
+          wood:  exW,
+          stone: exS,
+          iron:  exI,
         });
       }
 
@@ -1762,7 +1872,7 @@
             moveAmt: best.tradeAmt,
             whFree: best.avail,
             instant: true,           // flag: execute without waiting for incoming
-            createdAt: Date.now(),
+            createdAt: getNowMs(),
             lastArrivalEtaSec: null,
             lastArrivalMsAtFetch: null,
             lastRefreshMs: 0
@@ -1870,7 +1980,7 @@
         moveAmt,
         whFree: chosen.free,
         instant: false,
-        createdAt: Date.now(),
+        createdAt: getNowMs(),
         lastArrivalEtaSec: null,
         lastArrivalMsAtFetch: null,
         lastRefreshMs: 0
@@ -2028,10 +2138,14 @@
       else $root.append(html);
 
       $(`button[data-cancelplan][data-planid="${plan.id}"]`).off("click").on("click", () => {
+        const vid = plan.targetVillageId;
+        const res = plan.payRes;
         stopPlanTimer(plan.id);
         removePpPlan(plan.id);
+        removePpLock({ villageId: vid, res });
+        removePlansByLock({ villageId: vid, res });
         $(`#${boxId}`).remove();
-        UI.SuccessMessage("Instant trade plan cancelled (lock kept).");
+        UI.SuccessMessage("Instant trade plan cancelled and lock cleared.");
         renderPpLockStatus();
       });
 
@@ -2378,6 +2492,9 @@
         
         <label>Number of Clusters</label>
         <input type="number" id="tmwh_numClusters" value="${s.numClusters}">
+
+        <label>Debug logging</label>
+        <input type="checkbox" id="tmwh_debugMode" ${s.debugMode ? "checked" : ""}>
       </div>
       <hr/>
 
@@ -2861,6 +2978,7 @@
       //Cluster Support
       s.useClusters = $("#tmwh_useClusters").is(":checked");
       s.numClusters = parseInt($("#tmwh_numClusters").val(), 10);
+      s.debugMode   = $("#tmwh_debugMode").is(":checked");
 
       if (isNaN(s.lowPoints)) s.lowPoints = 1;
       if (isNaN(s.highPoints)) s.highPoints = 12000;
@@ -3068,16 +3186,21 @@
       if (!v) return "";
       const coords = coordsFromVillageName(v.name);
       const coordStr = coords ? ` (${coords.x}|${coords.y})` : "";
+      const reserve = state?.settings?.reservePerVillage || 0;
+      const rawById = new Map((state.rawVillagesData || []).map(r => [String(r.id), r]));
+      const raw = rawById.get(String(v.id));
+      const showRaw = raw && reserve > 0;
       return `
         <div style="min-width:200px">
           <div style="font-weight:bold;margin-bottom:4px">${v.name}${coordStr}</div>
           <table style="width:100%;border-collapse:collapse;font-size:11px">
             <tr>
-              <td>${resIconHtml("wood")}</td><td style="text-align:right">${numberWithCommasDots(v.wood)}</td>
-              <td style="padding-left:8px">${resIconHtml("stone")}</td><td style="text-align:right">${numberWithCommasDots(v.stone)}</td>
-              <td style="padding-left:8px">${resIconHtml("iron")}</td><td style="text-align:right">${numberWithCommasDots(v.iron)}</td>
+              <td>${resIconHtml("wood")}</td><td style="text-align:right">${numberWithCommasDots(showRaw ? raw.wood : v.wood)}</td>
+              <td style="padding-left:8px">${resIconHtml("stone")}</td><td style="text-align:right">${numberWithCommasDots(showRaw ? raw.stone : v.stone)}</td>
+              <td style="padding-left:8px">${resIconHtml("iron")}</td><td style="text-align:right">${numberWithCommasDots(showRaw ? raw.iron : v.iron)}</td>
             </tr>
           </table>
+          ${showRaw ? `<div style="font-size:10px;color:#888;margin-top:2px">Reserve ${numberWithCommasDots(reserve)} subtracted → available: ${numberWithCommasDots(v.wood)} / ${numberWithCommasDots(v.stone)} / ${numberWithCommasDots(v.iron)}</div>` : ""}
           <div style="margin-top:4px;font-size:11px;color:#3b2a12">
             WH: <b>${numberWithCommasDots(v.warehouseCapacity)}</b> &nbsp;|&nbsp;
             Merch: <b>${v.availableMerchants}/${v.totalMerchants}</b> &nbsp;|&nbsp;
@@ -3120,8 +3243,8 @@
         const cls = idx % 2 === 0 ? "tmRowA" : "tmRowB";
         // Check if target is an HQ-priority village (empty queue, needs resources for building)
         const hqTarget = state.hqData?.get(String(l.target));
-        const isHqBoost = hqTarget && hqTarget.queueEndsSec === 0 && hqTarget.buildingName
-                          && (hqTarget.costWood + hqTarget.costStone + hqTarget.costIron > 0);
+        const hqReadiness = hqTarget ? computeHqReadiness(tgt, hqTarget) : null;
+        const isHqBoost = !!(hqReadiness?.hasShortfall);
         const rowCls = isHqBoost ? "tmHqBoostRow" : cls;
         const hqBadge = isHqBoost
           ? `<span class="tmBadgeHQ" title="Building: ${hqTarget.buildingName}">HQ</span>`
@@ -3345,7 +3468,7 @@
         if (!isNaN(t) && t > maxEndTime) maxEndTime = t;
       });
       const queueEndsSec = maxEndTime > 0
-        ? Math.max(0, maxEndTime - Math.floor(Date.now() / 1000))
+        ? Math.max(0, maxEndTime - Math.floor(getNowMs() / 1000))
         : 0;
 
       // ── Building cost (from screen=main, no mode) ─────────────────────────────
@@ -3447,11 +3570,11 @@
 
       if (cachedHqData && cachedHqData.size > 0) {
         // Use cached data from the last Run — instant, no HTTP requests
-        const ageMin = state.hqLastFetchMs ? Math.floor((Date.now() - state.hqLastFetchMs) / 60000) : null;
+        const ageMin = state.hqLastFetchMs ? Math.floor((getNowMs() - state.hqLastFetchMs) / 60000) : null;
         const ageStr = ageMin !== null ? ` — data from ${ageMin} min ago` : "";
         $panel.html(`<div class="twmuted">Using cached HQ data${ageStr}. <span style="color:#a40000">Press "Check HQ" to refresh.</span></div>`);
         const maxPts = state.settings.maxedOutPoints;
-        saveHqData(state.hqData, state.hqLastFetchMs || Date.now());
+        saveHqData(state.hqData, state.hqLastFetchMs || getNowMs());
         for (const v of villagesData) {
           if (v.points >= maxPts) continue;
           if (v.points < (state.settings.lowPoints || 0)) continue;
@@ -3482,7 +3605,7 @@
         const freshMap = new Map();
         results.forEach(({ v, hq }) => freshMap.set(String(v.id), hq));
         state.hqData = freshMap;
-        state.hqLastFetchMs = Date.now();
+        state.hqLastFetchMs = getNowMs();
       }
 
       if (!results.length) {
@@ -3555,14 +3678,20 @@
 
       // Apply per-village reserve: subtract a fixed amount before computation so
       // those resources are never considered available for sending.
+      // Low-points villages are receivers being built up — applying the reserve to them
+      // would floor their stock to 0 and artificially inflate their shortage.
       const reserve = Math.max(0, state.settings.reservePerVillage || 0);
+      const lowPtsThreshold = state.settings.lowPoints || 0;
       const villagesData = reserve > 0
-        ? rawVillagesData.map(v => ({
-            ...v,
-            wood:  Math.max(0, v.wood  - reserve),
-            stone: Math.max(0, v.stone - reserve),
-            iron:  Math.max(0, v.iron  - reserve),
-          }))
+        ? rawVillagesData.map(v => {
+            if (v.points < lowPtsThreshold) return v; // no reserve for low-pts receivers
+            return {
+              ...v,
+              wood:  Math.max(0, v.wood  - reserve),
+              stone: Math.max(0, v.stone - reserve),
+              iron:  Math.max(0, v.iron  - reserve),
+            };
+          })
         : rawVillagesData;
 
       // Apply pending sends from this session: subtract from donor stock and
@@ -3605,6 +3734,20 @@
 
       applyManualCoordLocks({ villagesData, excessResources, shortageResources });
       applyPpResourceLock({ villagesData, excessResources, shortageResources });
+
+      // Diagnostic: totals after locks, before HQ priority
+      wbLog("[WH] post-locks totals", {
+        excess: {
+          wood:  excessResources.reduce((s, e) => s + (e[0]?.wood  || 0), 0),
+          stone: excessResources.reduce((s, e) => s + (e[1]?.stone || 0), 0),
+          iron:  excessResources.reduce((s, e) => s + (e[2]?.iron  || 0), 0),
+        },
+        shortage: {
+          wood:  shortageResources.reduce((s, e) => s + (e[0]?.wood  || 0), 0),
+          stone: shortageResources.reduce((s, e) => s + (e[1]?.stone || 0), 0),
+          iron:  shortageResources.reduce((s, e) => s + (e[2]?.iron  || 0), 0),
+        },
+      });
 
       // ==================== HQ FETCHING DECISION (Fixed Timing) ====================
       // Behavior:
@@ -3660,6 +3803,23 @@
         applyHqBuildPriority({ villagesData, excessResources, shortageResources, incomingRes, hqData, averages });
       }
 
+      // Diagnostic: log total excess and shortage per resource entering the link builder
+      wbGroup("[WH] pre-assign totals");
+      console.log("excess totals", {
+        wood:  excessResources.reduce((s, e) => s + (e[0]?.wood  || 0), 0),
+        stone: excessResources.reduce((s, e) => s + (e[1]?.stone || 0), 0),
+        iron:  excessResources.reduce((s, e) => s + (e[2]?.iron  || 0), 0),
+      });
+      console.log("shortage totals", {
+        wood:  shortageResources.reduce((s, e) => s + (e[0]?.wood  || 0), 0),
+        stone: shortageResources.reduce((s, e) => s + (e[1]?.stone || 0), 0),
+        iron:  shortageResources.reduce((s, e) => s + (e[2]?.iron  || 0), 0),
+      });
+      excessResources.forEach((e, i) => {
+        const w = e[0]?.wood || 0, s = e[1]?.stone || 0, ir = e[2]?.iron || 0;
+        if (w + s + ir > 0) console.log(`  donor ${villagesData[i]?.name}: W=${w} S=${s} I=${ir}`);
+      });
+      console.groupEnd();
       const { links } = assignMerchantsAndBuildLinks(villagesData, excessResources, shortageResources, villageID, isMintingMode);
       let cleanLinks = removeCircularRoutes(addDistanceToLinks(normalizeAndCombineLinks(links), villagesData));
 
@@ -3681,6 +3841,7 @@
 
       state.incomingRes = incomingRes;
       state.villagesData = villagesData;
+      state.rawVillagesData = rawVillagesData;
       state.averages = averages;
       state.cleanLinks = cleanLinks;
 
@@ -3721,7 +3882,8 @@
         villagesData: [],
         averages: null,
         cleanLinks: [],
-        hqData: savedHq.data,           
+        hqData: savedHq.data,
+        hqBoostedIds: new Set(),
         hqLastFetchMs: savedHq.timestamp, 
         pendingSends: [],   
         sendAllTimer: null,
@@ -3729,6 +3891,8 @@
         // Cluster support
         useClusters: false,
         numClusters: 1,
+
+        debugMode: false,
 
       };
 

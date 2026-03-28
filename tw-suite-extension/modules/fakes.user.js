@@ -328,14 +328,24 @@ function isPendingSwitchVillage(){
 
 /* ---------------- UI BRIDGE (overlay reads sessionStorage) --------------- */
 // uiLog writes entries for FakeSenderView's Status tab to poll.
+// Values are mirrored to localStorage so they persist across tab sessions.
 // uiToast and uiRenderMeta are no-ops — the overlay handles all display.
+
+const LS_LOG_PERSIST    = "fake_ui_log_v1";
+const LS_SENT_PERSIST   = "fake_sent_v1";
+const LS_TOTAL_PERSIST  = "fake_total_coords_v1";
+const LS_PENDING_PERSIST = "fake_pending_target_v1";
 
 function uiLog(message, level = "info") {
     const ts = new Date().toLocaleTimeString();
     let entries = [];
     try { entries = JSON.parse(sessionStorage.getItem("fake_ui_log") || "[]"); } catch {}
     entries.unshift({ ts, message, level });
-    sessionStorage.setItem("fake_ui_log", JSON.stringify(entries.slice(0, 50)));
+    const trimmed = entries.slice(0, 50);
+    const raw = JSON.stringify(trimmed);
+    sessionStorage.setItem("fake_ui_log", raw);
+    // persist so overlay can show log after a page reload / new tab
+    try { localStorage.setItem(LS_LOG_PERSIST, raw); } catch {}
 }
 
 function uiToast() {}   // no-op
@@ -354,7 +364,20 @@ function vLabel() {
 
 /* ---------------- CORE UTILITIES ---------------- */
 
-function isConfirmPage(){ return location.href.includes("try=confirm"); }
+function isConfirmPage(){
+    // If the rally point unit inputs are present, this is definitely the rally
+    // point — even if try=confirm is still in the URL from a previous navigation.
+    if(document.querySelector("input.unitsInput")) return false;
+
+    if(!location.href.includes("try=confirm")) return false;
+    return !!(
+        document.getElementById("troop_confirm_submit") ||
+        document.querySelector('input[name="submit_confirm"]') ||
+        document.querySelector('button[name="submit_confirm"]') ||
+        document.querySelector(".troop_confirm_go") ||
+        document.querySelector("#command-data-form")
+    );
+}
 
 function isArrivalAllowed(arrivalDate){
     const [startH,startM] = CONFIG.arrivalStart.split(":").map(Number);
@@ -406,12 +429,32 @@ function getArrivalTime(){
     if(!arrivalNode) return null;
 
     const text = arrivalNode.textContent.trim();
-    const match = text.match(/(\d{2}):(\d{2}):(\d{2})/);
+
+    // Match HH:MM:SS optionally followed by AM/PM (with optional space)
+    const match = text.match(/(\d{1,2}):(\d{2}):(\d{2})\s*(am|pm)?/i);
     if(!match) return null;
+
+    let hours   = parseInt(match[1], 10);
+    const mins  = parseInt(match[2], 10);
+    const secs  = parseInt(match[3], 10);
+    const ampm  = (match[4] || "").toLowerCase();
+
+    // Convert 12-hour to 24-hour if AM/PM marker is present
+    if(ampm === "am") {
+        if(hours === 12) hours = 0;          // 12:xx AM -> 00:xx
+    } else if(ampm === "pm") {
+        if(hours !== 12) hours += 12;        // 1–11 PM -> 13–23
+    }
 
     const now = new Date();
     const arrival = new Date(now);
-    arrival.setHours(match[1],match[2],match[3],0);
+    arrival.setHours(hours, mins, secs, 0);
+
+    // If the computed arrival is more than 1 minute in the past it must be
+    // rolling over midnight — add one day so the window comparison is correct.
+    if(arrival.getTime() < now.getTime() - 60_000) {
+        arrival.setDate(arrival.getDate() + 1);
+    }
 
     return arrival;
 }
@@ -599,11 +642,19 @@ function calculateFakeTroops(requiredPop){
 }
 
 function fillTroops(troops){
-    const form = document.forms[0];
-    if(!form) return;
-
     for(const unit in troops){
-        if(form[unit]) form[unit].value = troops[unit];
+        // Use the same selector getUnitAvailable uses — id="unit_input_{unit}"
+        // is reliable; form[unit] fails when field name differs from unit key.
+        const input =
+            document.getElementById(`unit_input_${unit}`) ||
+            document.querySelector(`input[name="${unit}"]`);
+
+        if(!input) continue;
+
+        input.value = troops[unit];
+        // Fire events so the game's own listeners register the new value
+        input.dispatchEvent(new Event("input",  { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
     }
 
     console.info("[FAKE] Troops filled");
@@ -674,15 +725,23 @@ function sendFake(){
 
             if(arrival && !isArrivalAllowed(arrival)){
                 console.warn("[FAKE] Arrival outside allowed window:", arrival.toLocaleTimeString());
-                uiToast("Arrival outside allowed window -> going back", "warn");
-                uiLog(`[${vLabel()}] Arrival outside window: ${arrival.toLocaleTimeString()}`, "warn");
+                uiToast("Arrival outside allowed window -> skipping target", "warn");
+                uiLog(`[${vLabel()}] Arrival outside window: ${arrival.toLocaleTimeString()} — advancing index and switching village`, "warn");
 
-                setPendingSwitchVillage(false);
+                // Advance index so this target is skipped, not retried in a tight loop
+                const nextIdx = parseInt(sessionStorage.getItem("fake_pending_index") || "0", 10);
+                setIndex(nextIdx);
+                sessionStorage.removeItem("fake_pending_index");
+
+                // Clear stale pending target so the next village's cycle writes
+                // its own fresh coords into form.x/y before clicking attack.
+                sessionStorage.removeItem("fake_pending_target");
+                localStorage.removeItem("fake_pending_target_v1");
+
                 showPopup("Arrival outside time window, skipping target");
 
-                setTimeout(()=>{
-                    location.href = location.href.replace(/&try=confirm.*$/,'').replace(/screen=place.*/,'screen=place');
-                }, 900);
+                // Switch village so the next village tries a fresh target
+                switchVillage();
 
                 return true;
             }
@@ -696,6 +755,17 @@ function sendFake(){
 
                 // click first
                 confirmBtn.click();
+
+                // Increment sent counter only now — after timing check passed
+                const sent = parseInt(sessionStorage.getItem("fake_sent") || "0", 10) + 1;
+                sessionStorage.setItem("fake_sent", String(sent));
+                try { localStorage.setItem(LS_SENT_PERSIST, String(sent)); } catch {}
+                uiLog(`[${vLabel()}] ⚔ Sent → ${sessionStorage.getItem("fake_pending_target") || "-"}`, "info");
+
+                // Commit index advance now that the attack is confirmed
+                const nextIdx = parseInt(sessionStorage.getItem("fake_pending_index") || "0", 10);
+                setIndex(nextIdx);
+                sessionStorage.removeItem("fake_pending_index");
 
                 // increment per-run counters (village + target sent)
                 const pendingTarget = sessionStorage.getItem("fake_pending_target") || "-";
@@ -717,18 +787,52 @@ function sendFake(){
         return;
     }
 
-    // RALLY POINT PAGE: click attack to go to confirm
-    const attackBtn = document.querySelector('#target_attack, input[type="submit"][value*="Attack"], input[name="attack"], button.btn-attack, .btn-attack');
+    // RALLY POINT PAGE
+    // 1. Troops are already filled by fillTroops() in main().
+    // 2. Type the coord into the autocomplete input — the game resolves the village
+    //    itself when Atacar is clicked; selecting the dropdown is not required.
+    // 3. Click Atacar.
+    const coordInput = document.querySelector(
+        '.target-input-field.target-input-autocomplete,' +
+        '.target-input-autocomplete,' +
+        'input.ui-autocomplete-input[id*="target"],' +
+        'input.ui-autocomplete-input'
+    );
 
-    if(!attackBtn){
-        console.error("[FAKE] Attack button not found");
-        uiToast("Attack button not found", "err");
+    const attackBtn = document.querySelector(
+        '#target_attack,' +
+        'input[type="submit"][value*="Atac"],' +
+        'input[type="submit"][value*="Attack"],' +
+        'button[value*="Atac"]'
+    );
+
+    if (!coordInput) {
+        uiLog(`[${vLabel()}] Coord autocomplete input not found`, "err");
+        uiToast("Coord input not found", "err");
+        return;
+    }
+    if (!attackBtn) {
         uiLog(`[${vLabel()}] Attack button not found`, "err");
+        uiToast("Attack button not found", "err");
         return;
     }
 
     setTimeout(()=>{
-        console.info("[FAKE] Clicking ATTACK");
+        const pendingTarget = sessionStorage.getItem("fake_pending_target") || "";
+        if (!pendingTarget || pendingTarget === "-") {
+            uiLog(`[${vLabel()}] No pending target — aborting`, "err");
+            return;
+        }
+
+        // Type the coord into the autocomplete field character by character,
+        // firing keyboard/input events so the game's autocomplete listener tracks it.
+        coordInput.focus();
+        coordInput.value = pendingTarget;
+        ["input", "change", "keyup"].forEach(evt =>
+            coordInput.dispatchEvent(new Event(evt, { bubbles: true }))
+        );
+
+        console.info("[FAKE] Coord set to:", pendingTarget);
         uiLog(`[${vLabel()}] Clicking ATTACK → confirmation`, "info");
         showPopup("Proceeding to confirmation…");
 
@@ -739,12 +843,6 @@ function sendFake(){
 
 /* ---------------- MAIN ---------------- */
 
-function updateStats(village, target){
-    const sent = parseInt(sessionStorage.getItem("fake_sent") || "0", 10) + 1;
-    sessionStorage.setItem("fake_sent", String(sent));
-    sessionStorage.setItem("fake_pending_target", target || "-");
-    uiLog(`[${vLabel()}] ⚔ Sent → ${target}`, "info");
-}
 
 async function main(){
     // after successful confirm -> switch village now (1 fake per village per visit)
@@ -823,6 +921,7 @@ async function main(){
     const coords = getCoords();
     // Keep total fresh for overlay progress bar
     sessionStorage.setItem("fake_total_coords", String(coords.length));
+    try { localStorage.setItem(LS_TOTAL_PERSIST, String(coords.length)); } catch {};
     let index = currentIndex();
 
     if(index >= coords.length){
@@ -849,15 +948,17 @@ async function main(){
     const target = pick.target;
     index = pick.idx;
 
-    const [x,y] = target.split("|");
-    form.x.value = x;
-    form.y.value = y;
-
     console.info("[FAKE] Target:", target);
-    updateStats(currentVillageCoord, target);
 
-    // advance index now (will be used next village after confirm success)
-    setIndex(index + 1);
+    // Store target for the confirm page — counters are only incremented there,
+    // after the arrival window check passes and the attack is actually confirmed.
+    sessionStorage.setItem("fake_pending_target", target || "-");
+    try { localStorage.setItem(LS_PENDING_PERSIST, target || "-"); } catch {}
+
+    // Store the would-be next index so the confirm page can commit it on success.
+    // Index is NOT advanced here — if the arrival window check fails on the
+    // confirm page we skip this target and switch village.
+    sessionStorage.setItem("fake_pending_index", String(index + 1));
 
     sendFake();
 
@@ -875,13 +976,14 @@ maybeResetPlanAndStartNewRunOnCoordsChange();
 
 // Write total coords count for the progress bar in the overlay
 sessionStorage.setItem("fake_total_coords", String(getCoords().length));
+try { localStorage.setItem(LS_TOTAL_PERSIST, String(getCoords().length)); } catch {};
 
 if (isConfirmPage()) {
     console.info("[FAKE] Confirm page detected");
     if (!isPaused()) sendFake();
     else uiLog("Paused on confirm page – sendFake() skipped", "warn");
 
-} else if (document.forms[0] && document.querySelector('input[name="x"]')) {
+} else if (location.href.includes("screen=place") && document.forms[0]) {
     console.info("[FAKE] Rally point detected");
 
     // Pause-aware loop: runs main() each cycle, re-checking pause flag live.

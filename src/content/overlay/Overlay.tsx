@@ -9,6 +9,7 @@ import {
 } from "../../types/config-schemas";
 import { FakeSenderView } from "./FakeSenderView";
 import { SnipeView }     from "./SnipeView";
+import { BalancerView } from "./BalancerView";
 
 /* ─── Storage ─────────────────────────────────────────────────────────────── */
 function storageGet(keys: string[]): Promise<Record<string, unknown>> {
@@ -21,7 +22,11 @@ function storageSet(data: Record<string, unknown>): Promise<void> {
 }
 
 type CfgValues = Record<string, string | number | boolean>;
-type View = { type: "list" } | { type: "config"; id: ModuleId } | { type: "fakes" } | { type: "snipe" };
+type View = { type: "list" } | 
+            { type: "config"; id: ModuleId } | 
+            { type: "fakes" } | 
+            { type: "snipe" } | 
+            { type: "balancer" };
 
 /* ─── useSettings — lives in OverlayRoot, never unmounts ─────────────────── */
 function useSettings() {
@@ -404,23 +409,33 @@ function Panel({
 
         <div className="card-list">
           {!ready ? (
-            <div className="state-msg"><span className="spinner" />Loading…</div>
+            <div className="state-msg">
+              <span className="spinner" />Loading…
+            </div>
           ) : filtered.length === 0 ? (
             <div className="state-msg">No modules match "{search}"</div>
           ) : (
             filtered.map((mod, i) => (
-              <ModuleCard key={mod.id} mod={mod}
-                isOn={isOn(mod.id)} isLive={liveIds.has(mod.id)}
+              <ModuleCard
+                key={mod.id}
+                mod={mod}
+                isOn={isOn(mod.id)}
+                isLive={liveIds.has(mod.id)}
                 hasCfg={Boolean(MODULE_CONFIG_SCHEMAS[mod.id])}
                 onToggle={() => toggle(mod.id)}
-                onCfg={() =>
-                  mod.id === "fakes"
-                    ? setViewP({ type: "fakes" })
-                    : mod.id === "tw_snipe_scheduler"
-                      ? setViewP({ type: "snipe" })
-                      : setViewP({ type: "config", id: mod.id })
-                }
-                index={i} />
+                onCfg={() => {
+                  if (mod.id === "fakes") {
+                    setViewP({ type: "fakes" });
+                  } else if (mod.id === "tw_snipe_scheduler") {
+                    setViewP({ type: "snipe" });
+                  } else if (mod.id === "wh_balancer") {
+                    setViewP({ type: "balancer" });
+                  } else {
+                    setViewP({ type: "config", id: mod.id });
+                  }
+                }}
+                index={i}
+              />
             ))
           )}
         </div>
@@ -454,6 +469,10 @@ function Panel({
       {/* Snipe Scheduler — dedicated panel with gap/candidate UI */}
       <SnipeView
         visible={view.type === "snipe"}
+        onBack={() => setViewP({ type: "list" })}
+      />
+      <BalancerView
+        visible={view.type === "balancer"}
         onBack={() => setViewP({ type: "list" })}
       />
     </div>
@@ -524,7 +543,7 @@ export function OverlayRoot() {
   };
 
   const isSnipe = view.type === "snipe";
-
+  const isBalancer = view.type === "balancer";
   return (
     <>
       <button
@@ -544,13 +563,22 @@ export function OverlayRoot() {
           <span className="trigger-snipe-count">{gapCount}</span>
         </button>
       )}
-
+      <button
+        className="trigger trigger--balancer"
+        onClick={() => { setViewP({ type: "balancer" }); setOpen(true); }}
+        title="WH Balancer"
+        aria-label="WH Balancer"
+        >⚖️
+      </button>
       {/* Backdrop only shown when open */}
       <div className="backdrop" style={{ display: open ? "block" : "none" }}
            onClick={() => setOpen(false)} />
 
       {/* Drawer — wider when snipe view is active */}
-      <div className={`drawer${open ? " drawer--open" : ""}${isSnipe ? " drawer--snipe" : ""}`}>
+      
+      <div className={`drawer${open ? " drawer--open" : ""}
+        ${isSnipe ? " drawer--snipe" : ""}
+        ${isBalancer ? " drawer--balancer" : ""}`}>
         <Panel
           visible={open}
           onClose={() => setOpen(false)}

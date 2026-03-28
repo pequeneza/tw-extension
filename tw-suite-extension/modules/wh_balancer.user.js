@@ -3664,7 +3664,176 @@
       $panel.html(`<div class="tmHqBox">${header}${rowsHtml}</div>`);
     }
 
+    function updateReactState({ running, statusText, cleanLinks, averages, byId }) {
+      const prevLinks = window.TM_WH_BALANCER_STATE?.cleanLinks ?? [];
+      const rawLinks  = cleanLinks ?? null;
+
+      const mappedLinks = rawLinks
+        ? rawLinks.map((l) => ({
+            source:         String(l.source),
+            target:         String(l.target),
+            distance:       l.distance ?? 0,
+            wood:           l.wood  || 0,
+            stone:          l.stone || 0,
+            iron:           l.iron  || 0,
+            isHqBoost:      Boolean(state.hqBoostedIds?.has(String(l.target))),
+            isCrossCluster: Boolean(l.isCrossCluster),
+            sourceUrl:      byId?.get(String(l.source))?.url,
+            targetUrl:      byId?.get(String(l.target))?.url,
+          }))
+        : prevLinks;
+
+      const summary = (averages && rawLinks)
+        ? {
+            totalWood:    averages.totalWood,
+            totalStone:   averages.totalStone,
+            totalIron:    averages.totalIron,
+            woodAverage:  averages.actualWoodAverage,
+            stoneAverage: averages.actualStoneAverage,
+            ironAverage:  averages.actualIronAverage,
+            links:        mappedLinks.length,
+            merchants:    mappedLinks.reduce((s, l) => s + Math.ceil((l.wood + l.stone + l.iron) / 1000), 0),
+            avgDist:      mappedLinks.length
+              ? (mappedLinks.reduce((s, l) => s + (l.distance || 0), 0) / mappedLinks.length).toFixed(1)
+              : '—',
+          }
+        : (window.TM_WH_BALANCER_STATE?.summary ?? null);
+
+      // Also keep on window for same-world consumers (legacy jQuery dialog)
+      window.TM_WH_BALANCER_STATE = {
+        running:    Boolean(running),
+        statusText: statusText ?? '',
+        cleanLinks: mappedLinks,
+        summary,
+      };
+
+      // Bridge to content-script world via CustomEvent on document
+      document.dispatchEvent(new CustomEvent('xbot:balancer:state', {
+        detail: window.TM_WH_BALANCER_STATE,
+      }));
+    }
+
+    // Headless run — initialises state and computes without opening the jQuery dialog.
+    // Used by the React panel (BalancerView) so results appear in the side panel only.
+    async function runHeadless() {
+      const savedHq = loadHqData();
+      state = {
+        settings:      loadSettings(),
+        planTimers:    new Map(),
+        incomingRes:   {},
+        villagesData:  [],
+        averages:      null,
+        cleanLinks:    [],
+        hqData:        savedHq.data,
+        hqBoostedIds:  new Set(),
+        hqLastFetchMs: savedHq.timestamp,
+        pendingSends:  state?.pendingSends || [],
+        sendAllTimer:  null,
+        useClusters:   false,
+        numClusters:   1,
+        debugMode:     false,
+      };
+      try {
+        await runComputationAndRender();
+      } catch (e) {
+        console.error('[WH] runHeadless failed', e);
+        updateReactState({ running: false, statusText: 'Error — check console' });
+      }
+    }
+
+    // Headless HQ check — sends results back via 'xbot:balancer:hqResults' event
+    async function runHqCheckHeadless() {
+      if (!state || !state.villagesData || !state.villagesData.length) {
+        document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
+          detail: { error: 'Run the balancer first to load village data.' },
+        }));
+        return;
+      }
+      document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
+        detail: { loading: true, progress: 0, total: 0 },
+      }));
+      try {
+        const cachedHqData = state.hqData;
+        const results = [];
+        const maxPts = state.settings.maxedOutPoints || 10471;
+        const lowPts = state.settings.lowPoints || 0;
+
+        if (cachedHqData && cachedHqData.size > 0) {
+          const ageMin = state.hqLastFetchMs ? Math.floor((getNowMs() - state.hqLastFetchMs) / 60000) : null;
+          for (const v of state.villagesData) {
+            if (v.points >= maxPts || v.points < lowPts) continue;
+            const hq = cachedHqData.get(String(v.id));
+            if (!hq) continue;
+            const check = computeHqReadiness(v, hq);
+            if (check) results.push({ villageName: v.name, villageUrl: v.url, villagePoints: v.points, ...check });
+          }
+          document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
+            detail: { results, cached: true, ageMin },
+          }));
+        } else {
+          const toCheck = state.villagesData.filter(v => v.points >= lowPts && v.points < maxPts);
+          for (let i = 0; i < toCheck.length; i++) {
+            const v = toCheck[i];
+            document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
+              detail: { loading: true, progress: i + 1, total: toCheck.length },
+            }));
+            try {
+              const hq = await fetchHqNextBuilding(v.id);
+              const check = computeHqReadiness(v, hq);
+              if (check) results.push({ villageName: v.name, villageUrl: v.url, villagePoints: v.points, ...check });
+            } catch (_) { /* skip */ }
+            if (i < toCheck.length - 1) await new Promise(res => setTimeout(res, 300));
+          }
+          // Cache for next call
+          const freshMap = new Map();
+          results.forEach(r => {
+            const v = state.villagesData.find(vv => vv.name === r.villageName);
+            if (v) freshMap.set(String(v.id), { buildingName: r.buildingName, queueEndsSec: r.queueEndsSec, costWood: r.costWood, costStone: r.costStone, costIron: r.costIron });
+          });
+          state.hqData = freshMap;
+          state.hqLastFetchMs = getNowMs();
+          document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
+            detail: { results, cached: false, ageMin: 0 },
+          }));
+        }
+      } catch (e) {
+        document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
+          detail: { error: String(e) },
+        }));
+      }
+    }
+
+    // Listen for commands from the content-script world (BalancerView React panel)
+    document.addEventListener('xbot:balancer:run', () => {
+      try { runHeadless(); } catch (e) { console.error('[WH] run() failed', e); }
+    });
+    document.addEventListener('xbot:balancer:hqCheck', () => {
+      try { runHqCheckHeadless(); } catch (e) { console.error('[WH] hqCheck failed', e); }
+    });
+    document.addEventListener('xbot:balancer:send', (e) => {
+      try {
+        const { src, tgt, wood, stone, iron, idx } = e.detail;
+        sendResource(src, tgt, wood, stone, iron, idx);
+      } catch (e) { console.error('[WH] sendResource failed', e); }
+    });
+    document.addEventListener('xbot:balancer:clearCoordLock', (e) => {
+      try { clearManualCoordLock(e.detail.coords); } catch (e) { console.error(e); }
+    });
+    document.addEventListener('xbot:balancer:clearPpLocks', () => {
+      try { localStorage.removeItem('tm_whbalancer_pp_locks_v2'); } catch (e) { console.error(e); }
+    });
+    // Content script polls locks/state via request/response events
+    document.addEventListener('xbot:balancer:getLocks', () => {
+      document.dispatchEvent(new CustomEvent('xbot:balancer:locks', {
+        detail: {
+          coordLocks: listManualCoordLocks(),
+          ppLocks:    loadPpLocks(),
+        },
+      }));
+    });
+
     async function runComputationAndRender() {
+      updateReactState({ running: true, statusText: 'Fetching…' });
       $("#tmwh_summary").text("Fetching overview pages...");
       $("#tmwh_rows").empty();
       $("#tmwh_timer").empty();
@@ -3761,6 +3930,27 @@
       const isFirstHqRun = !state.hqLastFetchMs && (!state.hqData || state.hqData.size === 0);
       const isHqStale    = (nowMs - (state.hqLastFetchMs || 0)) > HQ_STALENESS_MS;
 
+      // HQ staleness diagnostic — always visible (not gated by debugMode)
+      if (state.settings.hqPriorityEnabled) {
+        if (isFirstHqRun) {
+          console.log('[WH] HQ: no cached data — will fetch fresh');
+        } else {
+          const ageMs  = nowMs - (state.hqLastFetchMs || 0);
+          const ageMin = Math.floor(ageMs / 60000);
+          const ageSec = Math.floor((ageMs % 60000) / 1000);
+          const staleIn = Math.max(0, HQ_STALENESS_MS - ageMs);
+          const staleInMin = Math.floor(staleIn / 60000);
+          const staleInSec = Math.floor((staleIn % 60000) / 1000);
+          console.log(
+            `[WH] HQ cache age: ${ageMin}m ${ageSec}s` +
+            (isHqStale
+              ? ' — STALE, will re-fetch'
+              : ` — fresh (stale in ${staleInMin}m ${staleInSec}s)`) +
+            ` | villages cached: ${state.hqData?.size ?? 0}`
+          );
+        }
+      }
+
       let shouldFetchHq = false;
 
       if (!isMintingMode && state.settings.hqPriorityEnabled) {
@@ -3849,6 +4039,8 @@
       renderRows(cleanLinks);
       renderClusterMap(villagesData, cleanLinks);
       renderManualCoordLockList();
+      const _byId = new Map(villagesData.map(v => [String(v.id), v]));
+      updateReactState({ running: false, statusText: '', cleanLinks, averages, byId: _byId });
 
       await resumePersistedPlans();
 

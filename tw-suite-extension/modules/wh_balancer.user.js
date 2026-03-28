@@ -362,9 +362,10 @@
         if (!Array.isArray(entries)) throw new Error("Invalid HQ data format");
 
         const map = new Map(entries);
-        // If timestamp is missing but data exists, treat as just-fetched rather than
-        // epoch-0 (which would trigger isFirstHqRun and force an immediate re-fetch).
-        const timestamp = parseInt(rawTs, 10) || Date.now();
+        // Validate timestamp — if missing or non-numeric, return 0 so the cache
+        // is treated as stale and re-fetched on next Run rather than appearing brand new.
+        const parsedTs = parseInt(rawTs, 10);
+        const timestamp = Number.isFinite(parsedTs) ? parsedTs : 0;
 
         return { data: map, timestamp };
       } catch (e) {
@@ -384,7 +385,7 @@
         }
         const entries = Array.from(map.entries());
         localStorage.setItem(HQ_DATA_KEY, JSON.stringify(entries));
-        localStorage.setItem(HQ_TIMESTAMP_KEY, String(timestamp || Date.now()));
+        localStorage.setItem(HQ_TIMESTAMP_KEY, String(Number.isFinite(timestamp) ? timestamp : Date.now()));
       } catch (e) {
         console.warn("Failed to save HQ data", e);
       }
@@ -3866,7 +3867,7 @@
       // Apply pending sends from this session: subtract from donor stock and
       // credit to receiver incoming so duplicate routes aren't generated on re-run.
       // Sends older than 2 hours are dropped (shipment long since arrived).
-      const nowMs = getNowMs;
+      const nowMs = getNowMs();
       const twoHrsMs = 2 * 60 * 60 * 1000;
 
       const merchantSpeedFPH = ((typeof game_data !== "undefined" && game_data.speed) || 1) * 16;
@@ -3934,11 +3935,15 @@
       if (state.settings.hqPriorityEnabled) {
         if (isFirstHqRun) {
           console.log('[WH] HQ: no cached data — will fetch fresh');
+        } else if (!Number.isFinite(nowMs) || !Number.isFinite(state.hqLastFetchMs)) {
+          console.warn('[WH] HQ: invalid timestamp detected — nowMs:', nowMs, 'hqLastFetchMs:', state.hqLastFetchMs, '— clearing cache');
+          localStorage.removeItem('tm_whbalancer_hq_timestamp_v1');
+          state.hqLastFetchMs = null;
         } else {
-          const ageMs  = nowMs - (state.hqLastFetchMs || 0);
+          const ageMs  = nowMs - state.hqLastFetchMs;
           const ageMin = Math.floor(ageMs / 60000);
           const ageSec = Math.floor((ageMs % 60000) / 1000);
-          const staleIn = Math.max(0, HQ_STALENESS_MS - ageMs);
+          const staleIn    = Math.max(0, HQ_STALENESS_MS - ageMs);
           const staleInMin = Math.floor(staleIn / 60000);
           const staleInSec = Math.floor((staleIn % 60000) / 1000);
           console.log(

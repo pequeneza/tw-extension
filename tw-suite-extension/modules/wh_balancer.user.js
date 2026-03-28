@@ -3864,9 +3864,10 @@
           })
         : rawVillagesData;
 
-      // Apply pending sends from this session: subtract from donor stock and
-      // credit to receiver incoming so duplicate routes aren't generated on re-run.
-      // Sends older than 2 hours are dropped (shipment long since arrived).
+      // Compute averages BEFORE applying pendingSends stock reductions.
+      // pendingSends subtracts from donor stock which would lower the pool and
+      // produce artificially low averages — making donors appear to have more
+      // excess than they really do relative to the true account-wide average.
       const nowMs = getNowMs();
       const twoHrsMs = 2 * 60 * 60 * 1000;
 
@@ -3876,6 +3877,9 @@
         const etaMs = Math.max(twoHrsMs, (distFields / merchantSpeedFPH) * 3600 * 1000 * 1.5);
         return nowMs - s.sentAt < etaMs;
       });
+
+      // Averages use pre-pendingSends stock so the pool size is not distorted
+      const averages = computeTotalsAndAverages(villagesData, incomingRes);
 
       if (state.pendingSends.length) {
         const vById = new Map(villagesData.map(v => [String(v.id), v]));
@@ -3897,8 +3901,6 @@
           }
         }
       }
-
-      const averages = computeTotalsAndAverages(villagesData, incomingRes);
 
       const { excessResources, shortageResources, villageID } = computeExcessShortage(villagesData, incomingRes, averages);
 

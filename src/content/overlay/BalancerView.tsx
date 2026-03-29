@@ -354,9 +354,9 @@ function LocksTab() {
       </div>
       <div className="cfg-section">
         <div className="bal-section-header">
-          <span className="section-label" style={{ padding:0 }}>PP resource locks ({ppLocks.length})</span>
+          <span className="section-label">PP resource locks ({ppLocks.length})</span>
           {ppLocks.length > 0 && (
-            <button className="btn btn-ghost" style={{ flex:"none", padding:"2px 8px", fontSize:10.5 }}
+            <button className="btn btn-ghost" style={{ flex:"none", padding:"4px 8px", fontSize:10.5 }}
               onClick={clearAllPp}>Clear all</button>
           )}
         </div>

@@ -529,6 +529,7 @@ export function OverlayRoot() {
     const v = sessionStorage.getItem("xbot_panel_view");
     if (v === "fakes") return { type: "fakes" };
     if (v === "snipe") return { type: "snipe" };
+    if (v === "balancer") return { type: "balancer" };
     return { type: "list" };
   });
   const setViewP = (v: View) => {
@@ -546,30 +547,22 @@ export function OverlayRoot() {
   const isBalancer = view.type === "balancer";
   return (
     <>
-      <button
-        className={`trigger${open ? " trigger--open" : ""}`}
-        onClick={() => setOpen((o) => !o)}
-        title="xBot" aria-label="xBot">⚡</button>
+      <div className="trigger-stack">
+        <button className={`trigger${open ? " trigger--open" : ""}`}
+          onClick={() => setOpen((o) => !o)} title="xBot" aria-label="xBot">⚡</button>
 
-      {/* Snipe shortcut — only visible when gaps exist on this page */}
-      {gapCount > 0 && (
-        <button
-          className="trigger trigger--snipe"
-          onClick={openSnipe}
-          title={`${gapCount} gap${gapCount !== 1 ? "s" : ""} — open snipe planner`}
-          aria-label="Snipe planner"
-        >
-          🏹
-          <span className="trigger-snipe-count">{gapCount}</span>
-        </button>
-      )}
-      <button
-        className="trigger trigger--balancer"
-        onClick={() => { setViewP({ type: "balancer" }); setOpen(true); }}
-        title="WH Balancer"
-        aria-label="WH Balancer"
-        >⚖️
-      </button>
+        {gapCount > 0 && (
+          <button className="trigger trigger--snipe" onClick={openSnipe}
+            title={`${gapCount} gap${gapCount !== 1 ? "s" : ""} — open snipe planner`}
+            aria-label="Snipe planner">
+            🏹<span className="trigger-snipe-count">{gapCount}</span>
+          </button>
+        )}
+
+        <button className="trigger trigger--balancer"
+          onClick={() => { setViewP({ type: "balancer" }); setOpen(true); }}
+          title="WH Balancer" aria-label="WH Balancer">⚖️</button>
+      </div>
       {/* Backdrop only shown when open */}
       <div className="backdrop" style={{ display: open ? "block" : "none" }}
            onClick={() => setOpen(false)} />

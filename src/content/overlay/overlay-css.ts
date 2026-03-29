@@ -56,6 +56,7 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
   /* Layout */
   --w: 340px;
   --w-snipe: 440px;
+  --w-balancer: 720px;
   --ease: 0.14s ease;
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 
@@ -71,10 +72,20 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
 }
 
 /* ── Trigger ─────────────────────────────────────────────────────────────── */
-.trigger {
+.trigger-stack {
   position: fixed;
   left: 0;
   top: 108px;
+  z-index: 2147483640;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.trigger {
+  position: relative;
+  left: unset;
+  top: unset;
   z-index: 2147483640;
   width: 28px;
   height: 28px;
@@ -105,12 +116,11 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
   color: var(--b500);
 }
 
-/* Snipe shortcut button — sits below ⚡, only rendered when gaps exist */
-.trigger--snipe {
-  top: 142px;   /* 108px + 28px height + 6px gap */
-  position: fixed;
-  left: 0;
+.trigger--snipe  { 
+  position: relative; 
+  top: unset; 
 }
+
 .trigger-snipe-count {
   position: absolute;
   top: -5px;
@@ -124,6 +134,8 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
   border-radius: 6px;
   pointer-events: none;
 }
+
+.trigger--balancer { position: relative; top: unset; }
 
 /* ── Backdrop ────────────────────────────────────────────────────────────── */
 .backdrop {
@@ -965,4 +977,40 @@ select.input {
   outline: none;
   border-color: var(--b400);
 }
+
+/* ── WH Balancer ─────────────────────────────────────────────────────────── */
+.drawer--balancer { width: var(--w-balancer); }
+
+.bal-summary { padding: 6px 14px 10px; display: flex; flex-direction: column; gap: 5px; }
+.bal-summary-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.bal-summary-label { font-size: 11px; font-weight: 600; color: var(--n300); text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; flex-shrink: 0; }
+.bal-summary-val { font-size: 11.5px; color: var(--n700); font-family: var(--mono); text-align: right; }
+.bal-row { display: flex; align-items: center; gap: 8px; padding: 8px 14px; transition: background var(--ease); }
+.bal-row:hover { background: var(--n50); }
+.bal-row--sent { opacity: 0.4; }
+.bal-row-meta { display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0; overflow: hidden; }
+.bal-row-name { font-size: 11.5px; color: var(--n700); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
+.bal-row-arrow { font-size: 11px; color: var(--n300); flex-shrink: 0; }
+.bal-row-dist { font-size: 10.5px; color: var(--n300); font-family: var(--mono); flex-shrink: 0; margin-left: 2px; }
+.bal-row-res { display: flex; gap: 6px; flex-shrink: 0; }
+.bal-res { font-size: 11px; font-family: var(--mono); color: var(--n500); white-space: nowrap; display: flex; align-items: center; gap: 2px; }
+.bal-badge { display: inline-flex; align-items: center; padding: 1px 5px; border-radius: 4px; font-size: 10px; font-weight: 700; flex-shrink: 0; white-space: nowrap; }
+.bal-badge--hq { background: #fff3b0; border: 1px solid #c8a800; color: #7a6000; }
+.bal-badge--cc { background: var(--b-bg); border: 1px solid #991e43; color: var(--n500); }
+.bal-section-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px 4px; }
+.bal-lock-row { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--n100); }
+.bal-lock-row:last-child { border-bottom: none; }
+.bal-lock-coord { flex: 1; font-family: var(--mono); font-size: 12px; color: var(--n700); }
+.bal-lock-res { display: flex; gap: 5px; flex-shrink: 0; align-items: center; }
+.bal-hq-row { padding: 8px 14px; border-bottom: 1px solid var(--n100); }
+.bal-hq-row:last-child { border-bottom: none; }
+.bal-hq-row--warn { background: #fffbe6; }
+.bal-hq-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bal-hq-name { font-size: 12px; font-weight: 600; color: var(--b500); text-decoration: none; white-space: nowrap; }
+.bal-hq-name:hover { text-decoration: underline; }
+.bal-hq-building { font-size: 11px; color: var(--n400); flex: 1; min-width: 0; }
+.bal-hq-eta { font-size: 11px; color: var(--n300); font-family: var(--mono); white-space: nowrap; }
+.bal-hq-status { font-size: 11px; font-weight: 600; color: var(--g600); white-space: nowrap; }
+.bal-hq-status--warn { color: var(--r500); }
+.bal-hq-shortfall { display: flex; gap: 10px; margin-top: 5px; flex-wrap: wrap; }
 `;

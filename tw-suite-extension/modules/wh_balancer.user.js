@@ -362,9 +362,10 @@
         if (!Array.isArray(entries)) throw new Error("Invalid HQ data format");
 
         const map = new Map(entries);
-        // If timestamp is missing but data exists, treat as just-fetched rather than
-        // epoch-0 (which would trigger isFirstHqRun and force an immediate re-fetch).
-        const timestamp = parseInt(rawTs, 10) || Date.now();
+        // Validate timestamp — if missing or non-numeric, return 0 so the cache
+        // is treated as stale and re-fetched on next Run rather than appearing brand new.
+        const parsedTs = parseInt(rawTs, 10);
+        const timestamp = Number.isFinite(parsedTs) ? parsedTs : 0;
 
         return { data: map, timestamp };
       } catch (e) {
@@ -384,7 +385,7 @@
         }
         const entries = Array.from(map.entries());
         localStorage.setItem(HQ_DATA_KEY, JSON.stringify(entries));
-        localStorage.setItem(HQ_TIMESTAMP_KEY, String(timestamp || Date.now()));
+        localStorage.setItem(HQ_TIMESTAMP_KEY, String(Number.isFinite(timestamp) ? timestamp : Date.now()));
       } catch (e) {
         console.warn("Failed to save HQ data", e);
       }
@@ -1559,13 +1560,26 @@
         for (let q = 0; q < shortageResources.length; q++) {
           const need = shortageResources[q][sIdx][res] || 0;
           if (need <= 0) continue;
-          if (villagesData[q] && villagesData[q].points < lowPts)
-            priorityReceivers.push({ q, need });
+          const v         = villagesData[q];
+          const hqEntry   = state.hqData?.get(String(v?.id));
+          // queueEndsSec = 0 means can build right now (most urgent).
+          // Villages with no HQ data get Infinity — treated as least urgent.
+          const queueSecs = (hqEntry && state.hqBoostedIds?.has(String(v?.id)))
+            ? (hqEntry.queueEndsSec ?? Infinity)
+            : Infinity;
+          if (v && v.points < lowPts)
+            priorityReceivers.push({ q, need, queueSecs });
           else
-            normalReceivers.push({ q, need });
+            normalReceivers.push({ q, need, queueSecs });
         }
+        // Priority villages: largest shortage first (urgency already encoded by points)
         priorityReceivers.sort((a, b) => b.need - a.need);
-        normalReceivers.sort((a, b) => b.need - a.need);
+        // Normal villages: sort by queue urgency first (shorter queue = more urgent),
+        // then by shortage size as tiebreaker.
+        // queue=0 (ready to build now) → served first
+        // queue=20min → before queue=10h
+        // no HQ boost (Infinity) → served last among normal villages
+        normalReceivers.sort((a, b) => a.queueSecs - b.queueSecs || b.need - a.need);
 
         for (const rcv of [...priorityReceivers, ...normalReceivers]) {
           const { q } = rcv;
@@ -3664,7 +3678,176 @@
       $panel.html(`<div class="tmHqBox">${header}${rowsHtml}</div>`);
     }
 
+    function updateReactState({ running, statusText, cleanLinks, averages, byId }) {
+      const prevLinks = window.TM_WH_BALANCER_STATE?.cleanLinks ?? [];
+      const rawLinks  = cleanLinks ?? null;
+
+      const mappedLinks = rawLinks
+        ? rawLinks.map((l) => ({
+            source:         String(l.source),
+            target:         String(l.target),
+            distance:       l.distance ?? 0,
+            wood:           l.wood  || 0,
+            stone:          l.stone || 0,
+            iron:           l.iron  || 0,
+            isHqBoost:      Boolean(state.hqBoostedIds?.has(String(l.target))),
+            isCrossCluster: Boolean(l.isCrossCluster),
+            sourceUrl:      byId?.get(String(l.source))?.url,
+            targetUrl:      byId?.get(String(l.target))?.url,
+          }))
+        : prevLinks;
+
+      const summary = (averages && rawLinks)
+        ? {
+            totalWood:    averages.totalWood,
+            totalStone:   averages.totalStone,
+            totalIron:    averages.totalIron,
+            woodAverage:  averages.actualWoodAverage,
+            stoneAverage: averages.actualStoneAverage,
+            ironAverage:  averages.actualIronAverage,
+            links:        mappedLinks.length,
+            merchants:    mappedLinks.reduce((s, l) => s + Math.ceil((l.wood + l.stone + l.iron) / 1000), 0),
+            avgDist:      mappedLinks.length
+              ? (mappedLinks.reduce((s, l) => s + (l.distance || 0), 0) / mappedLinks.length).toFixed(1)
+              : '—',
+          }
+        : (window.TM_WH_BALANCER_STATE?.summary ?? null);
+
+      // Also keep on window for same-world consumers (legacy jQuery dialog)
+      window.TM_WH_BALANCER_STATE = {
+        running:    Boolean(running),
+        statusText: statusText ?? '',
+        cleanLinks: mappedLinks,
+        summary,
+      };
+
+      // Bridge to content-script world via CustomEvent on document
+      document.dispatchEvent(new CustomEvent('xbot:balancer:state', {
+        detail: window.TM_WH_BALANCER_STATE,
+      }));
+    }
+
+    // Headless run — initialises state and computes without opening the jQuery dialog.
+    // Used by the React panel (BalancerView) so results appear in the side panel only.
+    async function runHeadless() {
+      const savedHq = loadHqData();
+      state = {
+        settings:      loadSettings(),
+        planTimers:    new Map(),
+        incomingRes:   {},
+        villagesData:  [],
+        averages:      null,
+        cleanLinks:    [],
+        hqData:        savedHq.data,
+        hqBoostedIds:  new Set(),
+        hqLastFetchMs: savedHq.timestamp,
+        pendingSends:  state?.pendingSends || [],
+        sendAllTimer:  null,
+        useClusters:   false,
+        numClusters:   1,
+        debugMode:     false,
+      };
+      try {
+        await runComputationAndRender();
+      } catch (e) {
+        console.error('[WH] runHeadless failed', e);
+        updateReactState({ running: false, statusText: 'Error — check console' });
+      }
+    }
+
+    // Headless HQ check — sends results back via 'xbot:balancer:hqResults' event
+    async function runHqCheckHeadless() {
+      if (!state || !state.villagesData || !state.villagesData.length) {
+        document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
+          detail: { error: 'Run the balancer first to load village data.' },
+        }));
+        return;
+      }
+      document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
+        detail: { loading: true, progress: 0, total: 0 },
+      }));
+      try {
+        const cachedHqData = state.hqData;
+        const results = [];
+        const maxPts = state.settings.maxedOutPoints || 10471;
+        const lowPts = state.settings.lowPoints || 0;
+
+        if (cachedHqData && cachedHqData.size > 0) {
+          const ageMin = state.hqLastFetchMs ? Math.floor((getNowMs() - state.hqLastFetchMs) / 60000) : null;
+          for (const v of state.villagesData) {
+            if (v.points >= maxPts || v.points < lowPts) continue;
+            const hq = cachedHqData.get(String(v.id));
+            if (!hq) continue;
+            const check = computeHqReadiness(v, hq);
+            if (check) results.push({ villageName: v.name, villageUrl: v.url, villagePoints: v.points, ...check });
+          }
+          document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
+            detail: { results, cached: true, ageMin },
+          }));
+        } else {
+          const toCheck = state.villagesData.filter(v => v.points >= lowPts && v.points < maxPts);
+          for (let i = 0; i < toCheck.length; i++) {
+            const v = toCheck[i];
+            document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
+              detail: { loading: true, progress: i + 1, total: toCheck.length },
+            }));
+            try {
+              const hq = await fetchHqNextBuilding(v.id);
+              const check = computeHqReadiness(v, hq);
+              if (check) results.push({ villageName: v.name, villageUrl: v.url, villagePoints: v.points, ...check });
+            } catch (_) { /* skip */ }
+            if (i < toCheck.length - 1) await new Promise(res => setTimeout(res, 300));
+          }
+          // Cache for next call
+          const freshMap = new Map();
+          results.forEach(r => {
+            const v = state.villagesData.find(vv => vv.name === r.villageName);
+            if (v) freshMap.set(String(v.id), { buildingName: r.buildingName, queueEndsSec: r.queueEndsSec, costWood: r.costWood, costStone: r.costStone, costIron: r.costIron });
+          });
+          state.hqData = freshMap;
+          state.hqLastFetchMs = getNowMs();
+          document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
+            detail: { results, cached: false, ageMin: 0 },
+          }));
+        }
+      } catch (e) {
+        document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
+          detail: { error: String(e) },
+        }));
+      }
+    }
+
+    // Listen for commands from the content-script world (BalancerView React panel)
+    document.addEventListener('xbot:balancer:run', () => {
+      try { runHeadless(); } catch (e) { console.error('[WH] run() failed', e); }
+    });
+    document.addEventListener('xbot:balancer:hqCheck', () => {
+      try { runHqCheckHeadless(); } catch (e) { console.error('[WH] hqCheck failed', e); }
+    });
+    document.addEventListener('xbot:balancer:send', (e) => {
+      try {
+        const { src, tgt, wood, stone, iron, idx } = e.detail;
+        sendResource(src, tgt, wood, stone, iron, idx);
+      } catch (e) { console.error('[WH] sendResource failed', e); }
+    });
+    document.addEventListener('xbot:balancer:clearCoordLock', (e) => {
+      try { clearManualCoordLock(e.detail.coords); } catch (e) { console.error(e); }
+    });
+    document.addEventListener('xbot:balancer:clearPpLocks', () => {
+      try { localStorage.removeItem('tm_whbalancer_pp_locks_v2'); } catch (e) { console.error(e); }
+    });
+    // Content script polls locks/state via request/response events
+    document.addEventListener('xbot:balancer:getLocks', () => {
+      document.dispatchEvent(new CustomEvent('xbot:balancer:locks', {
+        detail: {
+          coordLocks: listManualCoordLocks(),
+          ppLocks:    loadPpLocks(),
+        },
+      }));
+    });
+
     async function runComputationAndRender() {
+      updateReactState({ running: true, statusText: 'Fetching…' });
       $("#tmwh_summary").text("Fetching overview pages...");
       $("#tmwh_rows").empty();
       $("#tmwh_timer").empty();
@@ -3694,10 +3877,11 @@
           })
         : rawVillagesData;
 
-      // Apply pending sends from this session: subtract from donor stock and
-      // credit to receiver incoming so duplicate routes aren't generated on re-run.
-      // Sends older than 2 hours are dropped (shipment long since arrived).
-      const nowMs = getNowMs;
+      // Compute averages BEFORE applying pendingSends stock reductions.
+      // pendingSends subtracts from donor stock which would lower the pool and
+      // produce artificially low averages — making donors appear to have more
+      // excess than they really do relative to the true account-wide average.
+      const nowMs = getNowMs();
       const twoHrsMs = 2 * 60 * 60 * 1000;
 
       const merchantSpeedFPH = ((typeof game_data !== "undefined" && game_data.speed) || 1) * 16;
@@ -3706,6 +3890,9 @@
         const etaMs = Math.max(twoHrsMs, (distFields / merchantSpeedFPH) * 3600 * 1000 * 1.5);
         return nowMs - s.sentAt < etaMs;
       });
+
+      // Averages use pre-pendingSends stock so the pool size is not distorted
+      const averages = computeTotalsAndAverages(villagesData, incomingRes);
 
       if (state.pendingSends.length) {
         const vById = new Map(villagesData.map(v => [String(v.id), v]));
@@ -3727,8 +3914,6 @@
           }
         }
       }
-
-      const averages = computeTotalsAndAverages(villagesData, incomingRes);
 
       const { excessResources, shortageResources, villageID } = computeExcessShortage(villagesData, incomingRes, averages);
 
@@ -3760,6 +3945,31 @@
       const isMintingMode = !!state.settings.isMinting;
       const isFirstHqRun = !state.hqLastFetchMs && (!state.hqData || state.hqData.size === 0);
       const isHqStale    = (nowMs - (state.hqLastFetchMs || 0)) > HQ_STALENESS_MS;
+
+      // HQ staleness diagnostic — always visible (not gated by debugMode)
+      if (state.settings.hqPriorityEnabled) {
+        if (isFirstHqRun) {
+          console.log('[WH] HQ: no cached data — will fetch fresh');
+        } else if (!Number.isFinite(nowMs) || !Number.isFinite(state.hqLastFetchMs)) {
+          console.warn('[WH] HQ: invalid timestamp detected — nowMs:', nowMs, 'hqLastFetchMs:', state.hqLastFetchMs, '— clearing cache');
+          localStorage.removeItem('tm_whbalancer_hq_timestamp_v1');
+          state.hqLastFetchMs = null;
+        } else {
+          const ageMs  = nowMs - state.hqLastFetchMs;
+          const ageMin = Math.floor(ageMs / 60000);
+          const ageSec = Math.floor((ageMs % 60000) / 1000);
+          const staleIn    = Math.max(0, HQ_STALENESS_MS - ageMs);
+          const staleInMin = Math.floor(staleIn / 60000);
+          const staleInSec = Math.floor((staleIn % 60000) / 1000);
+          console.log(
+            `[WH] HQ cache age: ${ageMin}m ${ageSec}s` +
+            (isHqStale
+              ? ' — STALE, will re-fetch'
+              : ` — fresh (stale in ${staleInMin}m ${staleInSec}s)`) +
+            ` | villages cached: ${state.hqData?.size ?? 0}`
+          );
+        }
+      }
 
       let shouldFetchHq = false;
 
@@ -3849,6 +4059,8 @@
       renderRows(cleanLinks);
       renderClusterMap(villagesData, cleanLinks);
       renderManualCoordLockList();
+      const _byId = new Map(villagesData.map(v => [String(v.id), v]));
+      updateReactState({ running: false, statusText: '', cleanLinks, averages, byId: _byId });
 
       await resumePersistedPlans();
 

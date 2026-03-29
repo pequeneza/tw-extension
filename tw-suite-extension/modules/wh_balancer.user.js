@@ -1560,13 +1560,26 @@
         for (let q = 0; q < shortageResources.length; q++) {
           const need = shortageResources[q][sIdx][res] || 0;
           if (need <= 0) continue;
-          if (villagesData[q] && villagesData[q].points < lowPts)
-            priorityReceivers.push({ q, need });
+          const v         = villagesData[q];
+          const hqEntry   = state.hqData?.get(String(v?.id));
+          // queueEndsSec = 0 means can build right now (most urgent).
+          // Villages with no HQ data get Infinity — treated as least urgent.
+          const queueSecs = (hqEntry && state.hqBoostedIds?.has(String(v?.id)))
+            ? (hqEntry.queueEndsSec ?? Infinity)
+            : Infinity;
+          if (v && v.points < lowPts)
+            priorityReceivers.push({ q, need, queueSecs });
           else
-            normalReceivers.push({ q, need });
+            normalReceivers.push({ q, need, queueSecs });
         }
+        // Priority villages: largest shortage first (urgency already encoded by points)
         priorityReceivers.sort((a, b) => b.need - a.need);
-        normalReceivers.sort((a, b) => b.need - a.need);
+        // Normal villages: sort by queue urgency first (shorter queue = more urgent),
+        // then by shortage size as tiebreaker.
+        // queue=0 (ready to build now) → served first
+        // queue=20min → before queue=10h
+        // no HQ boost (Infinity) → served last among normal villages
+        normalReceivers.sort((a, b) => a.queueSecs - b.queueSecs || b.need - a.need);
 
         for (const rcv of [...priorityReceivers, ...normalReceivers]) {
           const { q } = rcv;

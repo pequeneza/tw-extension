@@ -2257,6 +2257,8 @@
             plan.lastArrivalMsAtFetch = now;
             plan.lastRefreshMs = now;
             upsertPpPlan(plan);
+            // Push updated ETA anchor to React panel so useCountdown can start ticking
+            updateReactState({ running: false, statusText: '' });
           } catch (e) {
             // eslint-disable-next-line no-console
             console.warn("ETA refresh failed", e);
@@ -2283,6 +2285,8 @@
             "ETA until trade: 00:00:00"
           );
           UI.SuccessMessage("Incoming arrived — open the market to execute the Merchant Exchange manually.");
+          // Notify React panel that arrival is complete
+          updateReactState({ running: false, statusText: '' });
           return;
         }
 
@@ -3857,6 +3861,8 @@
           instant: plan.instant || plan.shipments.length === 0,
           marketUrl,
           remainingSec,
+          lastArrivalEtaSec:   plan.lastArrivalEtaSec   ?? null,
+          lastArrivalMsAtFetch: plan.lastArrivalMsAtFetch ?? null,
           shipments: plan.shipments.map(s => ({
             source: String(s.source),
             target: String(s.target),

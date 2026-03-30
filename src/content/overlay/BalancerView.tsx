@@ -41,6 +41,7 @@ interface PpPlan {
   targetVillageName: string; targetVillageId: string;
   tradeAmount: number; instant: boolean;
   marketUrl?: string; remainingSec?: number | null;
+  lastArrivalEtaSec?: number | null; lastArrivalMsAtFetch?: number | null;
   shipments: PpShipment[];
 }
 interface HqResult {
@@ -232,14 +233,13 @@ function VillageLink({ name, url, villageId }: { name: string; url?: string; vil
 }
 
 /* ─── SendRow ────────────────────────────────────────────────────────────── */
-function SendRow({ link, idx, onSent }: { link: SendLink; idx: number; onSent:(i:number)=>void }) {
-  const [sent, setSent] = useState(false);
+function SendRow({ link, idx, sent, onSent }: { link: SendLink; idx: number; sent: boolean; onSent:(i:number)=>void }) {
   const handleSend = () => {
     if (sent) return;
     const srcId = link.sourceUrl?.match(/village=(\d+)/)?.[1] ?? link.source;
     const tgtId = link.targetUrl?.match(/village=(\d+)/)?.[1] ?? link.target;
     dispatch("xbot:balancer:send", { src:srcId, tgt:tgtId, wood:link.wood, stone:link.stone, iron:link.iron, idx });
-    setSent(true); onSent(idx);
+    onSent(idx);
   };
   if (sent) return null;
   return (
@@ -276,71 +276,91 @@ function SendRow({ link, idx, onSent }: { link: SendLink; idx: number; onSent:(i
   );
 }
 
-/* ─── PpPlanRows — PP plan header + shipment rows ───────────────────────── */
+/* ─── useCountdown — live ticking ETA from anchor ───────────────────────── */
+function useCountdown(etaSec: number | null | undefined, msAtFetch: number | null | undefined): number | null {
+  const [remaining, setRemaining] = useState<number | null>(() => {
+    if (etaSec == null || msAtFetch == null) return null;
+    return Math.max(0, Math.floor(etaSec) - Math.floor((Date.now() - msAtFetch) / 1000));
+  });
+  useEffect(() => {
+    if (etaSec == null || msAtFetch == null) { setRemaining(null); return; }
+    const tick = () => setRemaining(Math.max(0, Math.floor(etaSec) - Math.floor((Date.now() - msAtFetch) / 1000)));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [etaSec, msAtFetch]);
+  return remaining;
+}
+
+/* ─── PpPlanItem — single PP plan with live countdown ───────────────────── */
+function PpPlanItem({ plan, onSent }: { plan: PpPlan; onSent: (src:string,tgt:string,w:number,s:number,i:number)=>void }) {
+  const remaining = useCountdown(plan.lastArrivalEtaSec, plan.lastArrivalMsAtFetch);
+  return (
+    <div className="cfg-section bal-pp-plan">
+      <div className="bal-pp-header">
+        <span className={`bal-badge ${plan.instant ? "bal-pp-badge--now" : "bal-pp-badge"}`}>
+          {plan.instant ? "⚡ NOW" : "PP"}
+        </span>
+        <span className="bal-pp-desc">
+          {plan.instant
+            ? <><strong>{plan.targetVillageName}</strong> already has{" "}
+                <strong>{fmtNum(plan.tradeAmount)}</strong> <ResIcon res={plan.payRes as any}/>{" "}
+                — trade for <ResIcon res={plan.neededRes as any}/> (10pp)</>
+            : <>Move <strong>{fmtNum(plan.tradeAmount)}</strong> <ResIcon res={plan.payRes as any}/>{" "}
+                → <strong>{plan.targetVillageName}</strong>, trade for <ResIcon res={plan.neededRes as any}/> (10pp)</>
+          }
+        </span>
+        {plan.instant && plan.marketUrl && (
+          <a className="bal-pp-market-link" href={plan.marketUrl} target="_self" title="Open market">
+            🏪 Trade
+          </a>
+        )}
+      </div>
+      {!plan.instant && remaining != null && (
+        <div className="bal-pp-eta">
+          <span className="bal-pp-eta-label">Last merchant arrives in:</span>
+          <span className={`bal-pp-eta-val${remaining <= 0 ? " bal-pp-eta-val--ready" : ""}`}>
+            {remaining <= 0 ? "✓ Arrived — trade now!" : fmtHMS(remaining)}
+          </span>
+        </div>
+      )}
+      {!plan.instant && remaining == null && plan.shipments.length > 0 && (
+        <div className="bal-pp-eta">
+          <span className="bal-pp-eta-label" style={{ color:"var(--n300)" }}>ETA: send shipments to track arrival</span>
+        </div>
+      )}
+      {!plan.instant && plan.shipments.length > 0 && (
+        <table className="bal-table" style={{ marginTop:4 }}>
+          <thead>
+            <tr className="bal-thead-tr bal-thead-tr--pp">
+              <th className="bal-th"></th>
+              <th className="bal-th bal-th-village">Source</th>
+              <th className="bal-th"></th>
+              <th className="bal-th bal-th-village">Target</th>
+              <th className="bal-th bal-th-dist">Dist</th>
+              <th className="bal-th bal-th-res"><ResIcon res="wood"/></th>
+              <th className="bal-th bal-th-res"><ResIcon res="stone"/></th>
+              <th className="bal-th bal-th-res"><ResIcon res="iron"/></th>
+              <th className="bal-th"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {plan.shipments.map((s, i) => (
+              <PpShipmentRow key={i} shipment={s} onSent={onSent} />
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+/* ─── PpPlanRows ─────────────────────────────────────────────────────────── */
 function PpPlanRows({ plans, onSent }: { plans: PpPlan[]; onSent: (src:string,tgt:string,w:number,s:number,i:number)=>void }) {
   if (!plans.length) return null;
   return (
     <>
-      {plans.map(plan => (
-        <div key={plan.id} className="cfg-section bal-pp-plan">
-          <div className="bal-pp-header">
-            <span className={`bal-badge ${plan.instant ? "bal-pp-badge--now" : "bal-pp-badge"}`}>
-              {plan.instant ? "⚡ NOW" : "PP"}
-            </span>
-            <span className="bal-pp-desc">
-              {plan.instant
-                ? <><strong>{plan.targetVillageName}</strong> already has{" "}
-                    <strong>{fmtNum(plan.tradeAmount)}</strong> <ResIcon res={plan.payRes as any}/>{" "}
-                    — trade for <ResIcon res={plan.neededRes as any}/> (10pp)</>
-                : <>Move <strong>{fmtNum(plan.tradeAmount)}</strong> <ResIcon res={plan.payRes as any}/>{" "}
-                    → <strong>{plan.targetVillageName}</strong>, trade for <ResIcon res={plan.neededRes as any}/> (10pp)</>
-              }
-            </span>
-            {plan.instant && plan.marketUrl && (
-              <a className="bal-pp-market-link" href={plan.marketUrl} target="_self" title="Open market">
-                🏪 Trade
-              </a>
-            )}
-          </div>
-          {/* ETA countdown */}
-          {!plan.instant && plan.remainingSec != null && (
-            <div className="bal-pp-eta">
-              <span className="bal-pp-eta-label">Last merchant arrives in:</span>
-              <span className={`bal-pp-eta-val${plan.remainingSec <= 0 ? " bal-pp-eta-val--ready" : ""}`}>
-                {plan.remainingSec <= 0 ? "✓ Arrived — trade now!" : fmtHMS(plan.remainingSec)}
-              </span>
-            </div>
-          )}
-          {!plan.instant && plan.remainingSec == null && plan.shipments.length > 0 && (
-            <div className="bal-pp-eta">
-              <span className="bal-pp-eta-label" style={{ color:"var(--n300)" }}>ETA: send shipments to track arrival</span>
-            </div>
-          )}
-          {/* Shipment rows */}
-          {!plan.instant && plan.shipments.length > 0 && (
-            <table className="bal-table" style={{ marginTop:4 }}>
-              <thead>
-                <tr className="bal-thead-tr bal-thead-tr--pp">
-                  <th className="bal-th"></th>
-                  <th className="bal-th bal-th-village">Source</th>
-                  <th className="bal-th"></th>
-                  <th className="bal-th bal-th-village">Target</th>
-                  <th className="bal-th bal-th-dist">Dist</th>
-                  <th className="bal-th bal-th-res"><ResIcon res="wood"/></th>
-                  <th className="bal-th bal-th-res"><ResIcon res="stone"/></th>
-                  <th className="bal-th bal-th-res"><ResIcon res="iron"/></th>
-                  <th className="bal-th"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {plan.shipments.map((s, i) => (
-                  <PpShipmentRow key={i} shipment={s} onSent={onSent} />
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      ))}
+      {plans.map(plan => <PpPlanItem key={plan.id} plan={plan} onSent={onSent} />)}
     </>
   );
 }
@@ -503,7 +523,7 @@ function SendListTab({ links, summary, running, status, detected, clusterMap, pp
             </thead>
             <tbody>
               {links.map((link,i) => (
-                <SendRow key={`${link.source}-${link.target}-${i}`} link={link} idx={i} onSent={onSent}/>
+                <SendRow key={`${link.source}-${link.target}-${i}`} link={link} idx={i} sent={sentIds.has(i)} onSent={onSent}/>
               ))}
             </tbody>
           </table>

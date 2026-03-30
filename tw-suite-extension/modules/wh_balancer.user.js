@@ -3831,6 +3831,13 @@
           const v = state?.villagesData?.find(vv => String(vv.id) === String(id));
           return v ? { name: v.name, url: v.url } : { name: String(id), url: null };
         };
+        // Compute remaining ETA from anchor
+        const remainingSec = (() => {
+          if (plan.lastArrivalEtaSec == null || plan.lastArrivalMsAtFetch == null) return null;
+          const elapsed = Math.floor((getNowMs() - plan.lastArrivalMsAtFetch) / 1000);
+          return Math.max(0, Math.floor(plan.lastArrivalEtaSec) - elapsed);
+        })();
+        const marketUrl = `game.php?village=${plan.targetVillageId}&screen=market&mode=other_offer`;
         return {
           id: plan.id,
           payRes: plan.payRes,
@@ -3839,6 +3846,8 @@
           targetVillageId: plan.targetVillageId,
           tradeAmount: plan.tradeAmount || 0,
           instant: plan.instant || plan.shipments.length === 0,
+          marketUrl,
+          remainingSec,
           shipments: plan.shipments.map(s => ({
             source: String(s.source),
             target: String(s.target),
@@ -3984,10 +3993,22 @@
     });
     // Content script polls locks/state via request/response events
     document.addEventListener('xbot:balancer:getLocks', () => {
+      const ppLocksRaw = loadPpLocks();
+      const ppPlansMap = new Map(loadPpPlans().map(p => [`${p.targetVillageId}:${p.payRes}`, p]));
+      const ppLocksWithEta = ppLocksRaw.map(lock => {
+        const plan = ppPlansMap.get(`${lock.villageId}:${lock.res}`);
+        let remainingSec = null;
+        if (plan && plan.lastArrivalEtaSec != null && plan.lastArrivalMsAtFetch != null) {
+          const elapsed = Math.floor((getNowMs() - plan.lastArrivalMsAtFetch) / 1000);
+          remainingSec = Math.max(0, Math.floor(plan.lastArrivalEtaSec) - elapsed);
+        }
+        const village = state?.villagesData?.find(v => String(v.id) === String(lock.villageId));
+        return { ...lock, villageName: village?.name || null, remainingSec };
+      });
       document.dispatchEvent(new CustomEvent('xbot:balancer:locks', {
         detail: {
           coordLocks: listManualCoordLocks(),
-          ppLocks:    loadPpLocks(),
+          ppLocks:    ppLocksWithEta,
         },
       }));
     });

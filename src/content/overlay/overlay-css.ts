@@ -1035,8 +1035,8 @@ select.input {
   white-space: nowrap;
 }
 .bal-th-village { min-width: 80px; }
-.bal-th-dist    { text-align: center; color: var(--n500); }
-.bal-th-res     { text-align: center; min-width: 72px; }
+.bal-th-dist    { text-align: center; color: var(--n200); }
+.bal-th-res     { text-align: right; min-width: 72px; }
  
 .bal-tr {
   border-bottom: 1px solid var(--n100);
@@ -1124,18 +1124,20 @@ select.input {
   gap: 5px;
   color: var(--n0);
 }
-/* PP Plans */
+ 
+/* ── PP Plans ────────────────────────────────────────────────────────────── */
 .bal-pp-plan {
   background: #f0f7ff;
   border-left: 3px solid var(--b400);
 }
 .bal-pp-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
   padding: 8px 14px 6px;
   flex-wrap: wrap;
 }
+/* PP badge — blue */
 .bal-pp-badge {
   background: var(--b-bg);
   border: 1px solid var(--b-br);
@@ -1147,13 +1149,70 @@ select.input {
   white-space: nowrap;
   flex-shrink: 0;
 }
+/* ⚡ NOW badge — amber, more urgent */
+.bal-pp-badge--now {
+  background: var(--a-bg);
+  border: 1px solid var(--a-br);
+  color: var(--a500);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 .bal-pp-desc {
   font-size: 12px;
   color: var(--n700);
   line-height: 1.4;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: wrap;
 }
+/* Market link */
+.bal-pp-market-link {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--b500);
+  text-decoration: none;
+  border: 1px solid var(--b-br);
+  background: var(--b-bg);
+  padding: 2px 8px;
+  border-radius: 5px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background var(--ease), border-color var(--ease);
+}
+.bal-pp-market-link:hover {
+  background: var(--b500);
+  color: #fff;
+  border-color: var(--b500);
+}
+/* ETA row */
+.bal-pp-eta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 14px 8px;
+}
+.bal-pp-eta-label {
+  font-size: 10.5px;
+  color: var(--n300);
+}
+.bal-pp-eta-val {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--mono);
+  color: var(--n500);
+}
+.bal-pp-eta-val--ready {
+  color: var(--g600);
+}
+/* PP shipment rows — subtle blue tint */
 .bal-tr--pp {
-  background: #f8fbff;
+  background: #f5f9ff;
 }
 .bal-tr--pp:hover {
   background: #e8f2ff;

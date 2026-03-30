@@ -30,7 +30,7 @@ interface BalancerSummary {
   links: number; merchants: number; avgDist: string;
 }
 interface CoordLock { key: string; wood: boolean; stone: boolean; iron: boolean; }
-interface PpLock { villageId: string; res: string; }
+interface PpLock { villageId: string; res: string; villageName?: string | null; remainingSec?: number | null; }
 interface PpShipment {
   source: string; target: string; sourceName: string; targetName: string;
   sourceUrl?: string; targetUrl?: string;
@@ -40,6 +40,7 @@ interface PpPlan {
   id: string; payRes: string; neededRes: string;
   targetVillageName: string; targetVillageId: string;
   tradeAmount: number; instant: boolean;
+  marketUrl?: string; remainingSec?: number | null;
   shipments: PpShipment[];
 }
 interface HqResult {
@@ -252,23 +253,43 @@ function SendRow({ link, idx, onSent }: { link: SendLink; idx: number; onSent:(i
 /* ─── PpPlanRows — PP plan header + shipment rows ───────────────────────── */
 function PpPlanRows({ plans, onSent }: { plans: PpPlan[]; onSent: (src:string,tgt:string,w:number,s:number,i:number)=>void }) {
   if (!plans.length) return null;
-  const RES_LABELS: Record<string,string> = { wood:"🪵 Wood", stone:"🧱 Stone", iron:"⚙️ Iron" };
   return (
     <>
       {plans.map(plan => (
         <div key={plan.id} className="cfg-section bal-pp-plan">
-          {/* Plan header */}
           <div className="bal-pp-header">
-            <span className="bal-badge bal-pp-badge">
-              {plan.instant ? "⚡ PP NOW" : "PP"}
+            <span className={`bal-badge ${plan.instant ? "bal-pp-badge--now" : "bal-pp-badge"}`}>
+              {plan.instant ? "⚡ NOW" : "PP"}
             </span>
             <span className="bal-pp-desc">
               {plan.instant
-                ? <><strong>{plan.targetVillageName}</strong> has <strong>{fmtNum(plan.tradeAmount)}</strong> {RES_LABELS[plan.payRes]} — trade instantly for {RES_LABELS[plan.neededRes]} (10pp)</>
-                : <>Move <strong>{fmtNum(plan.tradeAmount)}</strong> {RES_LABELS[plan.payRes]} → <strong>{plan.targetVillageName}</strong>, trade for {RES_LABELS[plan.neededRes]} (10pp)</>
+                ? <><strong>{plan.targetVillageName}</strong> already has{" "}
+                    <strong>{fmtNum(plan.tradeAmount)}</strong> <ResIcon res={plan.payRes as any}/>{" "}
+                    — trade for <ResIcon res={plan.neededRes as any}/> (10pp)</>
+                : <>Move <strong>{fmtNum(plan.tradeAmount)}</strong> <ResIcon res={plan.payRes as any}/>{" "}
+                    → <strong>{plan.targetVillageName}</strong>, trade for <ResIcon res={plan.neededRes as any}/> (10pp)</>
               }
             </span>
+            {plan.marketUrl && (
+              <a className="bal-pp-market-link" href={plan.marketUrl} target="_self" title="Open market">
+                🏪 Trade
+              </a>
+            )}
           </div>
+          {/* ETA countdown */}
+          {!plan.instant && plan.remainingSec != null && (
+            <div className="bal-pp-eta">
+              <span className="bal-pp-eta-label">Last merchant arrives in:</span>
+              <span className={`bal-pp-eta-val${plan.remainingSec <= 0 ? " bal-pp-eta-val--ready" : ""}`}>
+                {plan.remainingSec <= 0 ? "✓ Arrived — trade now!" : fmtHMS(plan.remainingSec)}
+              </span>
+            </div>
+          )}
+          {!plan.instant && plan.remainingSec == null && (
+            <div className="bal-pp-eta">
+              <span className="bal-pp-eta-label" style={{ color:"var(--n300)" }}>ETA: send shipments first to track arrival</span>
+            </div>
+          )}
           {/* Shipment rows */}
           {!plan.instant && plan.shipments.length > 0 && (
             <table className="bal-table" style={{ marginTop:4 }}>
@@ -391,7 +412,7 @@ function SendListTab({ links, summary, running, status, detected, clusterMap, pp
             <div className="bal-summary-row">
               <span className="bal-summary-label">Routes</span>
               <span className="bal-summary-val">
-                <strong>{summary.links}</strong> · ~<strong>{summary.merchants}</strong> merchants · avg <strong>{summary.avgDist}</strong>f
+                <strong>{summary.links}</strong> · <strong>{summary.merchants}</strong> merchants · avg <strong>{summary.avgDist}</strong>
               </span>
             </div>
           </div>
@@ -587,11 +608,18 @@ function LocksTab() {
           ? <div className="state-msg">No PP locks active.</div>
           : ppLocks.map((lock,i) => (
             <div key={i} className="bal-lock-row">
-              <span className="bal-lock-coord" style={{ fontFamily:"var(--mono)", fontSize:11 }}>#{lock.villageId}</span>
+              <span className="bal-lock-coord" style={{ fontFamily:"var(--mono)", fontSize:11 }}>
+                {lock.villageName || `#${lock.villageId}`}
+              </span>
               <span className="bal-lock-res" style={{ display:"flex", alignItems:"center", gap:4 }}>
                 <ResIcon res={lock.res as "wood"|"stone"|"iron"}/>
                 <span style={{ fontSize:11, color:"var(--n500)" }}>{lock.res}</span>
               </span>
+              {lock.remainingSec != null && (
+                <span style={{ fontSize:10.5, fontFamily:"var(--mono)", color: lock.remainingSec <= 0 ? "var(--g600)" : "var(--n400)", marginLeft:"auto" }}>
+                  {lock.remainingSec <= 0 ? "✓ Ready" : fmtHMS(lock.remainingSec)}
+                </span>
+              )}
             </div>
           ))
         }

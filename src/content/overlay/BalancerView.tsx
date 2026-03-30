@@ -46,7 +46,7 @@ const DEFAULT_SETTINGS: BalancerSettings = {
   isMinting: false, lowPoints: 3000, highPoints: 7000, highFarm: 23000,
   builtOutPercentage: 0.26, needsMorePercentage: 0.7, reservePerVillage: 0,
   maxDistance: 9999, hqPriorityEnabled: false, maxedOutPoints: 10471,
-  lowPointsLongQueueHours: 3, sendAllEnabled: false, sendAllIntervalMs: 500,
+  lowPointsLongQueueHours: 3, sendAllEnabled: false, sendAllIntervalMs: 300,
   useClusters: false, numClusters: 1, debugMode: false,
   premiumInstantEnabled: false, premiumThreshold: 50000,
   premiumMinTradeAmount: 70000, premiumMoveAmount: 300000,
@@ -99,6 +99,7 @@ function useBalancerState() {
   const [running, setRunning]   = useState(false);
   const [status, setStatus]     = useState("");
   const [detected, setDetected] = useState(false);
+  const [clusterMap, setClusterMap] = useState<{svg:string;legend:string;numClusters:number}|null>(null);
   const probeRef = useRef<ReturnType<typeof setInterval>|null>(null);
   useEffect(() => {
     const onState = (e: Event) => {
@@ -106,6 +107,7 @@ function useBalancerState() {
       setDetected(true);
       setLinks(d.cleanLinks ?? []); setSummary(d.summary ?? null);
       setRunning(d.running ?? false); setStatus(d.statusText ?? "");
+      setClusterMap((d as any).clusterMap ?? null);
     };
     const onLocks = () => { setDetected(true); if (probeRef.current) { clearInterval(probeRef.current); probeRef.current = null; } };
     document.addEventListener("xbot:balancer:state", onState);
@@ -123,7 +125,7 @@ function useBalancerState() {
       clearInterval(probe);
     };
   }, []);
-  return { links, summary, running, status, detected };
+  return { links, summary, running, status, detected, clusterMap };
 }
 
 /* ─── useLocksState ──────────────────────────────────────────────────────── */
@@ -234,10 +236,33 @@ function SendRow({ link, idx, onSent }: { link: SendLink; idx: number; onSent:(i
   );
 }
 
+/* ─── ClusterMap ─────────────────────────────────────────────────────────── */
+function ClusterMap({ data }: { data: {svg:string;legend:string;numClusters:number}|null }) {
+  const [open, setOpen] = useState(false);
+  if (!data) return null;
+  return (
+    <div className="cfg-section">
+      <button
+        className={`btn${open ? " btn-save btn-save--saved" : " btn-ghost"}`}
+        style={{ margin:"8px 14px", width:"calc(100% - 28px)", fontSize:11 }}
+        onClick={() => setOpen(o => !o)}>
+        {open ? "▲ Hide Cluster Map" : "▼ Cluster Map"}
+      </button>
+      {open && (
+        <div style={{ padding:"0 14px 10px", overflowX:"auto" }}>
+          <div dangerouslySetInnerHTML={{ __html: data.svg }} />
+          <div style={{ fontSize:10, color:"var(--n300)", marginTop:4 }}
+            dangerouslySetInnerHTML={{ __html: data.legend }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─── SendListTab ────────────────────────────────────────────────────────── */
-function SendListTab({ links, summary, running, status, detected, onRun }: {
+function SendListTab({ links, summary, running, status, detected, clusterMap, onRun }: {
   links:SendLink[]; summary:BalancerSummary|null; running:boolean;
-  status:string; detected:boolean; onRun:()=>void;
+  status:string; detected:boolean; clusterMap:{svg:string;legend:string;numClusters:number}|null; onRun:()=>void;
 }) {
   const [sentIds, setSentIds]       = useState<Set<number>>(new Set());
   const [sendingAll, setSendingAll] = useState(false);
@@ -291,6 +316,7 @@ function SendListTab({ links, summary, running, status, detected, onRun }: {
           </div>
         </div>
       )}
+      <ClusterMap data={clusterMap} />
       <div className="cfg-section">
         <div style={{ display:"flex", gap:6, padding:"10px 14px" }}>
           <button
@@ -591,7 +617,7 @@ function HQTab({ hqEnabled }: { hqEnabled: boolean }) {
 /* ─── BalancerView ───────────────────────────────────────────────────────── */
 export function BalancerView({ visible, onBack }: { visible:boolean; onBack:()=>void }): React.ReactElement {
   const [tab, setTab]                               = useState<Tab>("sendlist");
-  const { links, summary, running, status, detected } = useBalancerState();
+  const { links, summary, running, status, detected, clusterMap } = useBalancerState();
   const settings                                    = loadSettings();
   const handleRun = useCallback(() => dispatch("xbot:balancer:run"), []);
   const tabBtn = (t:Tab, label:string) => (
@@ -627,7 +653,7 @@ export function BalancerView({ visible, onBack }: { visible:boolean; onBack:()=>
           {tabBtn("hq","🏗 HQ")}
         </div>
       </div>
-      {tab==="sendlist" && <SendListTab links={links} summary={summary} running={running} status={status} detected={detected} onRun={handleRun}/>}
+      {tab==="sendlist" && <SendListTab links={links} summary={summary} running={running} status={status} detected={detected} clusterMap={clusterMap} onRun={handleRun}/>}
       {tab==="settings" && <SettingsTab/>}
       {tab==="locks"    && <LocksTab/>}
       {tab==="hq"       && <HQTab hqEnabled={settings.hqPriorityEnabled}/>}

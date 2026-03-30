@@ -362,9 +362,10 @@
         if (!Array.isArray(entries)) throw new Error("Invalid HQ data format");
 
         const map = new Map(entries);
-        // If timestamp is missing but data exists, treat as just-fetched rather than
-        // epoch-0 (which would trigger isFirstHqRun and force an immediate re-fetch).
-        const timestamp = parseInt(rawTs, 10) || Date.now();
+        // Validate timestamp — if missing or non-numeric, return 0 so the cache
+        // is treated as stale and re-fetched on next Run rather than appearing brand new.
+        const parsedTs = parseInt(rawTs, 10);
+        const timestamp = Number.isFinite(parsedTs) ? parsedTs : 0;
 
         return { data: map, timestamp };
       } catch (e) {
@@ -384,7 +385,7 @@
         }
         const entries = Array.from(map.entries());
         localStorage.setItem(HQ_DATA_KEY, JSON.stringify(entries));
-        localStorage.setItem(HQ_TIMESTAMP_KEY, String(timestamp || Date.now()));
+        localStorage.setItem(HQ_TIMESTAMP_KEY, String(Number.isFinite(timestamp) ? timestamp : Date.now()));
       } catch (e) {
         console.warn("Failed to save HQ data", e);
       }
@@ -1559,13 +1560,26 @@
         for (let q = 0; q < shortageResources.length; q++) {
           const need = shortageResources[q][sIdx][res] || 0;
           if (need <= 0) continue;
-          if (villagesData[q] && villagesData[q].points < lowPts)
-            priorityReceivers.push({ q, need });
+          const v         = villagesData[q];
+          const hqEntry   = state.hqData?.get(String(v?.id));
+          // queueEndsSec = 0 means can build right now (most urgent).
+          // Villages with no HQ data get Infinity — treated as least urgent.
+          const queueSecs = (hqEntry && state.hqBoostedIds?.has(String(v?.id)))
+            ? (hqEntry.queueEndsSec ?? Infinity)
+            : Infinity;
+          if (v && v.points < lowPts)
+            priorityReceivers.push({ q, need, queueSecs });
           else
-            normalReceivers.push({ q, need });
+            normalReceivers.push({ q, need, queueSecs });
         }
+        // Priority villages: largest shortage first (urgency already encoded by points)
         priorityReceivers.sort((a, b) => b.need - a.need);
-        normalReceivers.sort((a, b) => b.need - a.need);
+        // Normal villages: sort by queue urgency first (shorter queue = more urgent),
+        // then by shortage size as tiebreaker.
+        // queue=0 (ready to build now) → served first
+        // queue=20min → before queue=10h
+        // no HQ boost (Infinity) → served last among normal villages
+        normalReceivers.sort((a, b) => a.queueSecs - b.queueSecs || b.need - a.need);
 
         for (const rcv of [...priorityReceivers, ...normalReceivers]) {
           const { q } = rcv;
@@ -3669,18 +3683,24 @@
       const rawLinks  = cleanLinks ?? null;
 
       const mappedLinks = rawLinks
-        ? rawLinks.map((l) => ({
-            source:         String(l.source),
-            target:         String(l.target),
-            distance:       l.distance ?? 0,
-            wood:           l.wood  || 0,
-            stone:          l.stone || 0,
-            iron:           l.iron  || 0,
-            isHqBoost:      Boolean(state.hqBoostedIds?.has(String(l.target))),
-            isCrossCluster: Boolean(l.isCrossCluster),
-            sourceUrl:      byId?.get(String(l.source))?.url,
-            targetUrl:      byId?.get(String(l.target))?.url,
-          }))
+        ? rawLinks.map((l) => {
+            const srcV = byId?.get(String(l.source));
+            const tgtV = byId?.get(String(l.target));
+            return {
+              source:         srcV?.name ?? String(l.source),
+              target:         tgtV?.name ?? String(l.target),
+              sourceId:       String(l.source),
+              targetId:       String(l.target),
+              distance:       l.distance ?? 0,
+              wood:           l.wood  || 0,
+              stone:          l.stone || 0,
+              iron:           l.iron  || 0,
+              isHqBoost:      Boolean(state.hqBoostedIds?.has(String(l.target))),
+              isCrossCluster: Boolean(l.isCrossCluster),
+              sourceUrl:      srcV?.url,
+              targetUrl:      tgtV?.url,
+            };
+          })
         : prevLinks;
 
       const summary = (averages && rawLinks)
@@ -3700,11 +3720,25 @@
         : (window.TM_WH_BALANCER_STATE?.summary ?? null);
 
       // Also keep on window for same-world consumers (legacy jQuery dialog)
+      // Build a plain-object map for the React tooltip (Map is not serialisable via CustomEvent)
+      const villageLookup = {};
+      if (byId) {
+        byId.forEach((v, id) => {
+          villageLookup[id] = {
+            wood: v.wood, stone: v.stone, iron: v.iron,
+            warehouseCapacity: v.warehouseCapacity,
+            availableMerchants: v.availableMerchants,
+            totalMerchants: v.totalMerchants,
+            points: v.points,
+          };
+        });
+      }
       window.TM_WH_BALANCER_STATE = {
         running:    Boolean(running),
         statusText: statusText ?? '',
         cleanLinks: mappedLinks,
         summary,
+        villageLookup,
       };
 
       // Bridge to content-script world via CustomEvent on document
@@ -3863,10 +3897,11 @@
           })
         : rawVillagesData;
 
-      // Apply pending sends from this session: subtract from donor stock and
-      // credit to receiver incoming so duplicate routes aren't generated on re-run.
-      // Sends older than 2 hours are dropped (shipment long since arrived).
-      const nowMs = getNowMs;
+      // Compute averages BEFORE applying pendingSends stock reductions.
+      // pendingSends subtracts from donor stock which would lower the pool and
+      // produce artificially low averages — making donors appear to have more
+      // excess than they really do relative to the true account-wide average.
+      const nowMs = getNowMs();
       const twoHrsMs = 2 * 60 * 60 * 1000;
 
       const merchantSpeedFPH = ((typeof game_data !== "undefined" && game_data.speed) || 1) * 16;
@@ -3875,6 +3910,9 @@
         const etaMs = Math.max(twoHrsMs, (distFields / merchantSpeedFPH) * 3600 * 1000 * 1.5);
         return nowMs - s.sentAt < etaMs;
       });
+
+      // Averages use pre-pendingSends stock so the pool size is not distorted
+      const averages = computeTotalsAndAverages(villagesData, incomingRes);
 
       if (state.pendingSends.length) {
         const vById = new Map(villagesData.map(v => [String(v.id), v]));
@@ -3896,8 +3934,6 @@
           }
         }
       }
-
-      const averages = computeTotalsAndAverages(villagesData, incomingRes);
 
       const { excessResources, shortageResources, villageID } = computeExcessShortage(villagesData, incomingRes, averages);
 
@@ -3929,6 +3965,31 @@
       const isMintingMode = !!state.settings.isMinting;
       const isFirstHqRun = !state.hqLastFetchMs && (!state.hqData || state.hqData.size === 0);
       const isHqStale    = (nowMs - (state.hqLastFetchMs || 0)) > HQ_STALENESS_MS;
+
+      // HQ staleness diagnostic — always visible (not gated by debugMode)
+      if (state.settings.hqPriorityEnabled) {
+        if (isFirstHqRun) {
+          console.log('[WH] HQ: no cached data — will fetch fresh');
+        } else if (!Number.isFinite(nowMs) || !Number.isFinite(state.hqLastFetchMs)) {
+          console.warn('[WH] HQ: invalid timestamp detected — nowMs:', nowMs, 'hqLastFetchMs:', state.hqLastFetchMs, '— clearing cache');
+          localStorage.removeItem('tm_whbalancer_hq_timestamp_v1');
+          state.hqLastFetchMs = null;
+        } else {
+          const ageMs  = nowMs - state.hqLastFetchMs;
+          const ageMin = Math.floor(ageMs / 60000);
+          const ageSec = Math.floor((ageMs % 60000) / 1000);
+          const staleIn    = Math.max(0, HQ_STALENESS_MS - ageMs);
+          const staleInMin = Math.floor(staleIn / 60000);
+          const staleInSec = Math.floor((staleIn % 60000) / 1000);
+          console.log(
+            `[WH] HQ cache age: ${ageMin}m ${ageSec}s` +
+            (isHqStale
+              ? ' — STALE, will re-fetch'
+              : ` — fresh (stale in ${staleInMin}m ${staleInSec}s)`) +
+            ` | villages cached: ${state.hqData?.size ?? 0}`
+          );
+        }
+      }
 
       let shouldFetchHq = false;
 

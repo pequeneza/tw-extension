@@ -11,11 +11,17 @@ interface BalancerSettings {
   maxDistance: number; hqPriorityEnabled: boolean; maxedOutPoints: number;
   lowPointsLongQueueHours: number; sendAllEnabled: boolean; sendAllIntervalMs: number;
   useClusters: boolean; numClusters: number; debugMode: boolean;
+  premiumInstantEnabled: boolean; premiumThreshold: number;
+  premiumMinTradeAmount: number; premiumMoveAmount: number;
+  premiumMaxDistance: number; premiumMaxTargetFillPct: number;
+  premiumMaxPlansHardCap: number;
+  premiumDonorKeepPct: number; premiumDonorKeepMin: number; premiumDonorMinExcess: number;
 }
 interface SendLink {
   source: string; target: string; distance: number;
   wood: number; stone: number; iron: number;
   sourceUrl?: string; targetUrl?: string;
+  sourceId?: string; targetId?: string;
   isHqBoost?: boolean; isCrossCluster?: boolean;
 }
 interface BalancerSummary {
@@ -42,6 +48,11 @@ const DEFAULT_SETTINGS: BalancerSettings = {
   maxDistance: 9999, hqPriorityEnabled: false, maxedOutPoints: 10471,
   lowPointsLongQueueHours: 3, sendAllEnabled: false, sendAllIntervalMs: 500,
   useClusters: false, numClusters: 1, debugMode: false,
+  premiumInstantEnabled: false, premiumThreshold: 50000,
+  premiumMinTradeAmount: 70000, premiumMoveAmount: 300000,
+  premiumMaxDistance: 18, premiumMaxTargetFillPct: 0.90,
+  premiumMaxPlansHardCap: 12,
+  premiumDonorKeepPct: 0.10, premiumDonorKeepMin: 20000, premiumDonorMinExcess: 5000,
 };
 
 /* ─── Helpers ────────────────────────────────────────────────────────────── */
@@ -62,14 +73,21 @@ function fmtHMS(totalSec: number) {
   return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
 }
 
-/* ─── TW resource icon — native game sprite ─────────────────────────────── */
+/* ─── TW resource icon — direct CDN image URLs (works inside Shadow DOM) ─── */
+const RES_ICON_URLS: Record<string, string> = {
+  wood:  "https://dspt.innogamescdn.com/asset/b2fb8d33/graphic/holz.png",
+  stone: "https://dspt.innogamescdn.com/asset/b2fb8d33/graphic/lehm.png",
+  iron:  "https://dspt.innogamescdn.com/asset/b2fb8d33/graphic/eisen.png",
+};
 function ResIcon({ res, dim }: { res: "wood"|"stone"|"iron"; dim?: boolean }): React.ReactElement {
   return (
-    <span
-      className={`icon header ${res}`}
-      style={{ display:"inline-block", width:14, height:14, verticalAlign:"middle",
-               flexShrink:0, opacity: dim ? 0.25 : 1 }}
+    <img
+      src={RES_ICON_URLS[res]}
+      alt={res}
       title={res}
+      style={{ width:14, height:14, verticalAlign:"middle",
+               flexShrink:0, opacity: dim ? 0.25 : 1,
+               display:"inline-block" }}
     />
   );
 }
@@ -81,6 +99,7 @@ function useBalancerState() {
   const [running, setRunning]   = useState(false);
   const [status, setStatus]     = useState("");
   const [detected, setDetected] = useState(false);
+  const probeRef = useRef<ReturnType<typeof setInterval>|null>(null);
   useEffect(() => {
     const onState = (e: Event) => {
       const d = (e as CustomEvent).detail as { cleanLinks: SendLink[]; summary: BalancerSummary|null; running: boolean; statusText: string };
@@ -88,13 +107,20 @@ function useBalancerState() {
       setLinks(d.cleanLinks ?? []); setSummary(d.summary ?? null);
       setRunning(d.running ?? false); setStatus(d.statusText ?? "");
     };
-    const onLocks = () => setDetected(true);
+    const onLocks = () => { setDetected(true); if (probeRef.current) { clearInterval(probeRef.current); probeRef.current = null; } };
     document.addEventListener("xbot:balancer:state", onState);
     document.addEventListener("xbot:balancer:locks", onLocks, { once: true });
+
+    // Probe every second until the userscript responds — handles the race
+    // where the content script mounts before the userscript listener is ready.
     dispatch("xbot:balancer:getLocks");
+    probeRef.current = setInterval(() => dispatch("xbot:balancer:getLocks"), 1000);
+    const probe = probeRef.current;
+
     return () => {
       document.removeEventListener("xbot:balancer:state", onState);
       document.removeEventListener("xbot:balancer:locks", onLocks);
+      clearInterval(probe);
     };
   }, []);
   return { links, summary, running, status, detected };
@@ -121,6 +147,48 @@ function useLocksState() {
   return { coordLocks, ppLocks, refresh };
 }
 
+/* ─── VillageLink — clickable name with hover tooltip ────────────────────── */
+function VillageLink({ name, url, villageId }: { name: string; url?: string; villageId?: string }) {
+  const [hovered, setHovered] = useState(false);
+  const coords    = name.match(/\((\d+\|\d+)\)/)?.[1] ?? null;
+  const shortName = name.split(" ")[0] ?? name;
+
+  // Look up live village data from balancer state for the tooltip
+  const vData = villageId
+    ? (window as Window & { TM_WH_BALANCER_STATE?: { villageLookup?: Record<string,{
+        wood:number; stone:number; iron:number;
+        warehouseCapacity:number; availableMerchants:number; totalMerchants:number; points:number;
+      }> } }).TM_WH_BALANCER_STATE?.villageLookup?.[villageId]
+    : null;
+
+  return (
+    <span className="bal-vil-wrap"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}>
+      {url
+        ? <a className="bal-vil-link" href={url} target="_self">{shortName}</a>
+        : <span className="bal-vil-link bal-vil-link--nourl">{shortName}</span>
+      }
+      {coords && <span className="bal-vil-coords">{coords}</span>}
+      {hovered && (
+        <div className="bal-vil-tooltip">
+          <div className="bal-vil-tooltip-name">{name}</div>
+          {vData && (
+            <div className="bal-vil-tooltip-stats">
+              <span><ResIcon res="wood"/>  {fmtNum(vData.wood)}</span>
+              <span><ResIcon res="stone"/> {fmtNum(vData.stone)}</span>
+              <span><ResIcon res="iron"/>  {fmtNum(vData.iron)}</span>
+              <span style={{borderTop:"1px solid rgba(255,255,255,0.15)", paddingTop:3, marginTop:2, display:"block"}}>
+                WH: {fmtNum(vData.warehouseCapacity)} · Merch: {vData.availableMerchants}/{vData.totalMerchants} · Pts: {fmtNum(vData.points)}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+    </span>
+  );
+}
+
 /* ─── SendRow ────────────────────────────────────────────────────────────── */
 function SendRow({ link, idx, onSent }: { link: SendLink; idx: number; onSent:(i:number)=>void }) {
   const [sent, setSent] = useState(false);
@@ -132,27 +200,37 @@ function SendRow({ link, idx, onSent }: { link: SendLink; idx: number; onSent:(i
     setSent(true); onSent(idx);
   };
   return (
-    <div className={`bal-row${sent ? " bal-row--sent" : ""}`}>
-      <div className="bal-row-meta">
+    <tr className={`bal-tr${sent ? " bal-tr--sent" : ""}`}>
+      <td className="bal-td bal-td-badges">
         {link.isHqBoost      && <span className="bal-badge bal-badge--hq">HQ</span>}
         {link.isCrossCluster && <span className="bal-badge bal-badge--cc">CC</span>}
-        <span className="bal-row-name">{link.source}</span>
-        <span className="bal-row-arrow">→</span>
-        <span className="bal-row-name">{link.target}</span>
-        <span className="bal-row-dist">{link.distance}f</span>
-      </div>
-      <div className="bal-row-res">
+      </td>
+      <td className="bal-td bal-td-village">
+        <VillageLink name={link.source} url={link.sourceUrl} villageId={link.sourceId} />
+      </td>
+      <td className="bal-td bal-td-arrow">→</td>
+      <td className="bal-td bal-td-village">
+        <VillageLink name={link.target} url={link.targetUrl} villageId={link.targetId} />
+      </td>
+      <td className="bal-td bal-td-dist">{link.distance}</td>
+      <td className="bal-td bal-td-res">
         {link.wood  > 0 && <span className="bal-res"><ResIcon res="wood"  /> {fmtNum(link.wood)}</span>}
+      </td>
+      <td className="bal-td bal-td-res">
         {link.stone > 0 && <span className="bal-res"><ResIcon res="stone" /> {fmtNum(link.stone)}</span>}
+      </td>
+      <td className="bal-td bal-td-res">
         {link.iron  > 0 && <span className="bal-res"><ResIcon res="iron"  /> {fmtNum(link.iron)}</span>}
-      </div>
-      <button
-        className={`btn${sent ? " btn-save btn-save--saved" : " btn-save btn-save--dirty"}`}
-        style={{ flex:"none", padding:"5px 12px", fontSize:11 }}
-        onClick={handleSend} disabled={sent}>
-        {sent ? "✓ Sent" : "Send"}
-      </button>
-    </div>
+      </td>
+      <td className="bal-td bal-td-action">
+        <button
+          className={`btn${sent ? " btn-save btn-save--saved" : " btn-save btn-save--dirty"}`}
+          style={{ padding:"4px 10px", fontSize:11, whiteSpace:"nowrap" }}
+          onClick={handleSend} disabled={sent}>
+          {sent ? "✓" : "Send"}
+        </button>
+      </td>
+    </tr>
   );
 }
 
@@ -207,7 +285,7 @@ function SendListTab({ links, summary, running, status, detected, onRun }: {
             <div className="bal-summary-row">
               <span className="bal-summary-label">Routes</span>
               <span className="bal-summary-val">
-                <strong>{summary.links}</strong> · ~<strong>{summary.merchants}</strong> merchants · avg <strong>{summary.avgDist}</strong>f
+                <strong>{summary.links}</strong> · <strong>{summary.merchants}</strong> merchants · avg <strong>{summary.avgDist}</strong>
               </span>
             </div>
           </div>
@@ -238,11 +316,30 @@ function SendListTab({ links, summary, running, status, detected, onRun }: {
           </div>
         </div>
       )}
-      {links.map((link,i) => (
-        <div key={`${link.source}-${link.target}-${i}`} className="cfg-section" style={{ padding:0 }}>
-          <SendRow link={link} idx={i} onSent={onSent}/>
+      {links.length > 0 && (
+        <div className="cfg-section" style={{ padding:0 }}>
+          <table className="bal-table">
+            <thead>
+              <tr className="bal-thead-tr">
+                <th className="bal-th"></th>
+                <th className="bal-th bal-th-village">Source</th>
+                <th className="bal-th"></th>
+                <th className="bal-th bal-th-village">Target</th>
+                <th className="bal-th bal-th-dist">Dist</th>
+                <th className="bal-th bal-th-res"><ResIcon res="wood"/></th>
+                <th className="bal-th bal-th-res"><ResIcon res="stone"/></th>
+                <th className="bal-th bal-th-res"><ResIcon res="iron"/></th>
+                <th className="bal-th"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {links.map((link,i) => (
+                <SendRow key={`${link.source}-${link.target}-${i}`} link={link} idx={i} onSent={onSent}/>
+              ))}
+            </tbody>
+          </table>
         </div>
-      ))}
+      )}
     </div>
   );
 }
@@ -311,6 +408,24 @@ function SettingsTab() {
         {checkField("Enable spatial clustering", "useClusters")}
         {numField("Number of clusters", "numClusters")}
       </div>
+      <div className="cfg-section">
+        <div className="section-label">Instant Trade (PP) <span style={{fontSize:10,color:"var(--n300)",fontWeight:400}}>10pp</span></div>
+        {checkField("Enable Merchant Exchange", "premiumInstantEnabled")}
+        {numField("Imbalance threshold", "premiumThreshold", 1000, "Min global imbalance before a PP route is suggested")}
+        {numField("Min trade amount", "premiumMinTradeAmount", 1000)}
+        {numField("Max move amount", "premiumMoveAmount", 1000)}
+        {numField("Max donor distance (fields)", "premiumMaxDistance")}
+        {numField("Max target fill (%)", "premiumMaxTargetFillPct", 0.01)}
+        {numField("Max plans (hard cap)", "premiumMaxPlansHardCap")}
+        {numField("Donor keep (%)", "premiumDonorKeepPct", 0.01)}
+        {numField("Donor keep min", "premiumDonorKeepMin", 1000)}
+        {numField("Donor min excess", "premiumDonorMinExcess", 1000)}
+      </div>
+      <div className="cfg-section">
+        <div className="section-label">Send All</div>
+        {checkField("Enable Send All automation", "sendAllEnabled")}
+        {numField("Interval between sends (ms)", "sendAllIntervalMs")}
+      </div>
       <div className="cfg-section cfg-section-checks">
         <div className="section-label">Developer</div>
         {checkField("Debug logging (console)", "debugMode")}
@@ -354,9 +469,9 @@ function LocksTab() {
       </div>
       <div className="cfg-section">
         <div className="bal-section-header">
-          <span className="section-label">PP resource locks ({ppLocks.length})</span>
+          <span className="section-label" style={{ padding:0 }}>PP resource locks ({ppLocks.length})</span>
           {ppLocks.length > 0 && (
-            <button className="btn btn-ghost" style={{ flex:"none", padding:"4px 8px", fontSize:10.5 }}
+            <button className="btn btn-ghost" style={{ flex:"none", padding:"2px 8px", fontSize:10.5 }}
               onClick={clearAllPp}>Clear all</button>
           )}
         </div>

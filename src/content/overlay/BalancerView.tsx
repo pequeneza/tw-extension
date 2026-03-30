@@ -31,6 +31,17 @@ interface BalancerSummary {
 }
 interface CoordLock { key: string; wood: boolean; stone: boolean; iron: boolean; }
 interface PpLock { villageId: string; res: string; }
+interface PpShipment {
+  source: string; target: string; sourceName: string; targetName: string;
+  sourceUrl?: string; targetUrl?: string;
+  distance: number; wood: number; stone: number; iron: number;
+}
+interface PpPlan {
+  id: string; payRes: string; neededRes: string;
+  targetVillageName: string; targetVillageId: string;
+  tradeAmount: number; instant: boolean;
+  shipments: PpShipment[];
+}
 interface HqResult {
   villageName: string; villageUrl: string; villagePoints: number;
   buildingName: string; queueEndsSec: number;
@@ -46,7 +57,7 @@ const DEFAULT_SETTINGS: BalancerSettings = {
   isMinting: false, lowPoints: 3000, highPoints: 7000, highFarm: 23000,
   builtOutPercentage: 0.26, needsMorePercentage: 0.7, reservePerVillage: 0,
   maxDistance: 9999, hqPriorityEnabled: false, maxedOutPoints: 10471,
-  lowPointsLongQueueHours: 3, sendAllEnabled: false, sendAllIntervalMs: 300,
+  lowPointsLongQueueHours: 3, sendAllEnabled: false, sendAllIntervalMs: 500,
   useClusters: false, numClusters: 1, debugMode: false,
   premiumInstantEnabled: false, premiumThreshold: 50000,
   premiumMinTradeAmount: 70000, premiumMoveAmount: 300000,
@@ -100,6 +111,7 @@ function useBalancerState() {
   const [status, setStatus]     = useState("");
   const [detected, setDetected] = useState(false);
   const [clusterMap, setClusterMap] = useState<{svg:string;legend:string;numClusters:number}|null>(null);
+  const [ppPlans, setPpPlans] = useState<PpPlan[]>([]);
   const probeRef = useRef<ReturnType<typeof setInterval>|null>(null);
   useEffect(() => {
     const onState = (e: Event) => {
@@ -108,6 +120,7 @@ function useBalancerState() {
       setLinks(d.cleanLinks ?? []); setSummary(d.summary ?? null);
       setRunning(d.running ?? false); setStatus(d.statusText ?? "");
       setClusterMap((d as any).clusterMap ?? null);
+      setPpPlans((d as any).ppPlans ?? []);
     };
     const onLocks = () => { setDetected(true); if (probeRef.current) { clearInterval(probeRef.current); probeRef.current = null; } };
     document.addEventListener("xbot:balancer:state", onState);
@@ -125,7 +138,7 @@ function useBalancerState() {
       clearInterval(probe);
     };
   }, []);
-  return { links, summary, running, status, detected, clusterMap };
+  return { links, summary, running, status, detected, clusterMap, ppPlans };
 }
 
 /* ─── useLocksState ──────────────────────────────────────────────────────── */
@@ -236,6 +249,74 @@ function SendRow({ link, idx, onSent }: { link: SendLink; idx: number; onSent:(i
   );
 }
 
+/* ─── PpPlanRows — PP plan header + shipment rows ───────────────────────── */
+function PpPlanRows({ plans, onSent }: { plans: PpPlan[]; onSent: (src:string,tgt:string,w:number,s:number,i:number)=>void }) {
+  if (!plans.length) return null;
+  const RES_LABELS: Record<string,string> = { wood:"🪵 Wood", stone:"🧱 Stone", iron:"⚙️ Iron" };
+  return (
+    <>
+      {plans.map(plan => (
+        <div key={plan.id} className="cfg-section bal-pp-plan">
+          {/* Plan header */}
+          <div className="bal-pp-header">
+            <span className="bal-badge bal-pp-badge">
+              {plan.instant ? "⚡ PP NOW" : "PP"}
+            </span>
+            <span className="bal-pp-desc">
+              {plan.instant
+                ? <><strong>{plan.targetVillageName}</strong> has <strong>{fmtNum(plan.tradeAmount)}</strong> {RES_LABELS[plan.payRes]} — trade instantly for {RES_LABELS[plan.neededRes]} (10pp)</>
+                : <>Move <strong>{fmtNum(plan.tradeAmount)}</strong> {RES_LABELS[plan.payRes]} → <strong>{plan.targetVillageName}</strong>, trade for {RES_LABELS[plan.neededRes]} (10pp)</>
+              }
+            </span>
+          </div>
+          {/* Shipment rows */}
+          {!plan.instant && plan.shipments.length > 0 && (
+            <table className="bal-table" style={{ marginTop:4 }}>
+              <tbody>
+                {plan.shipments.map((s, i) => (
+                  <PpShipmentRow key={i} shipment={s} onSent={onSent} />
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      ))}
+    </>
+  );
+}
+
+function PpShipmentRow({ shipment: s, onSent }: { shipment: PpShipment; onSent:(src:string,tgt:string,w:number,st:number,i:number)=>void }) {
+  const [sent, setSent] = useState(false);
+  const handleSend = () => {
+    if (sent) return;
+    dispatch("xbot:balancer:send", { src:s.source, tgt:s.target, wood:s.wood, stone:s.stone, iron:s.iron, idx:-1 });
+    setSent(true);
+    onSent(s.source, s.target, s.wood, s.stone, s.iron);
+  };
+  return (
+    <tr className={`bal-tr bal-tr--pp${sent ? " bal-tr--sent" : ""}`}>
+      <td className="bal-td bal-td-badges"/>
+      <td className="bal-td bal-td-village">
+        <VillageLink name={s.sourceName} url={s.sourceUrl} villageId={s.source}/>
+      </td>
+      <td className="bal-td bal-td-arrow">→</td>
+      <td className="bal-td bal-td-village">
+        <VillageLink name={s.targetName} url={s.targetUrl} villageId={s.target}/>
+      </td>
+      <td className="bal-td bal-td-dist">{s.distance}</td>
+      <td className="bal-td bal-td-res">{s.wood  > 0 && <span className="bal-res"><ResIcon res="wood"/>  {fmtNum(s.wood)}</span>}</td>
+      <td className="bal-td bal-td-res">{s.stone > 0 && <span className="bal-res"><ResIcon res="stone"/> {fmtNum(s.stone)}</span>}</td>
+      <td className="bal-td bal-td-res">{s.iron  > 0 && <span className="bal-res"><ResIcon res="iron"/>  {fmtNum(s.iron)}</span>}</td>
+      <td className="bal-td bal-td-action">
+        <button className={`btn${sent ? " btn-save btn-save--saved" : " btn-save btn-save--dirty"}`}
+          style={{ padding:"4px 10px", fontSize:11 }} onClick={handleSend} disabled={sent}>
+          {sent ? "✓" : "Send"}
+        </button>
+      </td>
+    </tr>
+  );
+}
+
 /* ─── ClusterMap ─────────────────────────────────────────────────────────── */
 function ClusterMap({ data }: { data: {svg:string;legend:string;numClusters:number}|null }) {
   const [open, setOpen] = useState(false);
@@ -260,9 +341,9 @@ function ClusterMap({ data }: { data: {svg:string;legend:string;numClusters:numb
 }
 
 /* ─── SendListTab ────────────────────────────────────────────────────────── */
-function SendListTab({ links, summary, running, status, detected, clusterMap, onRun }: {
+function SendListTab({ links, summary, running, status, detected, clusterMap, ppPlans, onRun }: {
   links:SendLink[]; summary:BalancerSummary|null; running:boolean;
-  status:string; detected:boolean; clusterMap:{svg:string;legend:string;numClusters:number}|null; onRun:()=>void;
+  status:string; detected:boolean; clusterMap:{svg:string;legend:string;numClusters:number}|null; ppPlans:PpPlan[]; onRun:()=>void;
 }) {
   const [sentIds, setSentIds]       = useState<Set<number>>(new Set());
   const [sendingAll, setSendingAll] = useState(false);
@@ -310,7 +391,7 @@ function SendListTab({ links, summary, running, status, detected, clusterMap, on
             <div className="bal-summary-row">
               <span className="bal-summary-label">Routes</span>
               <span className="bal-summary-val">
-                <strong>{summary.links}</strong> · <strong>{summary.merchants}</strong> merchants · avg <strong>{summary.avgDist}</strong>
+                <strong>{summary.links}</strong> · ~<strong>{summary.merchants}</strong> merchants · avg <strong>{summary.avgDist}</strong>f
               </span>
             </div>
           </div>
@@ -342,6 +423,7 @@ function SendListTab({ links, summary, running, status, detected, clusterMap, on
           </div>
         </div>
       )}
+      <PpPlanRows plans={ppPlans} onSent={() => {}} />
       {links.length > 0 && (
         <div className="cfg-section" style={{ padding:0 }}>
           <table className="bal-table">
@@ -617,7 +699,7 @@ function HQTab({ hqEnabled }: { hqEnabled: boolean }) {
 /* ─── BalancerView ───────────────────────────────────────────────────────── */
 export function BalancerView({ visible, onBack }: { visible:boolean; onBack:()=>void }): React.ReactElement {
   const [tab, setTab]                               = useState<Tab>("sendlist");
-  const { links, summary, running, status, detected, clusterMap } = useBalancerState();
+  const { links, summary, running, status, detected, clusterMap, ppPlans } = useBalancerState();
   const settings                                    = loadSettings();
   const handleRun = useCallback(() => dispatch("xbot:balancer:run"), []);
   const tabBtn = (t:Tab, label:string) => (
@@ -653,7 +735,7 @@ export function BalancerView({ visible, onBack }: { visible:boolean; onBack:()=>
           {tabBtn("hq","🏗 HQ")}
         </div>
       </div>
-      {tab==="sendlist" && <SendListTab links={links} summary={summary} running={running} status={status} detected={detected} clusterMap={clusterMap} onRun={handleRun}/>}
+      {tab==="sendlist" && <SendListTab links={links} summary={summary} running={running} status={status} detected={detected} clusterMap={clusterMap} ppPlans={ppPlans} onRun={handleRun}/>}
       {tab==="settings" && <SettingsTab/>}
       {tab==="locks"    && <LocksTab/>}
       {tab==="hq"       && <HQTab hqEnabled={settings.hqPriorityEnabled}/>}

@@ -3823,6 +3823,36 @@
       const clusterMapData = (rawLinks && byId)
         ? computeClusterMapSvg(state?.villagesData || [], rawLinks)
         : (window.TM_WH_BALANCER_STATE?.clusterMap ?? null);
+      const prevPpPlans = window.TM_WH_BALANCER_STATE?.ppPlans ?? [];
+
+      // Map PP plan shipments to use village names for the React panel
+      const ppPlansForReact = loadPpPlans().map(plan => {
+        const srcV = id => {
+          const v = state?.villagesData?.find(vv => String(vv.id) === String(id));
+          return v ? { name: v.name, url: v.url } : { name: String(id), url: null };
+        };
+        return {
+          id: plan.id,
+          payRes: plan.payRes,
+          neededRes: plan.neededRes,
+          targetVillageName: plan.targetVillageName,
+          targetVillageId: plan.targetVillageId,
+          tradeAmount: plan.tradeAmount || 0,
+          instant: plan.instant || plan.shipments.length === 0,
+          shipments: plan.shipments.map(s => ({
+            source: String(s.source),
+            target: String(s.target),
+            sourceName: srcV(s.source).name,
+            targetName: srcV(s.target).name,
+            sourceUrl: srcV(s.source).url,
+            targetUrl: srcV(s.target).url,
+            distance: s.distance || 0,
+            wood: s.wood || 0,
+            stone: s.stone || 0,
+            iron: s.iron || 0,
+          })),
+        };
+      });
 
       window.TM_WH_BALANCER_STATE = {
         running:    Boolean(running),
@@ -3831,9 +3861,13 @@
         summary,
         villageLookup,
         clusterMap: clusterMapData,
+        ppPlans:    ppPlansForReact,
       };
 
       // Bridge to content-script world via CustomEvent on document
+      // Merge previous ppPlans when running (rawLinks is null during fetch)
+      if (!rawLinks) window.TM_WH_BALANCER_STATE.ppPlans = prevPpPlans;
+
       document.dispatchEvent(new CustomEvent('xbot:balancer:state', {
         detail: window.TM_WH_BALANCER_STATE,
       }));

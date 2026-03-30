@@ -1124,4 +1124,38 @@ select.input {
   gap: 5px;
   color: var(--n0);
 }
+/* PP Plans */
+.bal-pp-plan {
+  background: #f0f7ff;
+  border-left: 3px solid var(--b400);
+}
+.bal-pp-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 14px 6px;
+  flex-wrap: wrap;
+}
+.bal-pp-badge {
+  background: var(--b-bg);
+  border: 1px solid var(--b-br);
+  color: var(--b500);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.bal-pp-desc {
+  font-size: 12px;
+  color: var(--n700);
+  line-height: 1.4;
+}
+.bal-tr--pp {
+  background: #f8fbff;
+}
+.bal-tr--pp:hover {
+  background: #e8f2ff;
+}
 `;

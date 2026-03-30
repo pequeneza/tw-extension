@@ -173,7 +173,9 @@ function VillageLink({ name, url, villageId }: { name: string; url?: string; vil
   const vData = villageId
     ? (window as Window & { TM_WH_BALANCER_STATE?: { villageLookup?: Record<string,{
         wood:number; stone:number; iron:number;
+        rawWood:number|null; rawStone:number|null; rawIron:number|null; reserve:number;
         warehouseCapacity:number; availableMerchants:number; totalMerchants:number; points:number;
+        farmSpaceUsed:number|null; farmSpaceTotal:number|null;
       }> } }).TM_WH_BALANCER_STATE?.villageLookup?.[villageId]
     : null;
 
@@ -189,15 +191,32 @@ function VillageLink({ name, url, villageId }: { name: string; url?: string; vil
       {hovered && (
         <div className="bal-vil-tooltip">
           <div className="bal-vil-tooltip-name">{name}</div>
-          {vData && (
+          {vData ? (
             <div className="bal-vil-tooltip-stats">
-              <span><ResIcon res="wood"/>  {fmtNum(vData.wood)}</span>
-              <span><ResIcon res="stone"/> {fmtNum(vData.stone)}</span>
-              <span><ResIcon res="iron"/>  {fmtNum(vData.iron)}</span>
-              <span style={{borderTop:"1px solid rgba(255,255,255,0.15)", paddingTop:3, marginTop:2, display:"block"}}>
-                WH: {fmtNum(vData.warehouseCapacity)} · Merch: {vData.availableMerchants}/{vData.totalMerchants} · Pts: {fmtNum(vData.points)}
-              </span>
+              <div className="bal-vil-tooltip-res">
+                <span><ResIcon res="wood"/>  {fmtNum(vData.rawWood ?? vData.wood)}</span>
+                <span><ResIcon res="stone"/> {fmtNum(vData.rawStone ?? vData.stone)}</span>
+                <span><ResIcon res="iron"/>  {fmtNum(vData.rawIron ?? vData.iron)}</span>
+              </div>
+              {vData.reserve > 0 && (
+                <div className="bal-vil-tooltip-reserve">
+                  Reserve {fmtNum(vData.reserve)} → available:{" "}
+                  {fmtNum(vData.wood)} / {fmtNum(vData.stone)} / {fmtNum(vData.iron)}
+                </div>
+              )}
+              <div className="bal-vil-tooltip-meta">
+                WH: <strong>{fmtNum(vData.warehouseCapacity)}</strong>
+                {" · "}Merch: <strong>{vData.availableMerchants}/{vData.totalMerchants}</strong>
+                {" · "}Pts: <strong>{fmtNum(vData.points)}</strong>
+              </div>
+              {vData.farmSpaceUsed != null && (
+                <div className="bal-vil-tooltip-meta">
+                  Farm: <strong>{vData.farmSpaceUsed}/{vData.farmSpaceTotal}</strong>
+                </div>
+              )}
             </div>
+          ) : (
+            <div className="bal-vil-tooltip-reserve">No data — run balancer first</div>
           )}
         </div>
       )}
@@ -270,7 +289,7 @@ function PpPlanRows({ plans, onSent }: { plans: PpPlan[]; onSent: (src:string,tg
                     → <strong>{plan.targetVillageName}</strong>, trade for <ResIcon res={plan.neededRes as any}/> (10pp)</>
               }
             </span>
-            {plan.marketUrl && (
+            {plan.instant && plan.marketUrl && (
               <a className="bal-pp-market-link" href={plan.marketUrl} target="_self" title="Open market">
                 🏪 Trade
               </a>
@@ -293,6 +312,19 @@ function PpPlanRows({ plans, onSent }: { plans: PpPlan[]; onSent: (src:string,tg
           {/* Shipment rows */}
           {!plan.instant && plan.shipments.length > 0 && (
             <table className="bal-table" style={{ marginTop:4 }}>
+              <thead>
+                <tr className="bal-thead-tr bal-thead-tr--pp">
+                  <th className="bal-th"></th>
+                  <th className="bal-th bal-th-village">Source</th>
+                  <th className="bal-th"></th>
+                  <th className="bal-th bal-th-village">Target</th>
+                  <th className="bal-th bal-th-dist">Dist</th>
+                  <th className="bal-th bal-th-res"><ResIcon res="wood"/></th>
+                  <th className="bal-th bal-th-res"><ResIcon res="stone"/></th>
+                  <th className="bal-th bal-th-res"><ResIcon res="iron"/></th>
+                  <th className="bal-th"></th>
+                </tr>
+              </thead>
               <tbody>
                 {plan.shipments.map((s, i) => (
                   <PpShipmentRow key={i} shipment={s} onSent={onSent} />

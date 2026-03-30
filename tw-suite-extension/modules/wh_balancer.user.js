@@ -3809,14 +3809,23 @@
       // Also keep on window for same-world consumers (legacy jQuery dialog)
       // Build a plain-object map for the React tooltip (Map is not serialisable via CustomEvent)
       const villageLookup = {};
+      const rawById = new Map((state.rawVillagesData || []).map(r => [String(r.id), r]));
+      const reserve = state?.settings?.reservePerVillage || 0;
       if (byId) {
         byId.forEach((v, id) => {
+          const raw = rawById.get(id);
           villageLookup[id] = {
             wood: v.wood, stone: v.stone, iron: v.iron,
+            rawWood:  raw ? raw.wood  : null,
+            rawStone: raw ? raw.stone : null,
+            rawIron:  raw ? raw.iron  : null,
+            reserve,
             warehouseCapacity: v.warehouseCapacity,
             availableMerchants: v.availableMerchants,
             totalMerchants: v.totalMerchants,
             points: v.points,
+            farmSpaceUsed: v.farmSpaceUsed ?? null,
+            farmSpaceTotal: v.farmSpaceTotal ?? null,
           };
         });
       }

@@ -986,7 +986,7 @@ select.input {
 .bal-summary-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .bal-summary-label { font-size: 10.5px; font-weight: 600; color: var(--n300); text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; flex-shrink: 0; }
 .bal-summary-val   { font-size: 11.5px; color: var(--n700); font-family: var(--mono); text-align: right; }
- 
+
 /* Badges */
 .bal-badge        { display: inline-flex; align-items: center; padding: 1px 5px; border-radius: 4px; font-size: 10px; font-weight: 700; flex-shrink: 0; }
 .bal-badge--hq    { background: #fff3b0; border: 1px solid #c8a800; color: #7a6000; }
@@ -1035,7 +1035,7 @@ select.input {
   white-space: nowrap;
 }
 .bal-th-village { min-width: 80px; }
-.bal-th-dist    { text-align: center; color: var(--n200); }
+.bal-th-dist    { text-align: center; color: var(--n500); }
 .bal-th-res     { text-align: right; min-width: 72px; }
  
 .bal-tr {
@@ -1112,17 +1112,46 @@ select.input {
 }
  
 .bal-vil-tooltip-stats {
-  margin-top: 5px;
+  margin-top: 6px;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   font-size: 11px;
+  min-width: 200px;
 }
-.bal-vil-tooltip-stats span {
+.bal-vil-tooltip-res {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.bal-vil-tooltip-res span {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 3px;
   color: var(--n0);
+  font-family: var(--mono);
+}
+.bal-vil-tooltip-reserve {
+  font-size: 10px;
+  color: rgba(255,255,255,0.5);
+  margin-top: 1px;
+}
+.bal-vil-tooltip-meta {
+  font-size: 11px;
+  color: rgba(255,255,255,0.8);
+  margin-top: 2px;
+  border-top: 1px solid rgba(255,255,255,0.15);
+  padding-top: 4px;
+}
+.bal-vil-tooltip-meta strong {
+  color: var(--n0);
+}
+/* PP thead — distinct from normal thead */
+.bal-thead-tr--pp {
+  background: #dbeafe;
+}
+.bal-thead-tr--pp .bal-th {
+  color: var(--b500);
 }
  
 /* ── PP Plans ────────────────────────────────────────────────────────────── */

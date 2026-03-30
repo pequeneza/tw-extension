@@ -3928,7 +3928,7 @@
         return;
       }
       document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
-        detail: { loading: true, progress: 0, total: 0 },
+        detail: { loading: true, progress: 0, total: state.villagesData ? state.villagesData.filter(v => v.points >= (state?.settings?.lowPoints||0) && v.points < (state?.settings?.maxedOutPoints||99999)).length : 0 },
       }));
       try {
         const cachedHqData = state.hqData;

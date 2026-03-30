@@ -71,6 +71,20 @@ const DEFAULT_SETTINGS: BalancerSettings = {
 function dispatch(name: string, detail?: unknown) {
   document.dispatchEvent(new CustomEvent(name, detail !== undefined ? { detail } : undefined));
 }
+
+// Module-level cache updated on every xbot:balancer:state event.
+// VillageLink reads from here — avoids cross-world window access.
+type VillageData = {
+  wood:number; stone:number; iron:number;
+  rawWood:number|null; rawStone:number|null; rawIron:number|null; reserve:number;
+  warehouseCapacity:number; availableMerchants:number; totalMerchants:number; points:number;
+  farmSpaceUsed:number|null; farmSpaceTotal:number|null;
+};
+let _villageLookup: Record<string, VillageData> = {};
+function getVillageData(id?: string): VillageData | null {
+  if (!id) return null;
+  return _villageLookup[id] ?? null;
+}
 function loadSettings(): BalancerSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -122,6 +136,7 @@ function useBalancerState() {
       setRunning(d.running ?? false); setStatus(d.statusText ?? "");
       setClusterMap((d as any).clusterMap ?? null);
       setPpPlans((d as any).ppPlans ?? []);
+      if ((d as any).villageLookup) _villageLookup = (d as any).villageLookup;
     };
     const onLocks = () => { setDetected(true); if (probeRef.current) { clearInterval(probeRef.current); probeRef.current = null; } };
     document.addEventListener("xbot:balancer:state", onState);
@@ -169,15 +184,7 @@ function VillageLink({ name, url, villageId }: { name: string; url?: string; vil
   const coords    = name.match(/\((\d+\|\d+)\)/)?.[1] ?? null;
   const shortName = name.split(" ")[0] ?? name;
 
-  // Look up live village data from balancer state for the tooltip
-  const vData = villageId
-    ? (window as Window & { TM_WH_BALANCER_STATE?: { villageLookup?: Record<string,{
-        wood:number; stone:number; iron:number;
-        rawWood:number|null; rawStone:number|null; rawIron:number|null; reserve:number;
-        warehouseCapacity:number; availableMerchants:number; totalMerchants:number; points:number;
-        farmSpaceUsed:number|null; farmSpaceTotal:number|null;
-      }> } }).TM_WH_BALANCER_STATE?.villageLookup?.[villageId]
-    : null;
+  const vData = getVillageData(villageId);
 
   return (
     <span className="bal-vil-wrap"
@@ -234,8 +241,9 @@ function SendRow({ link, idx, onSent }: { link: SendLink; idx: number; onSent:(i
     dispatch("xbot:balancer:send", { src:srcId, tgt:tgtId, wood:link.wood, stone:link.stone, iron:link.iron, idx });
     setSent(true); onSent(idx);
   };
+  if (sent) return null;
   return (
-    <tr className={`bal-tr${sent ? " bal-tr--sent" : ""}`}>
+    <tr className="bal-tr">
       <td className="bal-td bal-td-badges">
         {link.isHqBoost      && <span className="bal-badge bal-badge--hq">HQ</span>}
         {link.isCrossCluster && <span className="bal-badge bal-badge--cc">CC</span>}
@@ -258,11 +266,10 @@ function SendRow({ link, idx, onSent }: { link: SendLink; idx: number; onSent:(i
         {link.iron  > 0 && <span className="bal-res"><ResIcon res="iron"  /> {fmtNum(link.iron)}</span>}
       </td>
       <td className="bal-td bal-td-action">
-        <button
-          className={`btn${sent ? " btn-save btn-save--saved" : " btn-save btn-save--dirty"}`}
+        <button className="btn btn-save btn-save--dirty"
           style={{ padding:"4px 10px", fontSize:11, whiteSpace:"nowrap" }}
-          onClick={handleSend} disabled={sent}>
-          {sent ? "✓" : "Send"}
+          onClick={handleSend}>
+          Send
         </button>
       </td>
     </tr>
@@ -304,9 +311,9 @@ function PpPlanRows({ plans, onSent }: { plans: PpPlan[]; onSent: (src:string,tg
               </span>
             </div>
           )}
-          {!plan.instant && plan.remainingSec == null && (
+          {!plan.instant && plan.remainingSec == null && plan.shipments.length > 0 && (
             <div className="bal-pp-eta">
-              <span className="bal-pp-eta-label" style={{ color:"var(--n300)" }}>ETA: send shipments first to track arrival</span>
+              <span className="bal-pp-eta-label" style={{ color:"var(--n300)" }}>ETA: send shipments to track arrival</span>
             </div>
           )}
           {/* Shipment rows */}
@@ -346,8 +353,9 @@ function PpShipmentRow({ shipment: s, onSent }: { shipment: PpShipment; onSent:(
     setSent(true);
     onSent(s.source, s.target, s.wood, s.stone, s.iron);
   };
+  if (sent) return null;
   return (
-    <tr className={`bal-tr bal-tr--pp${sent ? " bal-tr--sent" : ""}`}>
+    <tr className="bal-tr bal-tr--pp">
       <td className="bal-td bal-td-badges"/>
       <td className="bal-td bal-td-village">
         <VillageLink name={s.sourceName} url={s.sourceUrl} villageId={s.source}/>
@@ -361,9 +369,9 @@ function PpShipmentRow({ shipment: s, onSent }: { shipment: PpShipment; onSent:(
       <td className="bal-td bal-td-res">{s.stone > 0 && <span className="bal-res"><ResIcon res="stone"/> {fmtNum(s.stone)}</span>}</td>
       <td className="bal-td bal-td-res">{s.iron  > 0 && <span className="bal-res"><ResIcon res="iron"/>  {fmtNum(s.iron)}</span>}</td>
       <td className="bal-td bal-td-action">
-        <button className={`btn${sent ? " btn-save btn-save--saved" : " btn-save btn-save--dirty"}`}
-          style={{ padding:"4px 10px", fontSize:11 }} onClick={handleSend} disabled={sent}>
-          {sent ? "✓" : "Send"}
+        <button className="btn btn-save btn-save--dirty"
+          style={{ padding:"4px 10px", fontSize:11 }} onClick={handleSend}>
+          Send
         </button>
       </td>
     </tr>
@@ -444,7 +452,7 @@ function SendListTab({ links, summary, running, status, detected, clusterMap, pp
             <div className="bal-summary-row">
               <span className="bal-summary-label">Routes</span>
               <span className="bal-summary-val">
-                <strong>{summary.links}</strong> · <strong>{summary.merchants}</strong> merchants · avg <strong>{summary.avgDist}</strong>
+                <strong>{summary.links}</strong> · ~<strong>{summary.merchants}</strong> merchants · avg <strong>{summary.avgDist}</strong>f
               </span>
             </div>
           </div>

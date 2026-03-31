@@ -11,6 +11,7 @@ interface BalancerSettings {
   maxDistance: number; hqPriorityEnabled: boolean; maxedOutPoints: number;
   lowPointsLongQueueHours: number; sendAllEnabled: boolean; sendAllIntervalMs: number;
   useClusters: boolean; numClusters: number; debugMode: boolean;
+  pendingSendsTTLHours: number;
   premiumInstantEnabled: boolean; premiumStagingStrategy: string; premiumThreshold: number;
   premiumMinTradeAmount: number; premiumMoveAmount: number;
   premiumMaxDistance: number; premiumMaxTargetFillPct: number;
@@ -64,6 +65,7 @@ const DEFAULT_SETTINGS: BalancerSettings = {
   maxDistance: 9999, hqPriorityEnabled: false, maxedOutPoints: 10471,
   lowPointsLongQueueHours: 3, sendAllEnabled: false, sendAllIntervalMs: 500,
   useClusters: false, numClusters: 1, debugMode: false,
+  pendingSendsTTLHours: 2,
   premiumInstantEnabled: false, premiumStagingStrategy: "weighted", premiumThreshold: 50000,
   premiumMinTradeAmount: 70000, premiumMoveAmount: 300000,
   premiumMaxDistance: 18, premiumMaxTargetFillPct: 0.90,
@@ -628,7 +630,7 @@ function SettingsTab() {
           "Bypasses all thresholds and balances purely by average. Use when manually filling warehouses.")}
         {numField("Reserve per village (not sent)", "reservePerVillage", 1000,
           "Amount subtracted from every village's stock before computing excess. These resources are never sent.")}
-        {numField("Global max distance (fields)", "maxDistance",60,
+        {numField("Global max distance (fields)", "maxDistance",50,
           "Routes longer than this distance will be skipped entirely.")}
       </div>
       <div className="cfg-section">
@@ -667,8 +669,7 @@ function SettingsTab() {
         {selectField("Routing strategy", "premiumStagingStrategy", [
           { value:"weighted", label:"Weighted donors" },
           { value:"largest",  label:"Largest donor" },
-        ], 
-        "Weighted donors: splits the required amount across multiple donors, prioritising closer ones. More reliable when merchants are spread out.Largest donor: uses the biggest single donor first. Fewer shipments but can fail if that donor has low merchants or is far away.")}
+        ], "Weighted donors: splits the required amount across multiple donors, prioritising closer ones. More reliable when merchants are spread out.Largest donor: uses the biggest single donor first. Fewer shipments but can fail if that donor has low merchants or is far away.")}
         {numField("Imbalance threshold", "premiumThreshold", 1000,
           "Minimum global imbalance (most abundant minus least abundant resource) required before a PP plan is attempted.")}
         {numField("Min trade amount", "premiumMinTradeAmount", 1000,
@@ -695,6 +696,8 @@ function SettingsTab() {
       </div>
       <div className="cfg-section cfg-section-checks">
         <div className="section-label">Developer</div>
+        {numField("Pending sends TTL (hours)", "pendingSendsTTLHours", 0.25,
+          "How long a sent shipment is remembered and deducted from the donor\'s stock on re-runs.\n\nToo low (e.g. 0.5h): sends expire before the resources arrive — the donor village appears to have excess again and may be re-routed, creating duplicate sends.\n\nToo high (e.g. 12h): sends linger after arrival — the donor\'s stock looks artificially low and it won\'t be used as a donor even when it could be.\n\nDefault 2h is a safe floor. For very distant villages (50+ fields) the actual travel time is used instead.")}
         {checkField("Debug logging (console)", "debugMode",
           "Enables verbose [WH] console logging for algorithm steps, HQ boosts, cluster assignments and send decisions.")}
       </div>

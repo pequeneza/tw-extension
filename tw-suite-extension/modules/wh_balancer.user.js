@@ -1018,8 +1018,60 @@
           const points = parseIntSafe(allWoodObjects[i]?.parentElement?.previousElementSibling?.innerText);
 
           const vNode = allVillages[i];
+
+          // Queue end time — read from the last <li> in ul.order_queue for this village.
+          // data-title format: "Building name - a 02.04. às 18:44" or "Building name - hoje às 22:32"
+          // or "Building name - amanhã às 06:54". Parse into seconds-from-now.
+          let prodQueueEndsSec = 0;
+          const villageId = vNode.dataset.id;
+          const $queueUl = $page.find(`#building_order_${villageId}`);
+          if ($queueUl.length) {
+            const $lastLi = $queueUl.find("li.order").last();
+            const rawTitle = $lastLi.find(".queue_icon img").attr("data-title") || "";
+            // Extract the time part after " - "
+            const timePart = rawTitle.split(" - ").slice(1).join(" - ").trim();
+            if (timePart) {
+              try {
+                const nowDate = new Date();
+                const nowSec  = Math.floor(nowDate.getTime() / 1000);
+                // Match "HH:MM" at end of string
+                const timeMatch = timePart.match(/(\d{1,2}):(\d{2})\s*$/);
+                if (timeMatch) {
+                  const hh = parseInt(timeMatch[1], 10);
+                  const mm = parseInt(timeMatch[2], 10);
+                  let endDate = new Date(nowDate);
+                  endDate.setHours(hh, mm, 0, 0);
+                  // Check for day offset keywords
+                  if (/amanhã/i.test(timePart)) {
+                    endDate.setDate(endDate.getDate() + 1);
+                  } else if (/hoje/i.test(timePart)) {
+                    // same day — already set
+                  } else {
+                    // "a DD.MM." format — parse day and month
+                    const dateMatch = timePart.match(/a\s+(\d{1,2})\.(\d{1,2})\./);
+                    if (dateMatch) {
+                      const day = parseInt(dateMatch[1], 10);
+                      const mon = parseInt(dateMatch[2], 10) - 1; // 0-indexed
+                      endDate.setMonth(mon, day);
+                      // If that date is in the past (e.g. parsed month < now), advance a year
+                      if (endDate.getTime() < nowDate.getTime() - 60000) {
+                        endDate.setFullYear(endDate.getFullYear() + 1);
+                      }
+                    }
+                  }
+                  // If the time is earlier today, it must be tomorrow
+                  if (endDate.getTime() < nowDate.getTime() - 60000 && /hoje/i.test(timePart)) {
+                    endDate.setDate(endDate.getDate() + 1);
+                  }
+                  const endSec = Math.floor(endDate.getTime() / 1000);
+                  prodQueueEndsSec = Math.max(0, endSec - nowSec);
+                }
+              } catch (_) { /* ignore parse errors */ }
+            }
+          }
+
           villagesData.push({
-            id: vNode.dataset.id,
+            id: villageId,
             points,
             url: vNode.children?.[0]?.children?.[0]?.href || "#",
             name: (vNode.innerText || "").trim(),
@@ -1028,7 +1080,8 @@
             totalMerchants: totalMerch,
             warehouseCapacity: wh,
             farmSpaceUsed: farmUsed,
-            farmSpaceTotal: farmTot
+            farmSpaceTotal: farmTot,
+            prodQueueEndsSec,
           });
         }
       }
@@ -1209,7 +1262,11 @@
         //            they are allowed to act as donors (can have excess).
         if (v.points < s.lowPoints) {
           const hq = state.hqData ? state.hqData.get(String(v.id)) : null;
-          const queueSec = hq && typeof hq.queueEndsSec === "number" ? hq.queueEndsSec : 0;
+          // Use hqData queueEndsSec if available; fall back to prodQueueEndsSec
+          // parsed from the prod overview page (full queue end time).
+          const queueSec = hq && typeof hq.queueEndsSec === "number" && hq.queueEndsSec > 0
+            ? hq.queueEndsSec
+            : (v.prodQueueEndsSec || 0);
 
           const hasLongQueue = queueSec > longQueueSec;
 
@@ -3571,14 +3628,41 @@
       const $main = $(mainRes);
 
       // ── Queue end time (from mode=build) ──────────────────────────────────────
+      // The active (lit) row has a span[data-endtime] Unix timestamp.
+      // Queued (sortable_row) rows only have a plain duration span e.g. "1:09:01".
+      // Strategy: start from the active row's data-endtime, then add durations of
+      // each subsequent queued row to find the true end of the full queue.
       let maxEndTime = 0;
-      $b.find("tr[class*='buildorder'] td span[data-endtime]").each(function () {
+
+      // 1. Active row — absolute Unix timestamp
+      $b.find("tr.lit span[data-endtime]").each(function () {
         const t = parseInt($(this).attr("data-endtime"), 10);
         if (!isNaN(t) && t > maxEndTime) maxEndTime = t;
       });
-      const queueEndsSec = maxEndTime > 0
+
+      // 2. Queued rows — plain HH:MM:SS durations, add to the running end time
+      $b.find("tr.sortable_row").each(function () {
+        const durationText = $(this).find("td.nowrap span").not("[data-endtime]").first().text().trim();
+        const parts = durationText.match(/^(\d+):(\d{2}):(\d{2})$/);
+        if (parts) {
+          const durSec = parseInt(parts[1],10)*3600 + parseInt(parts[2],10)*60 + parseInt(parts[3],10);
+          // If we have no base yet (active row had no timestamp), use now as base
+          if (maxEndTime === 0) maxEndTime = Math.floor(getNowMs() / 1000);
+          maxEndTime += durSec;
+        }
+      });
+
+      let queueEndsSec = maxEndTime > 0
         ? Math.max(0, maxEndTime - Math.floor(getNowMs() / 1000))
         : 0;
+
+      // Also check prodQueueEndsSec parsed from the overview prod page (full queue).
+      // The mode=build parse may miss items if the page structure varies — take the max.
+      const prodV = state?.villagesData?.find(v => String(v.id) === String(villageId));
+      if (prodV && prodV.prodQueueEndsSec > queueEndsSec) {
+        wbLog(`[WH] HQ queue time from prod page: ${prodV.prodQueueEndsSec}s > mode=build: ${queueEndsSec}s — using prod`);
+        queueEndsSec = prodV.prodQueueEndsSec;
+      }
 
       // ── Building cost (from screen=main, no mode) ─────────────────────────────
       // tr#main_buildrow_{buildingId} — data-cost attribute has the exact integer.

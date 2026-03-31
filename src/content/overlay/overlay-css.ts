@@ -56,7 +56,7 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
   /* Layout */
   --w: 340px;
   --w-snipe: 440px;
-  --w-balancer: 720px;
+  --w-balancer: 580px;
   --ease: 0.14s ease;
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 
@@ -1013,6 +1013,9 @@ select.input {
 .bal-hq-status           { font-size: 11px; font-weight: 600; color: var(--g600); white-space: nowrap; }
 .bal-hq-status--warn     { color: var(--r500); }
 .bal-hq-shortfall        { display: flex; gap: 10px; margin-top: 5px; flex-wrap: wrap; }
+.bal-hq-row--skipped { background: var(--n50); opacity: 0.75; }
+.bal-hq-status--skipped { font-size: 11px; font-weight: 600; color: var(--n300); white-space: nowrap; }
+ 
  
 /* Send table */
 .bal-table {
@@ -1246,4 +1249,6 @@ select.input {
 .bal-tr--pp:hover {
   background: #e8f2ff;
 }
+
+
 `;

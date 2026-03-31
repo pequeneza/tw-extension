@@ -9,7 +9,7 @@ interface BalancerSettings {
   isMinting: boolean; lowPoints: number; highPoints: number; highFarm: number;
   builtOutPercentage: number; needsMorePercentage: number; reservePerVillage: number;
   maxDistance: number; hqPriorityEnabled: boolean; maxedOutPoints: number;
-  lowPointsLongQueueHours: number; sendAllEnabled: boolean; sendAllIntervalMs: number;
+  lowPointsLongQueueHours: number; hqNormalQueueMaxHours: number; sendAllEnabled: boolean; sendAllIntervalMs: number;
   useClusters: boolean; numClusters: number; debugMode: boolean;
   pendingSendsTTLHours: number;
   premiumInstantEnabled: boolean; premiumStagingStrategy: string; premiumThreshold: number;
@@ -63,7 +63,7 @@ const DEFAULT_SETTINGS: BalancerSettings = {
   isMinting: false, lowPoints: 3000, highPoints: 7000, highFarm: 23000,
   builtOutPercentage: 0.26, needsMorePercentage: 0.7, reservePerVillage: 0,
   maxDistance: 9999, hqPriorityEnabled: false, maxedOutPoints: 10471,
-  lowPointsLongQueueHours: 3, sendAllEnabled: false, sendAllIntervalMs: 250,
+  lowPointsLongQueueHours: 3, hqNormalQueueMaxHours: 6, sendAllEnabled: false, sendAllIntervalMs: 250,
   useClusters: false, numClusters: 1, debugMode: false,
   pendingSendsTTLHours: 2,
   premiumInstantEnabled: false, premiumStagingStrategy: "weighted", premiumThreshold: 50000,
@@ -657,6 +657,8 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
           "Villages at or above this threshold are skipped during the HQ check — they are considered fully built. Default 10471 is the max points in TW PT.")}
         {numField("Long queue threshold (hours)", "lowPointsLongQueueHours",0.5,
           "Low-points villages with a build queue longer than this many hours are allowed to act as donors (they have time before they need to build).")}
+        {numField("Normal village max queue (hours)", "hqNormalQueueMaxHours", 0.5,
+          "Non-priority villages with a build queue longer than this will not be boosted as HQ shortage receivers — they have enough time for a future run to handle them. Set to 0 to disable.")}
       </div>
       <div className="cfg-section">
         <div className="section-label">Clusters</div>

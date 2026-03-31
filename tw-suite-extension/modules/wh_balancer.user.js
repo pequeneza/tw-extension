@@ -3773,10 +3773,34 @@
       const prevLinks = window.TM_WH_BALANCER_STATE?.cleanLinks ?? [];
       const rawLinks  = cleanLinks ?? null;
 
+      // Build cluster map so isCrossCluster is correct (same logic as renderRows)
+      const reactClusterMap = new Map();
+      const s = state?.settings;
+      if (s?.useClusters && (s?.numClusters || 1) >= 2 && state?.villagesData) {
+        const numClusters = s.numClusters;
+        const gridSize = Math.ceil(Math.sqrt(numClusters));
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (const v of state.villagesData) {
+          const c = coordsFromVillageName(v.name);
+          if (c) { minX = Math.min(minX, c.x); maxX = Math.max(maxX, c.x); minY = Math.min(minY, c.y); maxY = Math.max(maxY, c.y); }
+        }
+        const w = maxX - minX || 1, h = maxY - minY || 1;
+        for (const v of state.villagesData) {
+          const c = coordsFromVillageName(v.name);
+          if (!c) { reactClusterMap.set(String(v.id), 0); continue; }
+          const gx = Math.min(Math.floor(((c.x - minX) / w) * gridSize), gridSize - 1);
+          const gy = Math.min(Math.floor(((c.y - minY) / h) * gridSize), gridSize - 1);
+          reactClusterMap.set(String(v.id), (gy % Math.ceil(numClusters / gridSize)) * gridSize + gx);
+        }
+      }
+
       const mappedLinks = rawLinks
         ? rawLinks.map((l) => {
             const srcV = byId?.get(String(l.source));
             const tgtV = byId?.get(String(l.target));
+            const srcCluster = reactClusterMap.get(String(l.source)) ?? -1;
+            const tgtCluster = reactClusterMap.get(String(l.target)) ?? -1;
+            const isCrossCluster = reactClusterMap.size > 0 && srcCluster !== tgtCluster;
             return {
               source:         srcV?.name ?? String(l.source),
               target:         tgtV?.name ?? String(l.target),
@@ -3787,7 +3811,7 @@
               stone:          l.stone || 0,
               iron:           l.iron  || 0,
               isHqBoost:      Boolean(state.hqBoostedIds?.has(String(l.target))),
-              isCrossCluster: Boolean(l.isCrossCluster),
+              isCrossCluster,
               sourceUrl:      srcV?.url,
               targetUrl:      tgtV?.url,
             };
@@ -4003,6 +4027,14 @@
     document.addEventListener('xbot:balancer:clearCoordLock', (e) => {
       try { clearManualCoordLock(e.detail.coords); } catch (e) { console.error(e); }
     });
+
+    document.addEventListener('xbot:balancer:setCoordLock', (e) => {
+      try {
+        const { coords, wood, stone, iron, comment } = e.detail || {};
+        setManualCoordLock(coords, { wood: !!wood, stone: !!stone, iron: !!iron });
+        if (comment !== undefined) setManualCoordComment(coords, comment || '');
+      } catch (err) { console.error('[WH] setCoordLock failed', err); }
+    });
     document.addEventListener('xbot:balancer:clearPpLocks', () => {
       try { localStorage.removeItem('tm_whbalancer_pp_locks_v2'); } catch (e) { console.error(e); }
     });
@@ -4020,9 +4052,29 @@
         const village = state?.villagesData?.find(v => String(v.id) === String(lock.villageId));
         return { ...lock, villageName: village?.name || null, remainingSec };
       });
+      const rawCoordLocks = listManualCoordLocks();
+      const comments = loadManualLockComments();
+      // Build coords→village lookup from current villagesData
+      const coordToVillage = new Map();
+      for (const v of (state?.villagesData || [])) {
+        const c = coordsFromVillageName(v.name);
+        if (c) coordToVillage.set(`${c.x}|${c.y}`, v);
+      }
+      const enrichedCoordLocks = Object.entries(rawCoordLocks).map(([key, lock]) => {
+        const v = coordToVillage.get(key);
+        return {
+          key,
+          wood:  !!lock.wood,
+          stone: !!lock.stone,
+          iron:  !!lock.iron,
+          comment: comments[key] || null,
+          villageName: v?.name || null,
+          villageUrl:  v?.url  || null,
+        };
+      });
       document.dispatchEvent(new CustomEvent('xbot:balancer:locks', {
         detail: {
-          coordLocks: listManualCoordLocks(),
+          coordLocks: enrichedCoordLocks,
           ppLocks:    ppLocksWithEta,
         },
       }));

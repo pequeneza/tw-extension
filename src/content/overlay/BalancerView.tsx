@@ -29,7 +29,10 @@ interface BalancerSummary {
   woodAverage: number; stoneAverage: number; ironAverage: number;
   links: number; merchants: number; avgDist: string;
 }
-interface CoordLock { key: string; wood: boolean; stone: boolean; iron: boolean; }
+interface CoordLock {
+  key: string; wood: boolean; stone: boolean; iron: boolean;
+  comment?: string | null; villageName?: string | null; villageUrl?: string | null;
+}
 interface PpLock { villageId: string; res: string; villageName?: string | null; remainingSec?: number | null; }
 interface PpShipment {
   source: string; target: string; sourceName: string; targetName: string;
@@ -165,11 +168,19 @@ function useLocksState() {
   const refresh = useCallback(() => {
     const onLocks = (e: Event) => {
       const { coordLocks: raw, ppLocks: pp } = (e as CustomEvent).detail as {
-        coordLocks: Record<string,{wood?:boolean;stone?:boolean;iron?:boolean}>; ppLocks: PpLock[];
+        coordLocks: any; ppLocks: PpLock[];
       };
-      setCoordLocks(Object.entries(raw).map(([key,lock]) => ({
-        key, wood: Boolean(lock.wood), stone: Boolean(lock.stone), iron: Boolean(lock.iron),
-      })));
+      // coordLocks is now an enriched array from the bridge
+      const locks = Array.isArray(raw)
+        ? raw.map((l: any) => ({
+            key: l.key, wood: Boolean(l.wood), stone: Boolean(l.stone), iron: Boolean(l.iron),
+            comment: l.comment ?? null, villageName: l.villageName ?? null, villageUrl: l.villageUrl ?? null,
+          }))
+        : Object.entries(raw as Record<string,any>).map(([key,lock]: [string,any]) => ({
+            key, wood: Boolean(lock.wood), stone: Boolean(lock.stone), iron: Boolean(lock.iron),
+            comment: null, villageName: null, villageUrl: null,
+          }));
+      setCoordLocks(locks);
       setPpLocks(pp ?? []);
     };
     document.addEventListener("xbot:balancer:locks", onLocks, { once: true });
@@ -634,24 +645,88 @@ function SettingsTab() {
 /* ─── LocksTab ───────────────────────────────────────────────────────────── */
 function LocksTab() {
   const { coordLocks, ppLocks, refresh } = useLocksState();
+  const [coordInput, setCoordInput]     = useState("");
+  const [commentInput, setCommentInput] = useState("");
+  const [lockWood, setLockWood]   = useState(true);
+  const [lockStone, setLockStone] = useState(true);
+  const [lockIron, setLockIron]   = useState(true);
+  const [addError, setAddError]   = useState<string|null>(null);
+
   const clearCoord = (key:string) => { dispatch("xbot:balancer:clearCoordLock",{coords:key}); setTimeout(refresh,100); };
   const clearAllPp = () => { dispatch("xbot:balancer:clearPpLocks"); setTimeout(refresh,100); };
+
+  const handleAdd = () => {
+    const m = coordInput.match(/(\d{1,3})\|(\d{1,3})/);
+    if (!m) { setAddError("Invalid coords — use format 451|601"); return; }
+    if (!lockWood && !lockStone && !lockIron) { setAddError("Select at least one resource"); return; }
+    setAddError(null);
+    dispatch("xbot:balancer:setCoordLock", {
+      coords: `${parseInt(m[1]!,10)}|${parseInt(m[2]!,10)}`,
+      wood: lockWood, stone: lockStone, iron: lockIron,
+      comment: commentInput.trim(),
+    });
+    setCoordInput(""); setCommentInput("");
+    setTimeout(refresh, 100);
+  };
+
   return (
     <div className="cfg-body">
+      {/* Add new lock form */}
+      <div className="cfg-section">
+        <div className="section-label">Add coord lock</div>
+        <div style={{ padding:"8px 14px", display:"flex", flexDirection:"column", gap:6 }}>
+          <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+            <input className="input" placeholder="451|601" value={coordInput}
+              onChange={e => { setCoordInput(e.target.value); setAddError(null); }}
+              style={{ width:90, flexShrink:0 }}
+              onKeyDown={e => e.key === "Enter" && handleAdd()}/>
+            <span style={{ fontSize:11, color:"var(--n400)" }}>Lock:</span>
+            {(["wood","stone","iron"] as const).map(res => (
+              <label key={res} style={{ display:"flex", alignItems:"center", gap:3, cursor:"pointer", fontSize:11 }}>
+                <input type="checkbox"
+                  checked={res==="wood"?lockWood:res==="stone"?lockStone:lockIron}
+                  onChange={e => res==="wood"?setLockWood(e.target.checked):res==="stone"?setLockStone(e.target.checked):setLockIron(e.target.checked)}/>
+                <ResIcon res={res}/>
+              </label>
+            ))}
+          </div>
+          <input className="input" placeholder="Comment (optional)" value={commentInput}
+            onChange={e => setCommentInput(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && handleAdd()}
+            style={{ fontSize:12 }}/>
+          {addError && <span style={{ fontSize:11, color:"var(--r500)" }}>{addError}</span>}
+          <button className="btn btn-save btn-save--dirty" onClick={handleAdd}>+ Add lock</button>
+        </div>
+      </div>
       <div className="cfg-section">
         <div className="section-label">Manual coord locks ({coordLocks.length})</div>
         {coordLocks.length === 0
           ? <div className="state-msg">No manual locks set.</div>
           : coordLocks.map(lock => (
-            <div key={lock.key} className="bal-lock-row">
-              <span className="bal-lock-coord">{lock.key}</span>
-              <span className="bal-lock-res">
-                <ResIcon res="wood"  dim={!lock.wood}/>
-                <ResIcon res="stone" dim={!lock.stone}/>
-                <ResIcon res="iron"  dim={!lock.iron}/>
-              </span>
-              <button className="btn btn-ghost" style={{ flex:"none", padding:"4px 10px", fontSize:11 }}
-                onClick={() => clearCoord(lock.key)}>Clear</button>
+            <div key={lock.key} className="bal-lock-row" style={{ flexDirection:"column", alignItems:"stretch", gap:4 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                {/* Village name as link if available, else raw coords */}
+                {lock.villageUrl
+                  ? <a href={lock.villageUrl} target="_self" className="bal-vil-link"
+                      style={{ fontSize:12, fontWeight:600 }}>
+                      {lock.villageName?.split(" (")[0] ?? lock.key}
+                    </a>
+                  : <span className="bal-lock-coord">{lock.villageName?.split(" (")[0] ?? lock.key}</span>
+                }
+                <span className="bal-vil-coords" style={{ fontSize:10.5 }}>{lock.key}</span>
+                <span className="bal-lock-res" style={{ marginLeft:"auto" }}>
+                  <ResIcon res="wood"  dim={!lock.wood}/>
+                  <ResIcon res="stone" dim={!lock.stone}/>
+                  <ResIcon res="iron"  dim={!lock.iron}/>
+                </span>
+                <button className="btn btn-ghost" style={{ flex:"none", padding:"3px 8px", fontSize:10.5 }}
+                  onClick={() => clearCoord(lock.key)}>✕</button>
+              </div>
+              {lock.comment && (
+                <span style={{ fontSize:10.5, color:"var(--n400)", paddingLeft:2, fontStyle:"italic" }}>
+                  {lock.comment}
+                </span>
+              )}
             </div>
           ))
         }

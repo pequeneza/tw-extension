@@ -1420,6 +1420,20 @@
 
           const missing = Math.max(0, cost - (v[res] + incAmt));
           const isLowPtsVillage = v.points < (state?.settings?.lowPoints || 0);
+
+          // Cap excess to what's above the building cost — always, regardless of whether
+          // there is a shortage. A village must keep enough for construction before donating.
+          // This runs unconditionally so resources with surplus above cost are still capped
+          // (previously the cap was inside the need>0 block and was skipped for surplus resources).
+          if (excessResources[idx]?.[eIdx]) {
+            const before = excessResources[idx][eIdx][res];
+            const safeExcess = Math.floor(Math.max(0, v[res] + incAmt - cost) / 1000) * 1000;
+            excessResources[idx][eIdx][res] = Math.min(before, safeExcess);
+            if (excessResources[idx][eIdx][res] !== before) {
+              wbLog(`[WH] HQ cap excess ${v.name} [${res}]: ${before}→${excessResources[idx][eIdx][res]} (cost=${cost} stock=${v[res]} inc=${incAmt})`);
+            }
+          }
+
           // Low-points villages: ceil so even small shortfalls trigger a send.
           // Normal/high villages: round so sub-500 noise (e.g. 503 iron) is suppressed.
           let need = isLowPtsVillage
@@ -1438,17 +1452,6 @@
             const avgBased = Math.max(0, Math.ceil((avgForRes - v[res] - incAmt) / 1000) * 1000);
             need = Math.min(need, avgBased);
             if (need <= 0) continue;
-          }
-
-          // Cap excess to what's above the building cost — the village keeps enough
-          // for construction and donates only the genuine surplus above that.
-          if (excessResources[idx]?.[eIdx]) {
-            const before = excessResources[idx][eIdx][res];
-            const safeExcess = Math.floor(Math.max(0, v[res] + incAmt - cost) / 1000) * 1000;
-            excessResources[idx][eIdx][res] = Math.min(before, safeExcess);
-            if (excessResources[idx][eIdx][res] !== before) {
-              wbLog(`[WH] HQ cap excess ${v.name} [${res}]: ${before}→${excessResources[idx][eIdx][res]} (cost=${cost} stock=${v[res]} inc=${incAmt})`);
-            }
           }
 
           // Boost shortage to the building shortfall (only if not already higher)
@@ -3959,8 +3962,12 @@
         }));
         return;
       }
+      const hqLowPts  = state?.settings?.lowPoints     || 0;
+      const hqMaxPts  = state?.settings?.maxedOutPoints || 99999;
+      const hqTotal   = state.villagesData ? state.villagesData.filter(v => v.points >= hqLowPts && v.points < hqMaxPts).length : 0;
+      const hqSkippedCount = state.villagesData ? state.villagesData.length - hqTotal : 0;
       document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
-        detail: { loading: true, progress: 0, total: state.villagesData ? state.villagesData.filter(v => v.points >= (state?.settings?.lowPoints||0) && v.points < (state?.settings?.maxedOutPoints||99999)).length : 0 },
+        detail: { loading: true, progress: 0, total: hqTotal, skipped: hqSkippedCount },
       }));
       try {
         const cachedHqData = state.hqData;
@@ -3984,8 +3991,9 @@
           const toCheck = state.villagesData.filter(v => v.points >= lowPts && v.points < maxPts);
           for (let i = 0; i < toCheck.length; i++) {
             const v = toCheck[i];
+            const skipped = (state.villagesData ? state.villagesData.length : 0) - toCheck.length;
             document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
-              detail: { loading: true, progress: i + 1, total: toCheck.length },
+              detail: { loading: true, progress: i + 1, total: toCheck.length, skipped },
             }));
             try {
               const hq = await fetchHqNextBuilding(v.id);
@@ -4233,6 +4241,7 @@
         for (let i = 0; i < hqCandidates.length; i++) {
           const v = hqCandidates[i];
           $("#tmwh_summary").text(`Checking HQ build queues… (${i + 1}/${hqCandidates.length}${hqSkipped > 0 ? `, ${hqSkipped} skipped` : ""})`);
+          updateReactState({ running: true, statusText: `Checking HQ… (${i + 1}/${hqCandidates.length}${hqSkipped > 0 ? `, ${hqSkipped} skipped` : ""})` });
           try {
             const hq = await fetchHqNextBuilding(v.id);
             if (hq?.villageId) hqData.set(hq.villageId, hq);

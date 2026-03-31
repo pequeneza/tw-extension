@@ -63,7 +63,7 @@ const DEFAULT_SETTINGS: BalancerSettings = {
   isMinting: false, lowPoints: 3000, highPoints: 7000, highFarm: 23000,
   builtOutPercentage: 0.26, needsMorePercentage: 0.7, reservePerVillage: 0,
   maxDistance: 9999, hqPriorityEnabled: false, maxedOutPoints: 10471,
-  lowPointsLongQueueHours: 3, sendAllEnabled: false, sendAllIntervalMs: 500,
+  lowPointsLongQueueHours: 3, sendAllEnabled: false, sendAllIntervalMs: 250,
   useClusters: false, numClusters: 1, debugMode: false,
   pendingSendsTTLHours: 2,
   premiumInstantEnabled: false, premiumStagingStrategy: "weighted", premiumThreshold: 50000,
@@ -435,9 +435,10 @@ function ClusterMap({ data }: { data: {svg:string;legend:string;numClusters:numb
 }
 
 /* ─── SendListTab ────────────────────────────────────────────────────────── */
-function SendListTab({ links, summary, running, status, detected, clusterMap, ppPlans, onRun }: {
+function SendListTab({ links, summary, running, status, detected, clusterMap, ppPlans, sendAllIntervalMs, onRun }: {
   links:SendLink[]; summary:BalancerSummary|null; running:boolean;
-  status:string; detected:boolean; clusterMap:{svg:string;legend:string;numClusters:number}|null; ppPlans:PpPlan[]; onRun:()=>void;
+  status:string; detected:boolean; clusterMap:{svg:string;legend:string;numClusters:number}|null;
+  ppPlans:PpPlan[]; sendAllIntervalMs:number; onRun:()=>void;
 }) {
   const [sentIds, setSentIds]       = useState<Set<number>>(new Set());
   const [sendingAll, setSendingAll] = useState(false);
@@ -447,6 +448,7 @@ function SendListTab({ links, summary, running, status, detected, clusterMap, pp
   const handleSendAll = () => {
     const pending = links.map((l,i) => ({l,i})).filter(({i}) => !sentIds.has(i));
     if (!pending.length) return;
+    const interval = sendAllIntervalMs || 250;
     setSendingAll(true); let ptr = 0;
     iRef.current = setInterval(() => {
       if (ptr >= pending.length) { clearInterval(iRef.current!); setSendingAll(false); return; }
@@ -455,7 +457,7 @@ function SendListTab({ links, summary, running, status, detected, clusterMap, pp
       const tgtId = l.targetUrl?.match(/village=(\d+)/)?.[1] ?? l.target;
       dispatch("xbot:balancer:send", { src:srcId, tgt:tgtId, wood:l.wood, stone:l.stone, iron:l.iron, idx:i });
       setSentIds(p => new Set([...p,i]));
-    }, 600);
+    }, interval);
   };
   useEffect(() => () => { if (iRef.current) clearInterval(iRef.current); }, []);
   const unsent = links.filter((_,i) => !sentIds.has(i)).length;
@@ -573,7 +575,7 @@ function Tip({ text }: { text: string }) {
 }
 
 /* ─── SettingsTab ────────────────────────────────────────────────────────── */
-function SettingsTab() {
+function SettingsTab({ onSaved }: { onSaved?: () => void }) {
   const [s, setS]         = useState<BalancerSettings>(loadSettings);
   const [dirty, setDirty] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -587,6 +589,7 @@ function SettingsTab() {
       localStorage.removeItem("tm_whbalancer_hq_timestamp_v1");
     }
     setDirty(false); setSaved(true); setTimeout(() => setSaved(false), 2200);
+    onSaved?.();
   };
 
   const numField = (label:string, key:keyof BalancerSettings, step=1, tip?:string) => (
@@ -669,7 +672,7 @@ function SettingsTab() {
         {selectField("Routing strategy", "premiumStagingStrategy", [
           { value:"weighted", label:"Weighted donors" },
           { value:"largest",  label:"Largest donor" },
-        ], "Weighted donors: splits the required amount across multiple donors, prioritising closer ones. More reliable when merchants are spread out.Largest donor: uses the biggest single donor first. Fewer shipments but can fail if that donor has low merchants or is far away.")}
+        ], "Weighted donors: splits the required amount across multiple donors, prioritising closer ones. More reliable when merchants are spread out. Largest donor: uses the biggest single donor first. Fewer shipments but can fail if that donor has low merchants or is far away.")}
         {numField("Imbalance threshold", "premiumThreshold", 1000,
           "Minimum global imbalance (most abundant minus least abundant resource) required before a PP plan is attempted.")}
         {numField("Min trade amount", "premiumMinTradeAmount", 1000,
@@ -697,7 +700,7 @@ function SettingsTab() {
       <div className="cfg-section cfg-section-checks">
         <div className="section-label">Developer</div>
         {numField("Pending sends TTL (hours)", "pendingSendsTTLHours", 0.25,
-          "How long a sent shipment is remembered and deducted from the donor\'s stock on re-runs.\n\nToo low (e.g. 0.5h): sends expire before the resources arrive — the donor village appears to have excess again and may be re-routed, creating duplicate sends.\n\nToo high (e.g. 12h): sends linger after arrival — the donor\'s stock looks artificially low and it won\'t be used as a donor even when it could be.\n\nDefault 2h is a safe floor. For very distant villages (50+ fields) the actual travel time is used instead.")}
+          "How long a sent shipment is remembered and deducted from the donor's stock on re-runs.\n\nToo low (e.g. 0.5h): sends expire before the resources arrive — the donor village appears to have excess again and may be re-routed, creating duplicate sends.\n\nToo high (e.g. 12h): sends linger after arrival — the donor's stock looks artificially low and it won't be used as a donor even when it could be.\n\nDefault 2h is a safe floor. For very distant villages (50+ fields) the actual travel time is used instead.")}
         {checkField("Debug logging (console)", "debugMode",
           "Enables verbose [WH] console logging for algorithm steps, HQ boosts, cluster assignments and send decisions.")}
       </div>
@@ -776,7 +779,6 @@ function LocksTab() {
           : coordLocks.map(lock => (
             <div key={lock.key} className="bal-lock-row" style={{ flexDirection:"column", alignItems:"stretch", gap:4 }}>
               <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                {/* Village name as link if available, else raw coords */}
                 {lock.villageUrl
                   ? <a href={lock.villageUrl} target="_self" className="bal-vil-link"
                       style={{ fontSize:12, fontWeight:600 }}>
@@ -850,31 +852,37 @@ function HQTab({ hqEnabled }: { hqEnabled: boolean }) {
   const [loading, setLoading]   = useState(false);
   const [progress, setProgress] = useState(0);
   const [total, setTotal]       = useState(0);
+  const [skipped, setSkipped]   = useState(0);
   const [error, setError]       = useState<string|null>(null);
   const [cached, setCached]     = useState(false);
   const [ageMin, setAgeMin]     = useState<number|null>(null);
+  const triggeredByTab = useRef(false);
 
   useEffect(() => {
     const onR = (e:Event) => {
       const d = (e as CustomEvent).detail as {
-        loading?:boolean; progress?:number; total?:number;
+        loading?:boolean; progress?:number; total?:number; skipped?:number;
         results?:HqResult[]; cached?:boolean; ageMin?:number|null; error?:string;
       };
-      if (d.error) { setError(d.error); setLoading(false); return; }
-      if (d.loading) { setLoading(true); setProgress(d.progress??0); setTotal(d.total??0); return; }
+      if (d.error) { if (triggeredByTab.current) { setError(d.error); setLoading(false); } return; }
+      if (d.loading) {
+        if (triggeredByTab.current) { setLoading(true); setProgress(d.progress??0); setTotal(d.total??0); setSkipped(d.skipped??0); }
+        return;
+      }
       if (d.results) {
         setResults([...d.results].sort((a,b) => {
           if (a.hasShortfall !== b.hasShortfall) return a.hasShortfall ? -1 : 1;
           return a.queueEndsSec - b.queueEndsSec;
         }));
         setCached(!!d.cached); setAgeMin(d.ageMin??null); setLoading(false); setError(null);
+        triggeredByTab.current = false;
       }
     };
     document.addEventListener("xbot:balancer:hqResults", onR);
     return () => document.removeEventListener("xbot:balancer:hqResults", onR);
   }, []);
 
-  const runCheck = () => { setError(null); setLoading(true); setResults([]); dispatch("xbot:balancer:hqCheck"); };
+  const runCheck = () => { setError(null); setLoading(true); setResults([]); triggeredByTab.current = true; dispatch("xbot:balancer:hqCheck"); };
   const shortfalls = results.filter(r => r.hasShortfall).length;
 
   return (
@@ -888,7 +896,7 @@ function HQTab({ hqEnabled }: { hqEnabled: boolean }) {
           )}
           <button className="btn btn-save btn-save--dirty" onClick={runCheck} disabled={loading}>
             {loading
-              ? <><span className="spinner"/> {total>0 ? `Checking… (${progress}/${total})` : "Checking…"}</>
+              ? <><span className="spinner"/> {total>0 ? `Checking… (${progress}/${total}${skipped>0?`, ${skipped} skipped`:""})` : "Checking…"}</>
               : cached ? "↺ Refresh HQ data" : "Check HQ queues"}
           </button>
           {cached && ageMin !== null && (
@@ -933,8 +941,9 @@ function HQTab({ hqEnabled }: { hqEnabled: boolean }) {
 /* ─── BalancerView ───────────────────────────────────────────────────────── */
 export function BalancerView({ visible, onBack }: { visible:boolean; onBack:()=>void }): React.ReactElement {
   const [tab, setTab]                               = useState<Tab>("sendlist");
+  const [settings, setSettings]                     = useState<BalancerSettings>(loadSettings);
+  const refreshSettings                             = useCallback(() => setSettings(loadSettings()), []);
   const { links, summary, running, status, detected, clusterMap, ppPlans } = useBalancerState();
-  const settings                                    = loadSettings();
   const handleRun = useCallback(() => dispatch("xbot:balancer:run"), []);
   const tabBtn = (t:Tab, label:string) => (
     <button
@@ -969,8 +978,8 @@ export function BalancerView({ visible, onBack }: { visible:boolean; onBack:()=>
           {tabBtn("hq","🏗 HQ")}
         </div>
       </div>
-      {tab==="sendlist" && <SendListTab links={links} summary={summary} running={running} status={status} detected={detected} clusterMap={clusterMap} ppPlans={ppPlans} onRun={handleRun}/>}
-      {tab==="settings" && <SettingsTab/>}
+      {tab==="sendlist" && <SendListTab links={links} summary={summary} running={running} status={status} detected={detected} clusterMap={clusterMap} ppPlans={ppPlans} sendAllIntervalMs={settings.sendAllIntervalMs} onRun={handleRun}/>}
+      {tab==="settings" && <SettingsTab onSaved={refreshSettings}/>}
       {tab==="locks"    && <LocksTab/>}
       {tab==="hq"       && <HQTab hqEnabled={settings.hqPriorityEnabled}/>}
     </div>

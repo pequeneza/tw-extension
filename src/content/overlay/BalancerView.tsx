@@ -78,8 +78,6 @@ function dispatch(name: string, detail?: unknown) {
   document.dispatchEvent(new CustomEvent(name, detail !== undefined ? { detail } : undefined));
 }
 
-// Module-level cache updated on every xbot:balancer:state event.
-// VillageLink reads from here — avoids cross-world window access.
 type VillageData = {
   wood:number; stone:number; iron:number;
   rawWood:number|null; rawStone:number|null; rawIron:number|null; reserve:number;
@@ -105,7 +103,6 @@ function fmtHMS(totalSec: number) {
   return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
 }
 
-/* ─── TW resource icon — direct CDN image URLs (works inside Shadow DOM) ─── */
 const RES_ICON_URLS: Record<string, string> = {
   wood:  "https://dspt.innogamescdn.com/asset/b2fb8d33/graphic/holz.png",
   stone: "https://dspt.innogamescdn.com/asset/b2fb8d33/graphic/lehm.png",
@@ -147,13 +144,9 @@ function useBalancerState() {
     const onLocks = () => { setDetected(true); if (probeRef.current) { clearInterval(probeRef.current); probeRef.current = null; } };
     document.addEventListener("xbot:balancer:state", onState);
     document.addEventListener("xbot:balancer:locks", onLocks, { once: true });
-
-    // Probe every second until the userscript responds — handles the race
-    // where the content script mounts before the userscript listener is ready.
     dispatch("xbot:balancer:getLocks");
     probeRef.current = setInterval(() => dispatch("xbot:balancer:getLocks"), 1000);
     const probe = probeRef.current;
-
     return () => {
       document.removeEventListener("xbot:balancer:state", onState);
       document.removeEventListener("xbot:balancer:locks", onLocks);
@@ -172,7 +165,6 @@ function useLocksState() {
       const { coordLocks: raw, ppLocks: pp } = (e as CustomEvent).detail as {
         coordLocks: any; ppLocks: PpLock[];
       };
-      // coordLocks is now an enriched array from the bridge
       const locks = Array.isArray(raw)
         ? raw.map((l: any) => ({
             key: l.key, wood: Boolean(l.wood), stone: Boolean(l.stone), iron: Boolean(l.iron),
@@ -192,14 +184,12 @@ function useLocksState() {
   return { coordLocks, ppLocks, refresh };
 }
 
-/* ─── VillageLink — clickable name with hover tooltip ────────────────────── */
+/* ─── VillageLink ────────────────────────────────────────────────────────── */
 function VillageLink({ name, url, villageId }: { name: string; url?: string; villageId?: string }) {
   const [hovered, setHovered] = useState(false);
   const coords    = name.match(/\((\d+\|\d+)\)/)?.[1] ?? null;
   const shortName = name.split(" ")[0] ?? name;
-
   const vData = getVillageData(villageId);
-
   return (
     <span className="bal-vil-wrap"
       onMouseEnter={() => setHovered(true)}
@@ -289,7 +279,7 @@ function SendRow({ link, idx, sent, onSent }: { link: SendLink; idx: number; sen
   );
 }
 
-/* ─── useCountdown — live ticking ETA from anchor ───────────────────────── */
+/* ─── useCountdown ───────────────────────────────────────────────────────── */
 function useCountdown(etaSec: number | null | undefined, msAtFetch: number | null | undefined): number | null {
   const [remaining, setRemaining] = useState<number | null>(() => {
     if (etaSec == null || msAtFetch == null) return null;
@@ -305,7 +295,7 @@ function useCountdown(etaSec: number | null | undefined, msAtFetch: number | nul
   return remaining;
 }
 
-/* ─── PpPlanItem — single PP plan with live countdown ───────────────────── */
+/* ─── PpPlanItem ─────────────────────────────────────────────────────────── */
 function PpPlanItem({ plan, onSent }: { plan: PpPlan; onSent: (src:string,tgt:string,w:number,s:number,i:number)=>void }) {
   const remaining = useCountdown(plan.lastArrivalEtaSec, plan.lastArrivalMsAtFetch);
   return (
@@ -368,14 +358,9 @@ function PpPlanItem({ plan, onSent }: { plan: PpPlan; onSent: (src:string,tgt:st
   );
 }
 
-/* ─── PpPlanRows ─────────────────────────────────────────────────────────── */
 function PpPlanRows({ plans, onSent }: { plans: PpPlan[]; onSent: (src:string,tgt:string,w:number,s:number,i:number)=>void }) {
   if (!plans.length) return null;
-  return (
-    <>
-      {plans.map(plan => <PpPlanItem key={plan.id} plan={plan} onSent={onSent} />)}
-    </>
-  );
+  return <>{plans.map(plan => <PpPlanItem key={plan.id} plan={plan} onSent={onSent} />)}</>;
 }
 
 function PpShipmentRow({ shipment: s, onSent }: { shipment: PpShipment; onSent:(src:string,tgt:string,w:number,st:number,i:number)=>void }) {
@@ -390,22 +375,15 @@ function PpShipmentRow({ shipment: s, onSent }: { shipment: PpShipment; onSent:(
   return (
     <tr className="bal-tr bal-tr--pp">
       <td className="bal-td bal-td-badges"/>
-      <td className="bal-td bal-td-village">
-        <VillageLink name={s.sourceName} url={s.sourceUrl} villageId={s.source}/>
-      </td>
+      <td className="bal-td bal-td-village"><VillageLink name={s.sourceName} url={s.sourceUrl} villageId={s.source}/></td>
       <td className="bal-td bal-td-arrow">→</td>
-      <td className="bal-td bal-td-village">
-        <VillageLink name={s.targetName} url={s.targetUrl} villageId={s.target}/>
-      </td>
+      <td className="bal-td bal-td-village"><VillageLink name={s.targetName} url={s.targetUrl} villageId={s.target}/></td>
       <td className="bal-td bal-td-dist">{s.distance}</td>
       <td className="bal-td bal-td-res">{s.wood  > 0 && <span className="bal-res"><ResIcon res="wood"/>  {fmtNum(s.wood)}</span>}</td>
       <td className="bal-td bal-td-res">{s.stone > 0 && <span className="bal-res"><ResIcon res="stone"/> {fmtNum(s.stone)}</span>}</td>
       <td className="bal-td bal-td-res">{s.iron  > 0 && <span className="bal-res"><ResIcon res="iron"/>  {fmtNum(s.iron)}</span>}</td>
       <td className="bal-td bal-td-action">
-        <button className="btn btn-save btn-save--dirty"
-          style={{ padding:"4px 10px", fontSize:11 }} onClick={handleSend}>
-          Send
-        </button>
+        <button className="btn btn-save btn-save--dirty" style={{ padding:"4px 10px", fontSize:11 }} onClick={handleSend}>Send</button>
       </td>
     </tr>
   );
@@ -548,7 +526,7 @@ function SendListTab({ links, summary, running, status, detected, clusterMap, pp
   );
 }
 
-/* ─── Tip — inline help tooltip ─────────────────────────────────────────── */
+/* ─── Tip ────────────────────────────────────────────────────────────────── */
 function Tip({ text }: { text: string }) {
   const [show, setShow] = useState(false);
   return (
@@ -658,7 +636,7 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
         {numField("Long queue threshold (hours)", "lowPointsLongQueueHours",0.5,
           "Low-points villages with a build queue longer than this many hours are allowed to act as donors (they have time before they need to build).")}
         {numField("Normal village max queue (hours)", "hqNormalQueueMaxHours", 0.5,
-          "Non-priority villages with a build queue longer than this will not be boosted as HQ shortage receivers — they have enough time for a future run to handle them. Set to 0 to disable.")}
+          "Non-priority villages with a build queue longer than this will not be boosted as HQ shortage receivers — they have enough time for a future run. Also used in the HQ tab to dim villages that won't be boosted.")}
       </div>
       <div className="cfg-section">
         <div className="section-label">Clusters</div>
@@ -747,7 +725,6 @@ function LocksTab() {
 
   return (
     <div className="cfg-body">
-      {/* Add new lock form */}
       <div className="cfg-section">
         <div className="section-label">Add coord lock</div>
         <div style={{ padding:"8px 14px", display:"flex", flexDirection:"column", gap:6 }}>
@@ -782,8 +759,7 @@ function LocksTab() {
             <div key={lock.key} className="bal-lock-row" style={{ flexDirection:"column", alignItems:"stretch", gap:4 }}>
               <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                 {lock.villageUrl
-                  ? <a href={lock.villageUrl} target="_self" className="bal-vil-link"
-                      style={{ fontSize:12, fontWeight:600 }}>
+                  ? <a href={lock.villageUrl} target="_self" className="bal-vil-link" style={{ fontSize:12, fontWeight:600 }}>
                       {lock.villageName?.split(" (")[0] ?? lock.key}
                     </a>
                   : <span className="bal-lock-coord">{lock.villageName?.split(" (")[0] ?? lock.key}</span>
@@ -849,7 +825,7 @@ function LocksTab() {
 }
 
 /* ─── HQTab ──────────────────────────────────────────────────────────────── */
-function HQTab({ hqEnabled }: { hqEnabled: boolean }) {
+function HQTab({ hqEnabled, hqNormalQueueMaxHours }: { hqEnabled: boolean; hqNormalQueueMaxHours: number }) {
   const [results, setResults]   = useState<HqResult[]>([]);
   const [loading, setLoading]   = useState(false);
   const [progress, setProgress] = useState(0);
@@ -872,7 +848,13 @@ function HQTab({ hqEnabled }: { hqEnabled: boolean }) {
         return;
       }
       if (d.results) {
+        const maxQueueSec = (hqNormalQueueMaxHours || 6) * 3600;
         setResults([...d.results].sort((a,b) => {
+          // Villages within the queue threshold come first, sorted by queue end time
+          // Villages exceeding the threshold go to the bottom
+          const aOver = a.queueEndsSec > maxQueueSec;
+          const bOver = b.queueEndsSec > maxQueueSec;
+          if (aOver !== bOver) return aOver ? 1 : -1;
           if (a.hasShortfall !== b.hasShortfall) return a.hasShortfall ? -1 : 1;
           return a.queueEndsSec - b.queueEndsSec;
         }));
@@ -882,10 +864,12 @@ function HQTab({ hqEnabled }: { hqEnabled: boolean }) {
     };
     document.addEventListener("xbot:balancer:hqResults", onR);
     return () => document.removeEventListener("xbot:balancer:hqResults", onR);
-  }, []);
+  }, [hqNormalQueueMaxHours]);
 
   const runCheck = () => { setError(null); setLoading(true); setResults([]); triggeredByTab.current = true; dispatch("xbot:balancer:hqCheck"); };
-  const shortfalls = results.filter(r => r.hasShortfall).length;
+  const maxQueueSec  = (hqNormalQueueMaxHours || 6) * 3600;
+  const shortfalls   = results.filter(r => r.hasShortfall && r.queueEndsSec <= maxQueueSec).length;
+  const overQueue    = results.filter(r => r.queueEndsSec > maxQueueSec).length;
 
   return (
     <div className="cfg-body">
@@ -911,30 +895,51 @@ function HQTab({ hqEnabled }: { hqEnabled: boolean }) {
         <div className="cfg-section"><div className="state-msg">Press "Check HQ queues" to inspect build queues.</div></div>
       )}
       {results.length > 0 && (
-        <div className="cfg-section">
-          <div className="section-label">
-            {shortfalls > 0 ? `${shortfalls} village${shortfalls!==1?"s":""} need resources` : "All villages ready ✓"}
-          </div>
-          {results.map((r,i) => (
-            <div key={i} className={`bal-hq-row${r.hasShortfall?" bal-hq-row--warn":" bal-hq-row--ok"}`}>
-              <div className="bal-hq-top">
-                <a className="bal-hq-name" href={r.villageUrl} target="_self">{r.villageName}</a>
-                <span className="bal-hq-building">{r.buildingName}</span>
-                <span className="bal-hq-eta">{r.queueEndsSec>0 ? fmtHMS(r.queueEndsSec) : "now"}</span>
-                <span className={`bal-hq-status${r.hasShortfall?" bal-hq-status--warn":""}`}>
-                  {r.hasShortfall ? "⚠ Short" : "✓"}
-                </span>
-              </div>
-              {r.hasShortfall && (
-                <div className="bal-hq-shortfall">
-                  {r.shortWood  > 0 && <span className="bal-res"><ResIcon res="wood"/>  {fmtNum(r.shortWood)}</span>}
-                  {r.shortStone > 0 && <span className="bal-res"><ResIcon res="stone"/> {fmtNum(r.shortStone)}</span>}
-                  {r.shortIron  > 0 && <span className="bal-res"><ResIcon res="iron"/>  {fmtNum(r.shortIron)}</span>}
-                </div>
-              )}
+        <>
+          {/* Villages within queue threshold */}
+          <div className="cfg-section">
+            <div className="section-label">
+              {shortfalls > 0 ? `${shortfalls} village${shortfalls!==1?"s":""} need resources` : "All villages ready ✓"}
             </div>
-          ))}
-        </div>
+            {results.filter(r => r.queueEndsSec <= maxQueueSec).map((r,i) => (
+              <div key={i} className={`bal-hq-row${r.hasShortfall?" bal-hq-row--warn":" bal-hq-row--ok"}`}>
+                <div className="bal-hq-top">
+                  <a className="bal-hq-name" href={r.villageUrl} target="_self">{r.villageName}</a>
+                  <span className="bal-hq-building">{r.buildingName}</span>
+                  <span className="bal-hq-eta">{r.queueEndsSec>0 ? fmtHMS(r.queueEndsSec) : "now"}</span>
+                  <span className={`bal-hq-status${r.hasShortfall?" bal-hq-status--warn":""}`}>
+                    {r.hasShortfall ? "⚠ Short" : "✓"}
+                  </span>
+                </div>
+                {r.hasShortfall && (
+                  <div className="bal-hq-shortfall">
+                    {r.shortWood  > 0 && <span className="bal-res"><ResIcon res="wood"/>  {fmtNum(r.shortWood)}</span>}
+                    {r.shortStone > 0 && <span className="bal-res"><ResIcon res="stone"/> {fmtNum(r.shortStone)}</span>}
+                    {r.shortIron  > 0 && <span className="bal-res"><ResIcon res="iron"/>  {fmtNum(r.shortIron)}</span>}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          {/* Villages exceeding queue threshold — shown dimmed */}
+          {overQueue > 0 && (
+            <div className="cfg-section">
+              <div className="section-label" style={{ color:"var(--n300)" }}>
+                {overQueue} village{overQueue!==1?"s":""} with queue &gt; {hqNormalQueueMaxHours}h — not boosted
+              </div>
+              {results.filter(r => r.queueEndsSec > maxQueueSec).map((r,i) => (
+                <div key={i} className="bal-hq-row bal-hq-row--ok" style={{ opacity:0.45 }}>
+                  <div className="bal-hq-top">
+                    <a className="bal-hq-name" href={r.villageUrl} target="_self">{r.villageName}</a>
+                    <span className="bal-hq-building">{r.buildingName}</span>
+                    <span className="bal-hq-eta">{fmtHMS(r.queueEndsSec)}</span>
+                    <span className="bal-hq-status" style={{ color:"var(--n300)" }}>⏭ Long queue</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -983,7 +988,7 @@ export function BalancerView({ visible, onBack }: { visible:boolean; onBack:()=>
       {tab==="sendlist" && <SendListTab links={links} summary={summary} running={running} status={status} detected={detected} clusterMap={clusterMap} ppPlans={ppPlans} sendAllIntervalMs={settings.sendAllIntervalMs} onRun={handleRun}/>}
       {tab==="settings" && <SettingsTab onSaved={refreshSettings}/>}
       {tab==="locks"    && <LocksTab/>}
-      {tab==="hq"       && <HQTab hqEnabled={settings.hqPriorityEnabled}/>}
+      {tab==="hq"       && <HQTab hqEnabled={settings.hqPriorityEnabled} hqNormalQueueMaxHours={settings.hqNormalQueueMaxHours}/>}
     </div>
   );
 }

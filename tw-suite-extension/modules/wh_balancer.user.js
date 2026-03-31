@@ -386,6 +386,7 @@
         const entries = Array.from(map.entries());
         localStorage.setItem(HQ_DATA_KEY, JSON.stringify(entries));
         localStorage.setItem(HQ_TIMESTAMP_KEY, String(Number.isFinite(timestamp) ? timestamp : Date.now()));
+        localStorage.setItem(HQ_TIMESTAMP_KEY, String(Number.isFinite(timestamp) ? timestamp : Date.now()));
       } catch (e) {
         console.warn("Failed to save HQ data", e);
       }
@@ -1570,7 +1571,7 @@
           if (v && v.points < lowPts)
             priorityReceivers.push({ q, need, queueSecs });
           else
-            normalReceivers.push({ q, need, queueSecs });
+            normalReceivers.push({ q, need });
         }
         // Priority villages: largest shortage first (urgency already encoded by points)
         priorityReceivers.sort((a, b) => b.need - a.need);
@@ -4082,6 +4083,7 @@
 
     async function runComputationAndRender() {
       updateReactState({ running: true, statusText: 'Fetching…' });
+      updateReactState({ running: true, statusText: 'Fetching…' });
       $("#tmwh_summary").text("Fetching overview pages...");
       $("#tmwh_rows").empty();
       $("#tmwh_timer").empty();
@@ -4179,6 +4181,31 @@
       const isMintingMode = !!state.settings.isMinting;
       const isFirstHqRun = !state.hqLastFetchMs && (!state.hqData || state.hqData.size === 0);
       const isHqStale    = (nowMs - (state.hqLastFetchMs || 0)) > HQ_STALENESS_MS;
+
+      // HQ staleness diagnostic — always visible (not gated by debugMode)
+      if (state.settings.hqPriorityEnabled) {
+        if (isFirstHqRun) {
+          console.log('[WH] HQ: no cached data — will fetch fresh');
+        } else if (!Number.isFinite(nowMs) || !Number.isFinite(state.hqLastFetchMs)) {
+          console.warn('[WH] HQ: invalid timestamp detected — nowMs:', nowMs, 'hqLastFetchMs:', state.hqLastFetchMs, '— clearing cache');
+          localStorage.removeItem('tm_whbalancer_hq_timestamp_v1');
+          state.hqLastFetchMs = null;
+        } else {
+          const ageMs  = nowMs - state.hqLastFetchMs;
+          const ageMin = Math.floor(ageMs / 60000);
+          const ageSec = Math.floor((ageMs % 60000) / 1000);
+          const staleIn    = Math.max(0, HQ_STALENESS_MS - ageMs);
+          const staleInMin = Math.floor(staleIn / 60000);
+          const staleInSec = Math.floor((staleIn % 60000) / 1000);
+          console.log(
+            `[WH] HQ cache age: ${ageMin}m ${ageSec}s` +
+            (isHqStale
+              ? ' — STALE, will re-fetch'
+              : ` — fresh (stale in ${staleInMin}m ${staleInSec}s)`) +
+            ` | villages cached: ${state.hqData?.size ?? 0}`
+          );
+        }
+      }
 
       // HQ staleness diagnostic — always visible (not gated by debugMode)
       if (state.settings.hqPriorityEnabled) {

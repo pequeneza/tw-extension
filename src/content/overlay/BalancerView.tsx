@@ -11,7 +11,7 @@ interface BalancerSettings {
   maxDistance: number; hqPriorityEnabled: boolean; maxedOutPoints: number;
   lowPointsLongQueueHours: number; sendAllEnabled: boolean; sendAllIntervalMs: number;
   useClusters: boolean; numClusters: number; debugMode: boolean;
-  premiumInstantEnabled: boolean; premiumThreshold: number;
+  premiumInstantEnabled: boolean; premiumStagingStrategy: string; premiumThreshold: number;
   premiumMinTradeAmount: number; premiumMoveAmount: number;
   premiumMaxDistance: number; premiumMaxTargetFillPct: number;
   premiumMaxPlansHardCap: number;
@@ -64,7 +64,7 @@ const DEFAULT_SETTINGS: BalancerSettings = {
   maxDistance: 9999, hqPriorityEnabled: false, maxedOutPoints: 10471,
   lowPointsLongQueueHours: 3, sendAllEnabled: false, sendAllIntervalMs: 500,
   useClusters: false, numClusters: 1, debugMode: false,
-  premiumInstantEnabled: false, premiumThreshold: 50000,
+  premiumInstantEnabled: false, premiumStagingStrategy: "weighted", premiumThreshold: 50000,
   premiumMinTradeAmount: 70000, premiumMoveAmount: 300000,
   premiumMaxDistance: 18, premiumMaxTargetFillPct: 0.90,
   premiumMaxPlansHardCap: 12,
@@ -544,6 +544,32 @@ function SendListTab({ links, summary, running, status, detected, clusterMap, pp
   );
 }
 
+/* ─── Tip — inline help tooltip ─────────────────────────────────────────── */
+function Tip({ text }: { text: string }) {
+  const [show, setShow] = useState(false);
+  return (
+    <span style={{ position:"relative", display:"inline-block", marginLeft:4 }}>
+      <span
+        style={{ display:"inline-flex", alignItems:"center", justifyContent:"center",
+                 width:14, height:14, borderRadius:"50%", background:"var(--b-bg)",
+                 border:"1px solid var(--b-br)", color:"var(--b500)", fontSize:9,
+                 fontWeight:700, cursor:"help", userSelect:"none", flexShrink:0 }}
+        onMouseEnter={() => setShow(true)}
+        onMouseLeave={() => setShow(false)}>?</span>
+      {show && (
+        <div style={{ position:"absolute", bottom:"calc(100% + 6px)", left:"50%", transform:"translateX(-50%)",
+                      zIndex:999, background:"var(--n900)", color:"var(--n0)", padding:"8px 10px",
+                      borderRadius:6, fontSize:11, lineHeight:1.45, whiteSpace:"normal",
+                      width:260, boxShadow:"var(--shadow-xl)", pointerEvents:"none" }}>
+          {text}
+          <div style={{ position:"absolute", top:"100%", left:"50%", transform:"translateX(-50%)",
+                        border:"5px solid transparent", borderTopColor:"var(--n900)" }}/>
+        </div>
+      )}
+    </span>
+  );
+}
+
 /* ─── SettingsTab ────────────────────────────────────────────────────────── */
 function SettingsTab() {
   const [s, setS]         = useState<BalancerSettings>(loadSettings);
@@ -560,19 +586,20 @@ function SettingsTab() {
     }
     setDirty(false); setSaved(true); setTimeout(() => setSaved(false), 2200);
   };
-  const numField = (label:string, key:keyof BalancerSettings, step=1, help?:string) => (
+
+  const numField = (label:string, key:keyof BalancerSettings, step=1, tip?:string) => (
     <div className="field">
-      <div className="field-top"><span className="field-label">{label}</span></div>
-      {help && <span className="field-help">{help}</span>}
+      <div className="field-top">
+        <span className="field-label">{label}{tip && <Tip text={tip}/>}</span>
+      </div>
       <input className="input" type="number" step={step} value={s[key] as number}
         onChange={e => { const n=parseFloat(e.target.value); if (Number.isFinite(n)) set(key, n as BalancerSettings[typeof key]); }}/>
     </div>
   );
-  const checkField = (label:string, key:keyof BalancerSettings, help?:string) => (
+  const checkField = (label:string, key:keyof BalancerSettings, tip?:string) => (
     <label className="field-check">
       <span className="field-check-text">
-        <span className="field-label">{label}</span>
-        {help && <span className="field-help">{help}</span>}
+        <span className="field-label">{label}{tip && <Tip text={tip}/>}</span>
       </span>
       <span className="toggle" onClick={e => e.stopPropagation()}>
         <input type="checkbox" checked={Boolean(s[key])}
@@ -581,45 +608,85 @@ function SettingsTab() {
       </span>
     </label>
   );
+  const selectField = (label:string, key:keyof BalancerSettings, options:{value:string;label:string}[], tip?:string) => (
+    <div className="field">
+      <div className="field-top">
+        <span className="field-label">{label}{tip && <Tip text={tip}/>}</span>
+      </div>
+      <select className="input" value={s[key] as string}
+        onChange={e => set(key, e.target.value as BalancerSettings[typeof key])}>
+        {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    </div>
+  );
+
   return (
     <div className="cfg-body">
       <div className="cfg-section">
         <div className="section-label">General</div>
-        {checkField("Ignore all rules (minting mode)", "isMinting")}
-        {numField("Reserve per village", "reservePerVillage", 1000, "Subtracted from every village before computing")}
-        {numField("Global max distance (fields)", "maxDistance")}
+        {checkField("Ignore all rules (minting mode)", "isMinting",
+          "Bypasses all thresholds and balances purely by average. Use when manually filling warehouses.")}
+        {numField("Reserve per village (not sent)", "reservePerVillage", 1000,
+          "Amount subtracted from every village's stock before computing excess. These resources are never sent.")}
+        {numField("Global max distance (fields)", "maxDistance",60,
+          "Routes longer than this distance will be skipped entirely.")}
       </div>
       <div className="cfg-section">
         <div className="section-label">Village thresholds</div>
-        {numField("Prioritise villages below (pts)", "lowPoints")}
-        {numField("Finished villages above (pts)", "highPoints")}
-        {numField("High farm (pop)", "highFarm")}
-        {numField("WH % to keep in finished villages", "builtOutPercentage", 0.01)}
-        {numField("WH % target for priority villages", "needsMorePercentage", 0.01)}
+        {numField("Prioritise villages below (pts)", "lowPoints",1,
+          "Villages below this points threshold are treated as priority receivers — they receive resources first and are never donors unless they have a long build queue.")}
+        {numField("Finished villages above (pts)", "highPoints",1,
+          "Villages above this threshold are considered built-out and donate most of their surplus, keeping only the WH % defined below.")}
+        {numField("High farm (pop)", "highFarm",1,
+          "Villages with farm population above this value are also treated as built-out donors.")}
+        {numField("WH % to keep in finished villages", "builtOutPercentage", 0.01,
+          "Built-out villages keep this fraction of warehouse capacity and donate the rest. E.g. 0.02 means keep 2%.")}
+        {numField("WH % target for priority villages", "needsMorePercentage", 0.01,
+          "Priority villages (low points) aim to reach this fraction of warehouse capacity.")}
       </div>
       <div className="cfg-section">
         <div className="section-label">HQ Build Priority</div>
-        {checkField("Prioritise empty build queues", "hqPriorityEnabled")}
-        {numField("Maxed-out village (pts)", "maxedOutPoints")}
-        {numField("Long queue threshold (hours)", "lowPointsLongQueueHours")}
+        {checkField("Prioritise empty build queues", "hqPriorityEnabled",
+          "When enabled, fetches each village's HQ build queue. Villages with an empty queue and a next building are boosted as priority receivers — their shortage is raised to the exact building cost shortfall and they won't donate resources needed for construction.")}
+        {numField("Maxed-out village (pts)", "maxedOutPoints",1,
+          "Villages at or above this threshold are skipped during the HQ check — they are considered fully built. Default 10471 is the max points in TW PT.")}
+        {numField("Long queue threshold (hours)", "lowPointsLongQueueHours",0.5,
+          "Low-points villages with a build queue longer than this many hours are allowed to act as donors (they have time before they need to build).")}
       </div>
       <div className="cfg-section">
         <div className="section-label">Clusters</div>
-        {checkField("Enable spatial clustering", "useClusters")}
-        {numField("Number of clusters", "numClusters")}
+        {checkField("Enable spatial clustering", "useClusters",
+          "Divides villages into geographic clusters and balances within each cluster instead of globally. Useful for large or spread-out accounts.")}
+        {numField("Number of clusters", "numClusters",1,
+          "How many clusters to divide the account into. Villages are grouped by geographic proximity on a grid.")}
       </div>
       <div className="cfg-section">
         <div className="section-label">Instant Trade (PP) <span style={{fontSize:10,color:"var(--n300)",fontWeight:400}}>10pp</span></div>
-        {checkField("Enable Merchant Exchange", "premiumInstantEnabled")}
-        {numField("Imbalance threshold", "premiumThreshold", 1000, "Min global imbalance before a PP route is suggested")}
-        {numField("Min trade amount", "premiumMinTradeAmount", 1000)}
-        {numField("Max move amount", "premiumMoveAmount", 1000)}
-        {numField("Max donor distance (fields)", "premiumMaxDistance")}
-        {numField("Max target fill (%)", "premiumMaxTargetFillPct", 0.01)}
-        {numField("Max plans (hard cap)", "premiumMaxPlansHardCap")}
-        {numField("Donor keep (%)", "premiumDonorKeepPct", 0.01)}
-        {numField("Donor keep min", "premiumDonorKeepMin", 1000)}
-        {numField("Donor min excess", "premiumDonorMinExcess", 1000)}
+        {checkField("Enable Merchant Exchange", "premiumInstantEnabled",
+          "When enabled, the balancer will suggest Merchant Exchange (10pp) routes to correct resource imbalances that cannot be fixed by normal shipments alone.")}
+        {selectField("Routing strategy", "premiumStagingStrategy", [
+          { value:"weighted", label:"Weighted donors" },
+          { value:"largest",  label:"Largest donor" },
+        ], 
+        "Weighted donors: splits the required amount across multiple donors, prioritising closer ones. More reliable when merchants are spread out.Largest donor: uses the biggest single donor first. Fewer shipments but can fail if that donor has low merchants or is far away.")}
+        {numField("Imbalance threshold", "premiumThreshold", 1000,
+          "Minimum global imbalance (most abundant minus least abundant resource) required before a PP plan is attempted.")}
+        {numField("Min trade amount", "premiumMinTradeAmount", 1000,
+          "Minimum amount (in the paying resource) that must be staged via shipments before a PP plan is accepted. Plans below this are discarded.")}
+        {numField("Move amount", "premiumMoveAmount", 1000,
+          "Upper cap for how much the planner will try to move for a single PP route. The actual amount may be lower due to merchants, donor excess, or distance limits.")}
+        {numField("Max distance (fields)", "premiumMaxDistance",1,
+          "Maximum distance between a donor village and the PP target. Lower values reduce travel time but may prevent plans if donors are far away.")}
+        {numField("Max target fill (%)", "premiumMaxTargetFillPct", 0.01,
+          "Prevents overfilling the target. E.g. 0.90 means the target won't be planned above 90% of warehouse capacity for the paying resource.")}
+        {numField("Max plans (hard cap)", "premiumMaxPlansHardCap",1,
+          "Hard limit on how many PP routes can be generated per run. Prevents accidental large PP spending.")}
+        {numField("Donor keep (%)", "premiumDonorKeepPct", 0.01,
+          "Donor villages keep at least this fraction of their warehouse capacity in the paying resource. Only amounts above this are considered excess.")}
+        {numField("Donor keep min", "premiumDonorKeepMin", 1000,
+          "Minimum absolute amount a donor always keeps in the paying resource, regardless of the percentage rule.")}
+        {numField("Donor min excess", "premiumDonorMinExcess", 1000,
+          "Minimum excess required for a village to qualify as a PP donor. Villages with less excess are ignored to avoid tiny shipments.")}
       </div>
       <div className="cfg-section">
         <div className="section-label">Send All</div>
@@ -628,7 +695,8 @@ function SettingsTab() {
       </div>
       <div className="cfg-section cfg-section-checks">
         <div className="section-label">Developer</div>
-        {checkField("Debug logging (console)", "debugMode")}
+        {checkField("Debug logging (console)", "debugMode",
+          "Enables verbose [WH] console logging for algorithm steps, HQ boosts, cluster assignments and send decisions.")}
       </div>
       <div className="cfg-footer">
         <button className={`btn btn-save${dirty?" btn-save--dirty":""}${saved?" btn-save--saved":""}`}

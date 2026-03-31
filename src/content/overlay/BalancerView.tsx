@@ -483,7 +483,7 @@ function SendListTab({ links, summary, running, status, detected, clusterMap, pp
             <div className="bal-summary-row">
               <span className="bal-summary-label">Routes</span>
               <span className="bal-summary-val">
-                <strong>{summary.links}</strong> · ~<strong>{summary.merchants}</strong> merchants · avg <strong>{summary.avgDist}</strong>f
+                <strong>{summary.links}</strong> · <strong>{summary.merchants}</strong> merchants · avg <strong>{summary.avgDist}</strong>
               </span>
             </div>
           </div>

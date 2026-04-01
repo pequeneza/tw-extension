@@ -53,7 +53,7 @@ interface HqResult {
   buildingName: string; queueEndsSec: number;
   costWood: number; costStone: number; costIron: number;
   shortWood: number; shortStone: number; shortIron: number;
-  hasShortfall: boolean;
+  hasShortfall: boolean; overQueue?: boolean;
 }
 type Tab = "sendlist" | "settings" | "locks" | "hq";
 
@@ -848,13 +848,10 @@ function HQTab({ hqEnabled, hqNormalQueueMaxHours }: { hqEnabled: boolean; hqNor
         return;
       }
       if (d.results) {
-        const maxQueueSec = (hqNormalQueueMaxHours || 6) * 3600;
         setResults([...d.results].sort((a,b) => {
-          // Villages within the queue threshold come first, sorted by queue end time
-          // Villages exceeding the threshold go to the bottom
-          const aOver = a.queueEndsSec > maxQueueSec;
-          const bOver = b.queueEndsSec > maxQueueSec;
-          if (aOver !== bOver) return aOver ? 1 : -1;
+          // Over-queue villages go last
+          if (!!a.overQueue !== !!b.overQueue) return a.overQueue ? 1 : -1;
+          // Within each group: shortfalls first, then by queue end time ascending
           if (a.hasShortfall !== b.hasShortfall) return a.hasShortfall ? -1 : 1;
           return a.queueEndsSec - b.queueEndsSec;
         }));
@@ -864,12 +861,13 @@ function HQTab({ hqEnabled, hqNormalQueueMaxHours }: { hqEnabled: boolean; hqNor
     };
     document.addEventListener("xbot:balancer:hqResults", onR);
     return () => document.removeEventListener("xbot:balancer:hqResults", onR);
-  }, [hqNormalQueueMaxHours]);
+  }, []);
 
   const runCheck = () => { setError(null); setLoading(true); setResults([]); triggeredByTab.current = true; dispatch("xbot:balancer:hqCheck"); };
-  const maxQueueSec  = (hqNormalQueueMaxHours || 6) * 3600;
-  const shortfalls   = results.filter(r => r.hasShortfall && r.queueEndsSec <= maxQueueSec).length;
-  const overQueue    = results.filter(r => r.queueEndsSec > maxQueueSec).length;
+
+  const boosted    = results.filter(r => !r.overQueue);
+  const longQueue  = results.filter(r => r.overQueue);
+  const shortfalls = boosted.filter(r => r.hasShortfall).length;
 
   return (
     <div className="cfg-body">
@@ -894,56 +892,53 @@ function HQTab({ hqEnabled, hqNormalQueueMaxHours }: { hqEnabled: boolean; hqNor
       {!loading && results.length===0 && !error && (
         <div className="cfg-section"><div className="state-msg">Press "Check HQ queues" to inspect build queues.</div></div>
       )}
-      {results.length > 0 && (
-        <>
-          {/* Villages within queue threshold */}
-          <div className="cfg-section">
-            <div className="section-label">
-              {shortfalls > 0 ? `${shortfalls} village${shortfalls!==1?"s":""} need resources` : "All villages ready ✓"}
-            </div>
-            {results.filter(r => r.queueEndsSec <= maxQueueSec).map((r,i) => (
-              <div key={i} className={`bal-hq-row${r.hasShortfall?" bal-hq-row--warn":" bal-hq-row--ok"}`}>
-                <div className="bal-hq-top">
-                  <a className="bal-hq-name" href={r.villageUrl} target="_self">{r.villageName}</a>
-                  <span className="bal-hq-building">{r.buildingName}</span>
-                  <span className="bal-hq-eta">{r.queueEndsSec>0 ? fmtHMS(r.queueEndsSec) : "now"}</span>
-                  <span className={`bal-hq-status${r.hasShortfall?" bal-hq-status--warn":""}`}>
-                    {r.hasShortfall ? "⚠ Short" : "✓"}
-                  </span>
-                </div>
-                {r.hasShortfall && (
-                  <div className="bal-hq-shortfall">
-                    {r.shortWood  > 0 && <span className="bal-res"><ResIcon res="wood"/>  {fmtNum(r.shortWood)}</span>}
-                    {r.shortStone > 0 && <span className="bal-res"><ResIcon res="stone"/> {fmtNum(r.shortStone)}</span>}
-                    {r.shortIron  > 0 && <span className="bal-res"><ResIcon res="iron"/>  {fmtNum(r.shortIron)}</span>}
-                  </div>
-                )}
-              </div>
-            ))}
+      {boosted.length > 0 && (
+        <div className="cfg-section">
+          <div className="section-label">
+            {shortfalls > 0 ? `${shortfalls} village${shortfalls!==1?"s":""} need resources` : "All villages ready ✓"}
           </div>
-          {/* Villages exceeding queue threshold — shown dimmed */}
-          {overQueue > 0 && (
-            <div className="cfg-section">
-              <div className="section-label" style={{ color:"var(--n300)" }}>
-                {overQueue} village{overQueue!==1?"s":""} with queue &gt; {hqNormalQueueMaxHours}h — not boosted
+          {boosted.map((r,i) => (
+            <div key={i} className={`bal-hq-row${r.hasShortfall?" bal-hq-row--warn":" bal-hq-row--ok"}`}>
+              <div className="bal-hq-top">
+                <a className="bal-hq-name" href={r.villageUrl} target="_self">{r.villageName}</a>
+                <span className="bal-hq-building">{r.buildingName}</span>
+                <span className="bal-hq-eta">{r.queueEndsSec>0 ? fmtHMS(r.queueEndsSec) : "now"}</span>
+                <span className={`bal-hq-status${r.hasShortfall?" bal-hq-status--warn":""}`}>
+                  {r.hasShortfall ? "⚠ Short" : "✓"}
+                </span>
               </div>
-              {results.filter(r => r.queueEndsSec > maxQueueSec).map((r,i) => (
-                <div key={i} className="bal-hq-row bal-hq-row--ok" style={{ opacity:0.45 }}>
-                  <div className="bal-hq-top">
-                    <a className="bal-hq-name" href={r.villageUrl} target="_self">{r.villageName}</a>
-                    <span className="bal-hq-building">{r.buildingName}</span>
-                    <span className="bal-hq-eta">{fmtHMS(r.queueEndsSec)}</span>
-                    <span className="bal-hq-status" style={{ color:"var(--n300)" }}>⏭ Long queue</span>
-                  </div>
+              {r.hasShortfall && (
+                <div className="bal-hq-shortfall">
+                  {r.shortWood  > 0 && <span className="bal-res"><ResIcon res="wood"/>  {fmtNum(r.shortWood)}</span>}
+                  {r.shortStone > 0 && <span className="bal-res"><ResIcon res="stone"/> {fmtNum(r.shortStone)}</span>}
+                  {r.shortIron  > 0 && <span className="bal-res"><ResIcon res="iron"/>  {fmtNum(r.shortIron)}</span>}
                 </div>
-              ))}
+              )}
             </div>
-          )}
-        </>
+          ))}
+        </div>
+      )}
+      {longQueue.length > 0 && (
+        <div className="cfg-section">
+          <div className="section-label" style={{ color:"var(--n300)" }}>
+            {longQueue.length} village{longQueue.length!==1?"s":""} with queue &gt; {hqNormalQueueMaxHours}h — not boosted
+          </div>
+          {longQueue.map((r,i) => (
+            <div key={i} className="bal-hq-row bal-hq-row--ok" style={{ opacity:0.45 }}>
+              <div className="bal-hq-top">
+                <a className="bal-hq-name" href={r.villageUrl} target="_self">{r.villageName}</a>
+                <span className="bal-hq-building">{r.buildingName}</span>
+                <span className="bal-hq-eta">{fmtHMS(r.queueEndsSec)}</span>
+                <span className="bal-hq-status" style={{ color:"var(--n300)" }}>⏭ Long queue</span>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
 }
+
 
 /* ─── BalancerView ───────────────────────────────────────────────────────── */
 export function BalancerView({ visible, onBack }: { visible:boolean; onBack:()=>void }): React.ReactElement {

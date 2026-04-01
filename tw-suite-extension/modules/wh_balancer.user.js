@@ -576,6 +576,7 @@
           hqPriorityEnabled: false,
           maxedOutPoints: 10471,
           lowPointsLongQueueHours: 3,
+          hqNormalQueueMaxHours: 6,
 
           settingsOpen: false,
           premiumOptionsOpen: false
@@ -613,6 +614,7 @@
         if (typeof s.sendAllEnabled === "undefined") s.sendAllEnabled = false;
         if (typeof s.debugMode === "undefined") s.debugMode = false;
         if (typeof s.pendingSendsTTLHours === "undefined") s.pendingSendsTTLHours = 2;
+        if (typeof s.hqNormalQueueMaxHours === "undefined" || isNaN(+s.hqNormalQueueMaxHours)) s.hqNormalQueueMaxHours = 6;
         if (typeof s.sendAllIntervalMs === "undefined") s.sendAllIntervalMs = 500;
 
         if (typeof s.settingsOpen === "undefined") s.settingsOpen = false;
@@ -1018,60 +1020,8 @@
           const points = parseIntSafe(allWoodObjects[i]?.parentElement?.previousElementSibling?.innerText);
 
           const vNode = allVillages[i];
-
-          // Queue end time — read from the last <li> in ul.order_queue for this village.
-          // data-title format: "Building name - a 02.04. às 18:44" or "Building name - hoje às 22:32"
-          // or "Building name - amanhã às 06:54". Parse into seconds-from-now.
-          let prodQueueEndsSec = 0;
-          const villageId = vNode.dataset.id;
-          const $queueUl = $page.find(`#building_order_${villageId}`);
-          if ($queueUl.length) {
-            const $lastLi = $queueUl.find("li.order").last();
-            const rawTitle = $lastLi.find(".queue_icon img").attr("data-title") || "";
-            // Extract the time part after " - "
-            const timePart = rawTitle.split(" - ").slice(1).join(" - ").trim();
-            if (timePart) {
-              try {
-                const nowDate = new Date();
-                const nowSec  = Math.floor(nowDate.getTime() / 1000);
-                // Match "HH:MM" at end of string
-                const timeMatch = timePart.match(/(\d{1,2}):(\d{2})\s*$/);
-                if (timeMatch) {
-                  const hh = parseInt(timeMatch[1], 10);
-                  const mm = parseInt(timeMatch[2], 10);
-                  let endDate = new Date(nowDate);
-                  endDate.setHours(hh, mm, 0, 0);
-                  // Check for day offset keywords
-                  if (/amanhã/i.test(timePart)) {
-                    endDate.setDate(endDate.getDate() + 1);
-                  } else if (/hoje/i.test(timePart)) {
-                    // same day — already set
-                  } else {
-                    // "a DD.MM." format — parse day and month
-                    const dateMatch = timePart.match(/a\s+(\d{1,2})\.(\d{1,2})\./);
-                    if (dateMatch) {
-                      const day = parseInt(dateMatch[1], 10);
-                      const mon = parseInt(dateMatch[2], 10) - 1; // 0-indexed
-                      endDate.setMonth(mon, day);
-                      // If that date is in the past (e.g. parsed month < now), advance a year
-                      if (endDate.getTime() < nowDate.getTime() - 60000) {
-                        endDate.setFullYear(endDate.getFullYear() + 1);
-                      }
-                    }
-                  }
-                  // If the time is earlier today, it must be tomorrow
-                  if (endDate.getTime() < nowDate.getTime() - 60000 && /hoje/i.test(timePart)) {
-                    endDate.setDate(endDate.getDate() + 1);
-                  }
-                  const endSec = Math.floor(endDate.getTime() / 1000);
-                  prodQueueEndsSec = Math.max(0, endSec - nowSec);
-                }
-              } catch (_) { /* ignore parse errors */ }
-            }
-          }
-
           villagesData.push({
-            id: villageId,
+            id: vNode.dataset.id,
             points,
             url: vNode.children?.[0]?.children?.[0]?.href || "#",
             name: (vNode.innerText || "").trim(),
@@ -1080,8 +1030,7 @@
             totalMerchants: totalMerch,
             warehouseCapacity: wh,
             farmSpaceUsed: farmUsed,
-            farmSpaceTotal: farmTot,
-            prodQueueEndsSec,
+            farmSpaceTotal: farmTot
           });
         }
       }
@@ -1262,11 +1211,7 @@
         //            they are allowed to act as donors (can have excess).
         if (v.points < s.lowPoints) {
           const hq = state.hqData ? state.hqData.get(String(v.id)) : null;
-          // Use hqData queueEndsSec if available; fall back to prodQueueEndsSec
-          // parsed from the prod overview page (full queue end time).
-          const queueSec = hq && typeof hq.queueEndsSec === "number" && hq.queueEndsSec > 0
-            ? hq.queueEndsSec
-            : (v.prodQueueEndsSec || 0);
+          const queueSec = hq && typeof hq.queueEndsSec === "number" ? hq.queueEndsSec : 0;
 
           const hasLongQueue = queueSec > longQueueSec;
 
@@ -1451,6 +1396,16 @@
         if (!hq) continue;
         if (!hq.buildingName) continue;            // no next building configured
         if (hq.costWood + hq.costStone + hq.costIron === 0) continue; // cost unknown
+
+        const isLowPtsV = v.points < (s.lowPoints || 0);
+
+        // Non-low-points villages whose queue exceeds hqNormalQueueMaxHours are not
+        // boosted as shortage receivers — they have enough time for a future run.
+        const normalQueueMaxSec = ((s.hqNormalQueueMaxHours ?? 6)) * 3600;
+        if (!isLowPtsV && normalQueueMaxSec > 0 && (hq.queueEndsSec || 0) > normalQueueMaxSec) {
+          wbLog(`[WH] HQ skip ${v.name}: queue ${((hq.queueEndsSec||0)/3600).toFixed(1)}h > max ${s.hqNormalQueueMaxHours}h`);
+          continue;
+        }
 
         // Resolve manual lock for this village by coords
         const coords    = coordsFromVillageName(v.name);
@@ -3656,13 +3611,6 @@
         ? Math.max(0, maxEndTime - Math.floor(getNowMs() / 1000))
         : 0;
 
-      // Also check prodQueueEndsSec parsed from the overview prod page (full queue).
-      // The mode=build parse may miss items if the page structure varies — take the max.
-      const prodV = state?.villagesData?.find(v => String(v.id) === String(villageId));
-      if (prodV && prodV.prodQueueEndsSec > queueEndsSec) {
-        wbLog(`[WH] HQ queue time from prod page: ${prodV.prodQueueEndsSec}s > mode=build: ${queueEndsSec}s — using prod`);
-        queueEndsSec = prodV.prodQueueEndsSec;
-      }
 
       // ── Building cost (from screen=main, no mode) ─────────────────────────────
       // tr#main_buildrow_{buildingId} — data-cost attribute has the exact integer.
@@ -4025,10 +3973,6 @@
         hqLastFetchMs: savedHq.timestamp,
         pendingSends:  state?.pendingSends || [],
         sendAllTimer:  null,
-        useClusters:   false,
-        numClusters:   1,
-        debugMode:     false,
-        pendingSendsTTLHours: 2,
       };
       try {
         await runComputationAndRender();
@@ -4066,7 +4010,10 @@
             const hq = cachedHqData.get(String(v.id));
             if (!hq) continue;
             const check = computeHqReadiness(v, hq);
-            if (check) results.push({ villageName: v.name, villageUrl: v.url, villagePoints: v.points, ...check });
+            const normalQueueMaxSec = ((state.settings.hqNormalQueueMaxHours ?? 6)) * 3600;
+            const isLowPtsV = v.points < (state.settings.lowPoints || 0);
+            const overQueue = !isLowPtsV && normalQueueMaxSec > 0 && (hq.queueEndsSec || 0) > normalQueueMaxSec;
+            if (check) results.push({ villageName: v.name, villageUrl: v.url, villagePoints: v.points, overQueue, ...check });
           }
           document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
             detail: { results, cached: true, ageMin },
@@ -4082,7 +4029,10 @@
             try {
               const hq = await fetchHqNextBuilding(v.id);
               const check = computeHqReadiness(v, hq);
-              if (check) results.push({ villageName: v.name, villageUrl: v.url, villagePoints: v.points, ...check });
+              const normalQueueMaxSecF = ((state.settings.hqNormalQueueMaxHours ?? 6)) * 3600;
+              const isLowPtsVF = v.points < (state.settings.lowPoints || 0);
+              const overQueueF = !isLowPtsVF && normalQueueMaxSecF > 0 && (hq?.queueEndsSec || 0) > normalQueueMaxSecF;
+              if (check) results.push({ villageName: v.name, villageUrl: v.url, villagePoints: v.points, overQueue: overQueueF, ...check });
             } catch (_) { /* skip */ }
             if (i < toCheck.length - 1) await new Promise(res => setTimeout(res, 300));
           }
@@ -4342,7 +4292,7 @@
         saveHqData(hqData, nowMs);
       }
 
-      if ((state.settings.hqPriorityEnabled || isFirstHqRun) && hqData && hqData.size > 0) {
+      if (state.settings.hqPriorityEnabled && hqData && hqData.size > 0) {
         applyHqBuildPriority({ villagesData, excessResources, shortageResources, incomingRes, hqData, averages });
       }
 
@@ -4439,6 +4389,7 @@
 
         debugMode: false,
         pendingSendsTTLHours: 2,
+        hqNormalQueueMaxHours: 6,
 
       };
 

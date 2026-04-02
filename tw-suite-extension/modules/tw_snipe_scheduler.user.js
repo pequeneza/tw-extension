@@ -509,6 +509,8 @@ function ensureOpenIcon() {
               <td><input id="twgs_gameSpeed" type="number" step="0.01" value="${_defaultGameSpeed}" style="width:80px"></td>
               <th width="100">Unit speed</th>
               <td><input id="twgs_unitSpeed" type="number" step="0.01" value="${_defaultUnitSpeed}" style="width:80px"></td>
+              <th width="80">Sigil %</th>
+              <td><input id="twgs_sigil" type="number" step="1" min="0" max="100" value="0" style="width:60px" title="Sigil item bonus that reduces travel time (e.g. 20 = 20% faster)"></td>
             </tr>
           </table>
 
@@ -567,7 +569,7 @@ function ensureOpenIcon() {
   $('#twgs_reload').on('click', (e) => { e.preventDefault(); openUI(); });
 
   // ── speed change: re-render whichever tab is active ────────────────────────
-  $('#twgs_gameSpeed, #twgs_unitSpeed').on('change input', () => {
+  $('#twgs_gameSpeed, #twgs_unitSpeed, #twgs_sigil').on('change input', () => {
     if (state.activeTab === 'auto' && state.selectedGapIndex != null) renderSelectedGapResults();
     if (state.activeTab === 'manual') renderManualResults();
   });
@@ -814,9 +816,12 @@ function ensureOpenIcon() {
 
 
   function getSpeedFactorFromUI() {
-    const gameSpeed = parseFloat($('#twgs_gameSpeed').val()) || 1.4;
-    const unitSpeed = parseFloat($('#twgs_unitSpeed').val()) || 0.75;
-    return { gameSpeed, unitSpeed, speedFactor: 1 / (gameSpeed * unitSpeed) };
+    const gameSpeed  = parseFloat($('#twgs_gameSpeed').val()) || 1.4;
+    const unitSpeed  = parseFloat($('#twgs_unitSpeed').val()) || 0.75;
+    const sigilPct   = parseFloat($('#twgs_sigil').val())     || 0;
+    const sigilRatio = 1 + sigilPct / 100;
+    // sigilRatio > 1 means troops travel faster → travel time is divided by sigilRatio
+    return { gameSpeed, unitSpeed, sigilPct, speedFactor: 1 / (gameSpeed * unitSpeed * sigilRatio) };
   }
 
   function stopTimer(idx) {

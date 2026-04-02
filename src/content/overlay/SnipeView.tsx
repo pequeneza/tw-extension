@@ -676,6 +676,8 @@ export function SnipeView({ visible, onBack }: {
   const [unitSpeed,      setUnitSpeed]      = useState(0.75);
   const [gameSpeedDraft, setGameSpeedDraft] = useState("1.4");
   const [unitSpeedDraft, setUnitSpeedDraft] = useState("0.75");
+  const [sigil,          setSigil]          = useState(0);
+  const [sigilDraft,     setSigilDraft]     = useState("0");
 
   // Troops shared between both tabs
   const [troops,        setTroops]        = useState<VillageTroops[]>([]);
@@ -701,7 +703,8 @@ export function SnipeView({ visible, onBack }: {
     ? incomings.filter((i) => coordKey(i.target) === coordKey(target))
     : incomings;
 
-  const speedFactor = 1 / (gameSpeed * unitSpeed);
+  const sigilRatio  = 1 + sigil / 100;
+  const speedFactor = 1 / (gameSpeed * unitSpeed * sigilRatio);
   const candidates  = target && filteredIncomings.length >= 2
     ? computeCandidates(filteredIncomings, gapIdx, troops, target, speedFactor)
     : [];
@@ -784,6 +787,15 @@ export function SnipeView({ visible, onBack }: {
                 value={unitSpeedDraft}
                 onChange={(e) => { setUnitSpeedDraft(e.target.value); const n = parseFloat(e.target.value); if (Number.isFinite(n) && n > 0) setUnitSpeed(n); }}
                 onBlur={() => { const n = parseFloat(unitSpeedDraft); if (!Number.isFinite(n) || n <= 0) setUnitSpeedDraft(String(unitSpeed)); }}
+              />
+            </label>
+            <label className="snipe-speed-label">
+              Sigil %
+              <input className="input snipe-speed-input" type="number" step={1} min={0} max={100}
+                title="Sigil item bonus — reduces troop travel time (e.g. 20 = 20% faster)"
+                value={sigilDraft}
+                onChange={(e) => { setSigilDraft(e.target.value); const n = parseFloat(e.target.value); if (Number.isFinite(n) && n >= 0) setSigil(n); }}
+                onBlur={() => { const n = parseFloat(sigilDraft); if (!Number.isFinite(n) || n < 0) setSigilDraft(String(sigil)); }}
               />
             </label>
             {tab === "auto" && (

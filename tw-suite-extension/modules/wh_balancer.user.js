@@ -551,7 +551,7 @@
           highPoints: 7000,
           highFarm: 23000,
           lowPoints: 3000,
-          builtOutPercentage: 0.26,
+          builtOutPercentage: 0.2,
           needsMorePercentage: 0.7,
 
           premiumInstantEnabled: false,
@@ -590,7 +590,7 @@
 
         if (typeof s.isMinting === "undefined") s.isMinting = false;
         if (!s.highPoints) s.highPoints = 12000;
-        if (!s.highFarm) s.highFarm = 99999;
+        if (!s.highFarm) s.highFarm = 23000;
         if (!s.lowPoints && s.lowPoints !== 0) s.lowPoints = 1;
         if (!s.builtOutPercentage && s.builtOutPercentage !== 0) s.builtOutPercentage = 0.25;
         if (!s.needsMorePercentage && s.needsMorePercentage !== 0) s.needsMorePercentage = 0.85;
@@ -642,7 +642,7 @@
         s.sendAllIntervalMs = Math.max(100, parseInt(s.sendAllIntervalMs, 10) || 500);
 
         s.highPoints = parseInt(s.highPoints, 10) || 12000;
-        s.highFarm = parseInt(s.highFarm, 10) || 99999;
+        s.highFarm = parseInt(s.highFarm, 10) || 23000;
         s.lowPoints = parseInt(s.lowPoints, 10);
         if (isNaN(s.lowPoints)) s.lowPoints = 1;
 
@@ -1191,14 +1191,18 @@
           if (tempIron  > 0 && (v.iron  + inc.iron)  <  hqBuilding.costIron)  tempIron  = 0;
         }
 
-        // Built-out villages (high points or high farm) donate most surplus
+        // Built-out villages (high points or high farm) donate most surplus.
+        // leaveWood/Stone/Iron = how much the village keeps. It always keeps at least
+        // reservePerVillage, and up to builtOutPercentage×WH if it has that much.
+        // Using min(stock, wh_leave) means a village below the threshold keeps everything
+        // it has — avoiding spurious excess when stock < wh_leave.
         if (v.farmSpaceUsed > s.highFarm || v.points > s.highPoints) {
           const wh_leave  = s.builtOutPercentage * wh;
           const res_leave = s.reservePerVillage || 0;
 
-          const leaveWood  = (v.wood  + inc.wood)  > wh_leave ? wh_leave  : res_leave;
-          const leaveStone = (v.stone + inc.stone) > wh_leave ? wh_leave  : res_leave;
-          const leaveIron  = (v.iron  + inc.iron)  > wh_leave ? wh_leave  : res_leave;
+          const leaveWood  = Math.max(res_leave, Math.min(v.wood  + inc.wood,  wh_leave));
+          const leaveStone = Math.max(res_leave, Math.min(v.stone + inc.stone, wh_leave));
+          const leaveIron  = Math.max(res_leave, Math.min(v.iron  + inc.iron,  wh_leave));
 
           if (v.wood  + inc.wood  > leaveWood)  tempWood  = Math.round((v.wood  + inc.wood)  - leaveWood);
           if (v.stone + inc.stone > leaveStone) tempStone = Math.round((v.stone + inc.stone) - leaveStone);
@@ -1244,15 +1248,15 @@
           const ovThreshold  = 0.95 * wh;
 
           if (v.wood  + inc.wood  >= ovThreshold) {
-            const ovLeave = (v.wood  + inc.wood)  > wh_leave_ov ? wh_leave_ov : res_leave_ov;
+            const ovLeave = Math.max(res_leave_ov, Math.min(v.wood  + inc.wood,  wh_leave_ov));
             tempWood  = Math.round((v.wood  + inc.wood)  - ovLeave);
           }
           if (v.stone + inc.stone >= ovThreshold) {
-            const ovLeave = (v.stone + inc.stone) > wh_leave_ov ? wh_leave_ov : res_leave_ov;
+            const ovLeave = Math.max(res_leave_ov, Math.min(v.stone + inc.stone, wh_leave_ov));
             tempStone = Math.round((v.stone + inc.stone) - ovLeave);
           }
           if (v.iron  + inc.iron  >= ovThreshold) {
-            const ovLeave = (v.iron  + inc.iron)  > wh_leave_ov ? wh_leave_ov : res_leave_ov;
+            const ovLeave = Math.max(res_leave_ov, Math.min(v.iron  + inc.iron,  wh_leave_ov));
             tempIron  = Math.round((v.iron  + inc.iron)  - ovLeave);
           }
         }

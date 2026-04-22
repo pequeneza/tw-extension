@@ -118,6 +118,82 @@ function makeId() {
   return `${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
 
+/**
+ * Parse a block of pasted text into {dt, ms} timing rows.
+ *
+ * Recognised formats (PT locale + plain):
+ *   hoje às HH:MM:SS[.mmm]          → today
+ *   amanhã às HH:MM:SS[.mmm]        → tomorrow
+ *   DD.MM. às HH:MM:SS[.mmm]        → specific date (current year assumed)
+ *   HH:MM:SS[.mmm]                  → today (bare time)
+ *
+ * Returns an array of { dt: string, ms: number } — ready to create TimingRows.
+ */
+function parsePastedTimings(text: string): Array<{ dt: string; ms: number }> {
+  const now   = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  // Normalise common unicode spaces and dashes
+  const norm = text
+    .replace(/\u00a0/g, " ")   // non-breaking space
+    .replace(/às/g, "as");      // normalise PT preposition
+
+  const results: Array<{ dt: string; ms: number }> = [];
+
+  // Regex: optional prefix (hoje/amanhã/DD.MM.), optional "as", HH:MM:SS[.mmm]
+  const re =
+    /(?:(hoje|amanha|amanh[aã])|(\d{1,2})\.(\d{1,2})\.)?\s*(?:as\s+)?(\d{1,2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?/gi;
+
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(norm)) !== null) {
+    const [, todayKw, dayStr, monStr, hh, mm, ss, msStr] = m;
+
+    const hours   = parseInt(hh!,  10);
+    const minutes = parseInt(mm!,  10);
+    const seconds = parseInt(ss!,  10);
+    const millis  = msStr ? parseInt(msStr.padEnd(3, "0"), 10) : 0;
+
+    let base: Date;
+    if (todayKw) {
+      // "hoje" or "amanhã/amanha"
+      const isT = /hoje/i.test(todayKw);
+      base = new Date(today);
+      if (!isT) base.setDate(base.getDate() + 1);
+    } else if (dayStr && monStr) {
+      // DD.MM.
+      const day   = parseInt(dayStr, 10);
+      const month = parseInt(monStr, 10) - 1; // 0-based
+      base = new Date(now.getFullYear(), month, day);
+      // If the resulting date is in the past by more than 12h, assume next year
+      if (base.getTime() < now.getTime() - 12 * 3_600_000) {
+        base.setFullYear(base.getFullYear() + 1);
+      }
+    } else {
+      // Bare HH:MM:SS — assume today, roll to tomorrow if already past
+      base = new Date(today);
+      const candidate = new Date(today.getFullYear(), today.getMonth(), today.getDate(), hours, minutes, seconds, millis);
+      if (candidate.getTime() < now.getTime() - 2_000) {
+        base.setDate(base.getDate() + 1);
+      }
+    }
+
+    base.setHours(hours, minutes, seconds, 0);
+    const ms = millis;
+
+    results.push({ dt: toDatetimeLocalMs(base.getTime()), ms });
+  }
+
+  // Deduplicate by dt+ms
+  const seen = new Set<string>();
+  return results.filter(({ dt, ms }) => {
+    const key = `${dt}+${ms}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+
 /* ─── localStorage helpers ────────────────────────────────────────────────── */
 function loadManualState(): ManualState {
   try {
@@ -508,6 +584,32 @@ function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor }: {
     setComputed(false);
   }
 
+  const [pasteError, setPasteError] = useState<string | null>(null);
+
+  async function handlePaste() {
+    setPasteError(null);
+    try {
+      const text = await navigator.clipboard.readText();
+      const parsed = parsePastedTimings(text);
+      if (!parsed.length) {
+        setPasteError("No recognisable timings found. Copy attack arrival times (e.g. 22:32:14 or hoje às 22:32:14).");
+        return;
+      }
+      setRows((prev) => {
+        const existing = new Set(prev.map((r) => `${r.dt}+${r.ms}`));
+        const toAdd = parsed.filter((p) => !existing.has(`${p.dt}+${p.ms}`));
+        if (!toAdd.length) {
+          setPasteError("All pasted timings are already in the list.");
+          return prev;
+        }
+        return [...prev, ...toAdd.map((p) => ({ id: makeId(), dt: p.dt, ms: p.ms }))];
+      });
+      setComputed(false);
+    } catch {
+      setPasteError("Clipboard access denied — please paste manually.");
+    }
+  }
+
   function compute() {
     setComputeError(null); setComputed(false);
     const target = parseCoord(targetStr);
@@ -590,17 +692,25 @@ function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor }: {
             >✕</button>
           </div>
         ))}
-        <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+        <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
           <button className="btn btn-ghost" onClick={addRow}>+ Add timing</button>
+          <button
+            className="btn btn-ghost"
+            title="Paste attack arrival times from clipboard. Supports plain HH:MM:SS or PT locale (hoje às HH:MM:SS, amanhã às …, DD.MM. às …)"
+            onClick={handlePaste}
+          >📋 Paste timings</button>
           <button
             className="btn btn-ghost"
             style={{ color: "#ef4444" }}
             onClick={() => {
               setRows([{ id: makeId(), dt: toDatetimeLocalMs(Date.now() + 3_600_000), ms: 0 }]);
-              setComputed(false); setComputeError(null);
+              setComputed(false); setComputeError(null); setPasteError(null);
             }}
           >Clear all</button>
         </div>
+        {pasteError && (
+          <div className="snipe-error" style={{ marginTop: 4, fontSize: 11 }}>{pasteError}</div>
+        )}
       </div>
 
       {/* Compute */}

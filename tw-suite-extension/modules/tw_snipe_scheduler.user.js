@@ -543,14 +543,16 @@ function ensureOpenIcon() {
 
             <h4 style="margin-bottom:4px;">Attack timings
               <button type="button" class="btn" id="twgs_manual_add" style="font-size:11px; padding:2px 8px; margin-left:8px;">+ Add</button>
+              <button type="button" class="btn" id="twgs_manual_paste" style="font-size:11px; padding:2px 8px; margin-left:4px;" title="Paste attack arrival times from clipboard (HH:MM:SS, hoje às …, amanhã às …, DD.MM. às …)">📋 Paste</button>
               <span style="color:#555; font-size:11px; margin-left:8px;">enter arrival time of each noble/attack at the target</span>
             </h4>
             <div id="twgs_manual_timings" style="margin-bottom:8px;"></div>
 
-            <div style="display:flex; gap:8px; margin-bottom:10px;">
+            <div style="display:flex; gap:8px; margin-bottom:6px;">
               <button type="button" class="btn" id="twgs_manual_compute">Compute gaps</button>
               <button type="button" class="btn" id="twgs_manual_clear_all" style="color:#b71c1c;">Clear all</button>
             </div>
+            <div id="twgs_paste_error" style="display:none; color:#b71c1c; font-size:11px; margin-bottom:6px;"></div>
 
             <h4>Results</h4>
             <div id="twgs_result_manual">—</div>
@@ -592,6 +594,57 @@ function ensureOpenIcon() {
   }
   $('#twgs_tab_auto').on('click', () => activateTab('auto'));
   $('#twgs_tab_manual').on('click', () => activateTab('manual'));
+
+
+  // ── Paste timings: parse clipboard text into timing rows ──────────────────
+  // Recognised formats (PT locale + plain):
+  //   hoje às HH:MM:SS[.mmm]       → today
+  //   amanhã às HH:MM:SS[.mmm]     → tomorrow
+  //   DD.MM. às HH:MM:SS[.mmm]     → specific date (current year)
+  //   HH:MM:SS[.mmm]               → today (bare time, rolls to tomorrow if past)
+  function parsePastedTimings(text) {
+    const now   = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    const norm = text.replace(/\u00a0/g, ' ').replace(/às/g, 'as');
+
+    const results = [];
+    const re = /(?:(hoje|amanha|amanh[aã])|(\d{1,2})\.(\d{1,2})\.)?\s*(?:as\s+)?(\d{1,2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?/gi;
+
+    let m;
+    while ((m = re.exec(norm)) !== null) {
+      const [, todayKw, dayStr, monStr, hh, mm, ss, msStr] = m;
+      const hours   = parseInt(hh, 10);
+      const minutes = parseInt(mm, 10);
+      const seconds = parseInt(ss, 10);
+      const millis  = msStr ? parseInt(msStr.padEnd(3, '0'), 10) : 0;
+
+      let base;
+      if (todayKw) {
+        base = new Date(today);
+        if (!/hoje/i.test(todayKw)) base.setDate(base.getDate() + 1);
+      } else if (dayStr && monStr) {
+        const day = parseInt(dayStr, 10), month = parseInt(monStr, 10) - 1;
+        base = new Date(now.getFullYear(), month, day);
+        if (base.getTime() < now.getTime() - 12 * 3600000) base.setFullYear(base.getFullYear() + 1);
+      } else {
+        base = new Date(today);
+        const cand = new Date(today.getFullYear(), today.getMonth(), today.getDate(), hours, minutes, seconds, millis);
+        if (cand.getTime() < now.getTime() - 2000) base.setDate(base.getDate() + 1);
+      }
+      base.setHours(hours, minutes, seconds, 0);
+      results.push({ dt: toDatetimeLocalMs(base.getTime()), ms: millis });
+    }
+
+    // Deduplicate
+    const seen = new Set();
+    return results.filter(({ dt, ms }) => {
+      const key = `${dt}+${ms}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
 
   // ── Manual tab: timing row management ─────────────────────────────────────
   function addTimingRow(value) {
@@ -640,6 +693,39 @@ function ensureOpenIcon() {
 
   $('#twgs_manual_target').on('change input', () => saveManualForm());
   $('#twgs_manual_add').on('click', () => { addTimingRow(); saveManualForm(); });
+
+  $('#twgs_manual_paste').on('click', async () => {
+    const $errDiv = $('#twgs_paste_error');
+    $errDiv.hide().text('');
+    try {
+      const text = await navigator.clipboard.readText();
+      const parsed = parsePastedTimings(text);
+      if (!parsed.length) {
+        $errDiv.text('No recognisable timings found. Copy attack arrival times (e.g. 22:32:14 or hoje às 22:32:14).').show();
+        return;
+      }
+      // Collect already-present dt values to avoid duplicates
+      const existing = new Set();
+      $('#twgs_manual_timings .twgs_timing_row').each((_, row) => {
+        const dt = $(row).find('.twgs_timing_input').val();
+        const ms = $(row).find('.twgs_timing_ms').val() || '0';
+        if (dt) existing.add(dt + '+' + ms);
+      });
+      const toAdd = parsed.filter(p => !existing.has(p.dt + '+' + (p.ms || 0)));
+      if (!toAdd.length) {
+        $errDiv.text('All pasted timings are already in the list.').show();
+        return;
+      }
+      const startIdx = $('#twgs_manual_timings .twgs_timing_row').length;
+      toAdd.forEach(p => addTimingRow(p.dt));
+      toAdd.forEach((p, i) => {
+        $('#twgs_manual_timings .twgs_timing_row').eq(startIdx + i).find('.twgs_timing_ms').val(String(p.ms || 0));
+      });
+      saveManualForm();
+    } catch {
+      $errDiv.text('Clipboard access denied — please paste manually.').show();
+    }
+  });
   $('#twgs_manual_clear_all').on('click', () => {
     $('#twgs_manual_timings').empty();
     addTimingRow();

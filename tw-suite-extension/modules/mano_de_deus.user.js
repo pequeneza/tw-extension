@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Mão de deus (Teste-striker) - Hybrid Scheduler + Alerts (10s + Notification)
-// @version      2.4.0
-// @description  Schedules confirm click using server time with a coarse+fine hybrid timer. Robust duration parsing, safe datetime parsing, status display, and attention at T-10s (banner + title/favicon flash + desktop notification + beep with Chrome unlock).
+// @version      2.4.1
+// @description  Schedules confirm click using server time with a coarse+fine hybrid timer. Robust duration parsing, safe datetime parsing, status display, and attention at T-10s (banner + title/favicon flash + desktop notification + beep with Chrome unlock). DOM frozen during fine phase for precision.
 // @match        *://*.tribalwars.com.pt/game.php*screen=place*try=confirm*
 // @match        *://*.tribalwars.com.br/game.php*screen=place*try=confirm*
 // @grant        none
@@ -11,7 +11,8 @@
   'use strict';
 
   // ---------------- storage keys ----------------
-  const LS_FINE_OFFSET = 'CS.offsetFineMs';        // user calibration (+/- ms)
+  const LS_FINE_OFFSET   = 'CS.offsetFineMs';        // user calibration (+/- ms)
+  const LS_LAT_MULT      = 'CS.latencyMultiplier';   // latency multiplier (default 0.25)
   const LS_SERVER_OFFSET = 'CS.serverOffsetMs';    // serverNow - Date.now()
   const LS_ALERT_LEAD = 'CS.alertLeadMs';          // ms before target to alert
   const LS_ALERT_SOUND = 'CS.alertSoundEnabled';   // "1"/"0"
@@ -45,7 +46,6 @@
   }
 
   // ---------------- safe datetime-local parsing/formatting ----------------
-  // Accepts "YYYY-MM-DDTHH:MM" with optional ":SS" and optional ".mmm"
   function parseDatetimeLocalMs(value) {
     const m = String(value).match(
       /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.(\d{1,3}))?$/
@@ -56,7 +56,6 @@
     const hh = +m[4], mm = +m[5], ss = +(m[6] || 0);
     const ms = +(String(m[7] || '0').padEnd(3, '0'));
 
-    // Construct local time explicitly (avoid Date(string) parsing differences)
     return new Date(yyyy, MM - 1, dd, hh, mm, ss, ms).getTime();
   }
 
@@ -96,14 +95,12 @@
   function parseDurationToMs(text) {
     const t = String(text).trim();
 
-    // Common HH:MM:SS
     let m = t.match(/(\d+)\s*:\s*(\d{1,2})\s*:\s*(\d{1,2})/);
     if (m) {
       const h = +m[1], mm = +m[2], ss = +m[3];
       if ([h, mm, ss].every(Number.isFinite)) return ((h * 3600) + (mm * 60) + ss) * 1000;
     }
 
-    // Fallback: last 3 numeric groups
     const nums = t.match(/\d+/g)?.map(Number) || [];
     if (nums.length >= 3) {
       const [h, mm, ss] = nums.slice(-3);
@@ -117,7 +114,6 @@
     const $form = $('#command-data-form');
     if (!$form.length) return NaN;
 
-    // PT label contains "Duração" (with or without colon)
     const $labelCell = $form.find('td').filter((_, td) => /duraç/i.test($(td).text())).first();
     if (!$labelCell.length) return NaN;
 
@@ -126,7 +122,7 @@
     return parseDurationToMs(txt);
   }
 
-  // ---------------- attention helpers (audio unlock + title/favicon + banner + notifications) ----------------
+  // ---------------- attention helpers ----------------
   let CS_AUDIO_CTX = null;
 
   function csGetAudioCtx() {
@@ -137,13 +133,11 @@
   }
 
   async function csUnlockAudio() {
-    // Must be called from a user gesture (your schedule click).
     try {
       const ctx = csGetAudioCtx();
       if (!ctx) return false;
       if (ctx.state === 'suspended') await ctx.resume();
 
-      // Warm-up tick (some Chrome versions require a node to start)
       const o = ctx.createOscillator();
       const g = ctx.createGain();
       g.gain.value = 0.0001;
@@ -173,7 +167,6 @@
       g.gain.value = vol;
       o.connect(g);
       g.connect(ctx.destination);
-
       o.start();
       o.stop(ctx.currentTime + ms / 1000);
       return true;
@@ -288,7 +281,9 @@
     }
   }
 
-  // Fires ONCE at (T - leadMs), then stops after target
+  // Fires ONCE at (T - leadMs), then stops after target.
+  // Returns a freeze() function — call it to stop the banner countdown
+  // without hiding the banner (used when fine phase starts).
   function csScheduleAlert(targetServerMs, leadMs, enabledSound, enabledFlash, enabledNotify) {
     leadMs = Math.max(0, Math.trunc(leadMs));
 
@@ -298,6 +293,7 @@
     let fired = false;
     let stopAttention = null;
     let bannerTimer = null;
+    let frozen = false;            // ← NEW: set true by finePhase to stop DOM writes
 
     const poll = setInterval(() => {
       const now = getServerNowMs();
@@ -306,10 +302,8 @@
       if (!fired && diff <= leadMs) {
         fired = true;
 
-        // Banner (visible when you are on this tab)
         banner.style.display = 'block';
 
-        // Desktop notification (visible even when you are on another tab/app)
         if (enabledNotify) {
           csNotify(
             'TribalWars: SEND em breve',
@@ -317,24 +311,22 @@
           );
         }
 
-        // Flash + sound
         if (enabledFlash) stopAttention = csStartTabAttention('SEND');
         if (enabledSound) {
-          // beep pattern at alert time
           csBeep(880, 180) || console.warn('[CS] Beep blocked (audio not unlocked, or tab/site muted).');
           setTimeout(() => csBeep(880, 180), 250);
           setTimeout(() => csBeep(988, 180), 2000);
           setTimeout(() => csBeep(1175, 220), 4000);
         }
 
-        // Update banner countdown frequently
+        // Banner countdown — stops itself when frozen
         bannerTimer = setInterval(() => {
+          if (frozen) { clearInterval(bannerTimer); bannerTimer = null; return; } // ← NEW
           const left = targetServerMs - getServerNowMs();
           bannerText.textContent = `click in: ${left}ms (${fmtHmsMs(left)})`;
         }, 50);
       }
 
-      // stop attention a bit after target
       if (diff <= -2000) {
         clearInterval(poll);
         if (stopAttention) stopAttention();
@@ -342,6 +334,9 @@
         banner.style.display = 'none';
       }
     }, 100);
+
+    // ← NEW: expose a freeze function for finePhase to call
+    return () => { frozen = true; };
   }
 
   // ---------------- hybrid scheduler ----------------
@@ -351,12 +346,30 @@
     const HIDDEN_POLL_MS  = 25;
     const VISIBLE_RAF_START_MS = 400;
 
-    const target = Math.round(targetServerMs + fineOffsetMs);
+    // Use TW's own WebSocket latency estimate, same formula as Auto Sender v2.6.4:
+    //   offset = -(latency × multiplier) + manualOffset
+    // Auto Sender's default multiplier is 0.25 — empirically tuned to match
+    // the actual upload transit time of a POST command to the TW server.
+    // The fineOffsetMs from the UI field acts as the manual offset on top.
+    const twLatencyMs = (() => {
+      try {
+        const v = window.Timing?.getEstimatedLatency?.();
+        return (Number.isFinite(v) && v > 0 && v < 500) ? v : 0;
+      } catch { return 0; }
+    })();
+    const TW_LATENCY_MULTIPLIER = (() => {
+      const v = parseFloat(localStorage.getItem('CS.latencyMultiplier') || '0.25');
+      return (Number.isFinite(v) && v >= 0 && v <= 2) ? v : 0.25;
+    })();
+    const twOffsetMs = twLatencyMs * TW_LATENCY_MULTIPLIER;
+
+    const target = Math.round(targetServerMs + fineOffsetMs - twOffsetMs);
 
     let coarse = null;
     let fineInterval = null;
     let statusInterval = null;
     let stopped = false;
+    let freezeAlert = null;        // ← holds the freeze() fn from csScheduleAlert
 
     function stopAll() {
       stopped = true;
@@ -376,21 +389,57 @@
 
     function updateStatus(phase) {
       if (!statusEl) return;
-      const now = getServerNowMs();
+      const now  = getServerNowMs();
       const diff = target - now;
 
-      const serverOffsetNow = Math.round((getTimingServerNowMs() ?? now) - Date.now());
-      const storedOffset = Number(localStorage.getItem(LS_SERVER_OFFSET) || '0');
+      // Format target (send time) as HH:MM:SS.mmm
+      const sendDate = new Date(target);
+      const sendStr  =
+        String(sendDate.getHours()).padStart(2,'0') + ':' +
+        String(sendDate.getMinutes()).padStart(2,'0') + ':' +
+        String(sendDate.getSeconds()).padStart(2,'0') + '.' +
+        String(sendDate.getMilliseconds()).padStart(3,'0');
 
-      statusEl.text(
-        `phase=${phase} | vis=${document.visibilityState} | now(server)=${now} | ` +
-        `T-now=${diff}ms (${fmtHmsMs(diff)}) | fineOffset=${fineOffsetMs}ms | ` +
-        `serverOffsetNow≈${serverOffsetNow}ms | storedOffset=${storedOffset}ms`
-      );
+      // Countdown: only show when positive (before target)
+      const diffRounded = Math.round(diff);
+      const countdown = diffRounded > 0 ? fmtHmsMs(diffRounded) : `SEND NOW (${fmtHmsMs(diffRounded)})`;
+
+      const parts = [];
+      if (fineOffsetMs !== 0) parts.push(`offset=${fineOffsetMs > 0 ? '+' : ''}${fineOffsetMs}ms`);
+      if (twOffsetMs !== 0) parts.push(`lat=${twLatencyMs}ms×0.25=−${twOffsetMs.toFixed(2)}ms`);
+      const offsetNote = parts.length ? ' | ' + parts.join(' | ') : '';
+
+      statusEl.text(`enviar às ${sendStr} | T-agora: ${countdown}${offsetNote}`);
     }
 
     function finePhase() {
-      updateStatus('fine');
+      // ── Freeze all DOM updates before precision timing begins ──────────────
+      // DOM writes (status text, banner countdown) can trigger style recalc /
+      // reflow which steals 5-20ms from the JS thread at the worst moment.
+      if (statusInterval) { clearInterval(statusInterval); statusInterval = null; }
+      if (freezeAlert) freezeAlert();   // ← stop banner countdown DOM writes
+
+      // ── Freeze TW's own tick handlers ─────────────────────────────────────
+      // Timing.resetTickHandlers() stops TW's internal JS tickers:
+      // resource display, countdown timers, UI updates — same as Auto Sender.
+      // getCurrentServerTime() still works correctly (uses elapsed time, not ticks).
+      try { if (window.Timing?.resetTickHandlers) window.Timing.resetTickHandlers(); } catch(e) {}
+
+      // Write one last frozen status line, then silence
+      if (statusEl) {
+        const frozenDiff = target - getServerNowMs();
+        const sendDate   = new Date(target);
+        const sendStr    =
+          String(sendDate.getHours()).padStart(2,'0') + ':' +
+          String(sendDate.getMinutes()).padStart(2,'0') + ':' +
+          String(sendDate.getSeconds()).padStart(2,'0') + '.' +
+          String(sendDate.getMilliseconds()).padStart(3,'0');
+        const frozenParts = [];
+        if (fineOffsetMs !== 0) frozenParts.push(`offset=${fineOffsetMs > 0 ? '+' : ''}${fineOffsetMs}ms`);
+        if (twOffsetMs !== 0) frozenParts.push(`lat=−${twOffsetMs.toFixed(2)}ms`);
+        const frozenNote = frozenParts.length ? ' | ' + frozenParts.join(' | ') : '';
+        statusEl.text(`enviar às ${sendStr} | ${fmtHmsMs(Math.round(frozenDiff))} — a calcular${frozenNote}`);
+      }
 
       function rafLoop() {
         if (stopped) return;
@@ -433,6 +482,7 @@
 
       updateStatus('coarse');
       coarse = setTimeout(finePhase, coarseDelay);
+
     }
 
     if (statusEl) {
@@ -441,7 +491,7 @@
     }
 
     if (attentionCfg?.enabled) {
-      csScheduleAlert(
+      freezeAlert = csScheduleAlert(   // ← store the freeze() fn
         target,
         attentionCfg.leadMs,
         attentionCfg.soundEnabled,
@@ -477,6 +527,23 @@
   }
 
   function ensureRows($tbody) {
+    // Multiplier row
+    if (!document.getElementById('CSlatMult')) {
+      const storedMult = localStorage.getItem('CS.latencyMultiplier') || '0.25';
+      $tbody.append(`
+        <tr id="CSlatMultRow">
+          <td>Multiplicador latência:</td>
+          <td style="display:flex; align-items:center; gap:8px;">
+            <input type="number" id="CSlatMult" step="0.05" min="0" max="2"
+              value="${storedMult}" style="width:70px;">
+            <span style="font-size:11px; color:#555;">
+              × latência TW (0 = desligado; Auto Sender usa 0.25)
+            </span>
+          </td>
+        </tr>
+      `);
+    }
+
     if (!document.getElementById('CSalertLead')) {
       $tbody.append(`
         <tr id="CSalertRow">
@@ -518,9 +585,8 @@
     const $tbody = $('#command-data-form').find('tbody').first();
     if (!$tbody.length) return;
 
-    // Base UI
     if (!document.getElementById('CSbutton')) {
-      const fineOffset = clampInt(Number(localStorage.getItem(LS_FINE_OFFSET) || '250'), -5000, 5000);
+      const fineOffset = clampInt(Number(localStorage.getItem(LS_FINE_OFFSET) || '0'), -5000, 5000);
       const arrivalDefaultMs = getServerNowMs() + durationMs;
 
       $tbody.append(`
@@ -541,11 +607,9 @@
       $('#CStime').val(toDatetimeLocalMs(arrivalDefaultMs));
     }
 
-    // Ensure alert/status rows exist even if older UI was already injected
     ensureRows($tbody);
 
-    // Defaults
-    const alertLeadMs = clampInt(Number(localStorage.getItem(LS_ALERT_LEAD) || '10000'), 0, 60000); // default 10s
+    const alertLeadMs = clampInt(Number(localStorage.getItem(LS_ALERT_LEAD) || '10000'), 0, 60000);
     const alertSoundEnabled = getBoolLS(LS_ALERT_SOUND, true);
     const alertFlashEnabled = getBoolLS(LS_ALERT_FLASH, true);
     const alertNotifyEnabled = getBoolLS(LS_ALERT_NOTIFY, true);
@@ -555,7 +619,6 @@
     $('#CSalertFlash').prop('checked', alertFlashEnabled);
     $('#CSalertNotify').prop('checked', alertNotifyEnabled);
 
-    // Persist alert settings
     $('#CSalertLead').off('change.cs input.cs').on('change.cs input.cs', () => {
       const v = clampInt(Number($('#CSalertLead').val() || 0), 0, 60000);
       $('#CSalertLead').val(String(v));
@@ -565,7 +628,14 @@
     $('#CSalertFlash').off('change.cs').on('change.cs', () => setBoolLS(LS_ALERT_FLASH, $('#CSalertFlash').is(':checked')));
     $('#CSalertNotify').off('change.cs').on('change.cs', () => setBoolLS(LS_ALERT_NOTIFY, $('#CSalertNotify').is(':checked')));
 
-    // Test alert button
+    // Persist latency multiplier
+    $('#CSlatMult').off('change.cs input.cs').on('change.cs input.cs', () => {
+      const raw = parseFloat($('#CSlatMult').val() || '0.25');
+      const v   = (Number.isFinite(raw) && raw >= 0 && raw <= 2) ? raw : 0.25;
+      $('#CSlatMult').val(String(v));
+      localStorage.setItem('CS.latencyMultiplier', String(v));
+    });
+
     $('#CSalertTest').off('click.cs').on('click.cs', async () => {
       await csUnlockAudio();
       await csEnsureNotificationPermission();
@@ -573,9 +643,7 @@
       csScheduleAlert(getServerNowMs() + lead, lead, $('#CSalertSound').is(':checked'), $('#CSalertFlash').is(':checked'), $('#CSalertNotify').is(':checked'));
     });
 
-    // Schedule button
     $('#CSbutton').off('click.cs').on('click.cs', async function () {
-      // unlock audio + ask notification permission (both are user-gesture sensitive)
       await csUnlockAudio();
       if ($('#CSalertNotify').is(':checked')) await csEnsureNotificationPermission();
 
@@ -632,7 +700,6 @@
     #CSstatus { max-width: 560px; word-break: break-word; }
   `);
 
-  // Poll at a sane rate
   const poll = setInterval(() => {
     if (document.getElementById('command-data-form') && window.jQuery) {
       boot();

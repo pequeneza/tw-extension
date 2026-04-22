@@ -16,11 +16,11 @@
   }
   window.__twAutoMintRunning = true;
 
-  const INTERVAL = 90000;
+  const INTERVAL = 45000;
   const MINT_CLICK_DELAY = 500;
   const LS_NEXT_RUN = 'tw_auto_mint_next_run_at';
 
-  const REFRESH_ON_MISSING_AFTER_MS = 30000;
+  const REFRESH_ON_MISSING_AFTER_MS = 10000;
 
   // Safety: don’t refresh too often
   const LS_LAST_REFRESH = 'tw_auto_mint_last_refresh_at';

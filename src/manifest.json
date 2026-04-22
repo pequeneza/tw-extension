@@ -43,7 +43,8 @@
     {
       "resources": [
         "modules/*.js",
-        "assets/*"
+        "assets/*",
+        "icons/*"
       ],
       "matches": ["https://*.tribalwars.com.pt/*"]
     }

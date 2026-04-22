@@ -7,9 +7,11 @@ import {
 import {
   MODULE_CONFIG_SCHEMAS, FieldDef, ModuleConfigSchema,
 } from "../../types/config-schemas";
-import { FakeSenderView } from "./FakeSenderView";
-import { SnipeView }     from "./SnipeView";
-import { BalancerView } from "./BalancerView";
+import { FakeSenderView }  from "./FakeSenderView";
+import { SnipeView }      from "./SnipeView";
+import { BalancerView }   from "./BalancerView";
+import { DesviadorView }  from "./DesviadorView";
+import { GluerView }      from "./GluerView";
 
 /* ─── Storage ─────────────────────────────────────────────────────────────── */
 function storageGet(keys: string[]): Promise<Record<string, unknown>> {
@@ -22,11 +24,13 @@ function storageSet(data: Record<string, unknown>): Promise<void> {
 }
 
 type CfgValues = Record<string, string | number | boolean>;
-type View = { type: "list" } | 
-            { type: "config"; id: ModuleId } | 
-            { type: "fakes" } | 
-            { type: "snipe" } | 
-            { type: "balancer" };
+type View = { type: "list" } |
+            { type: "config"; id: ModuleId } |
+            { type: "fakes" } |
+            { type: "snipe" } |
+            { type: "balancer" } |
+            { type: "desviador" } |
+            { type: "gluer" };
 
 /* ─── useSettings — lives in OverlayRoot, never unmounts ─────────────────── */
 function useSettings() {
@@ -221,8 +225,8 @@ function Field({ f, val, onChange }: {
 }
 
 /* ─── ConfigView ──────────────────────────────────────────────────────────── */
-function ConfigView({ id, visible, onBack }: {
-  id: ModuleId; visible: boolean; onBack: () => void;
+function ConfigView({ id, visible, onBack, onClose }: {
+  id: ModuleId; visible: boolean; onBack: () => void; onClose: () => void;
 }) {
   const mod = MODULE_CONFIGS.find((m) => m.id === id)!;
   const { schema, vals, dirty, saved, set, save, reset } = useModuleCfg(visible ? id : null);
@@ -243,13 +247,24 @@ function ConfigView({ id, visible, onBack }: {
               strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
         </button>
-        <span className="cfg-icon">{mod.icon}</span>
+        <span className="cfg-icon">
+          {mod.iconImg
+            ? <img src={chrome.runtime.getURL(`icons/${mod.iconImg}`)}
+                   className="cfg-icon-img" alt={mod.label} />
+            : mod.icon}
+        </span>
         <div className="cfg-header-text">
           <span className="cfg-title">{mod.label}</span>
           <span className="cfg-subtitle">{schema.fields.length} settings</span>
         </div>
         <span className="cfg-status-dot"
           data-dirty={String(dirty)} data-saved={String(saved)} />
+        <button className="close-btn" onClick={onClose} aria-label="Close">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M2 2l10 10M12 2L2 12" stroke="currentColor"
+              strokeWidth="1.8" strokeLinecap="round"/>
+          </svg>
+        </button>
       </div>
 
       <div className="cfg-body">
@@ -289,7 +304,12 @@ function ModuleCard({ mod, isOn, isLive, hasCfg, onToggle, onCfg, index }: {
   return (
     <div className={`card${isOn ? " card--on" : ""}${isLive ? " card--live" : ""}`}
          style={{ animationDelay: `${index * 28}ms` }}>
-      <div className="card-icon">{mod.icon}</div>
+      <div className="card-icon">
+        {mod.iconImg
+          ? <img src={chrome.runtime.getURL(`icons/${mod.iconImg}`)}
+                 className="card-icon-img" alt={mod.label} />
+          : mod.icon}
+      </div>
       <div className="card-body" onClick={onToggle}>
         <div className="card-name">{mod.label}</div>
         <div className="card-desc">{mod.description}</div>
@@ -430,6 +450,8 @@ function Panel({
                     setViewP({ type: "snipe" });
                   } else if (mod.id === "wh_balancer") {
                     setViewP({ type: "balancer" });
+                  } else if (mod.id === "kumin_gluer") {
+                    setViewP({ type: "gluer" });
                   } else {
                     setViewP({ type: "config", id: mod.id });
                   }
@@ -457,7 +479,8 @@ function Panel({
       {MODULE_CONFIGS.filter((m) => Boolean(MODULE_CONFIG_SCHEMAS[m.id]) && m.id !== "fakes").map((m) => (
         <ConfigView key={m.id} id={m.id}
           visible={view.type === "config" && view.id === m.id}
-          onBack={() => setViewP({ type: "list" })} />
+          onBack={() => setViewP({ type: "list" })}
+          onClose={onClose} />
       ))}
 
       {/* Fake Sender — dedicated panel with Status + Settings tabs */}
@@ -473,6 +496,14 @@ function Panel({
       />
       <BalancerView
         visible={view.type === "balancer"}
+        onBack={() => setViewP({ type: "list" })}
+      />
+      <DesviadorView
+        visible={view.type === "desviador"}
+        onBack={() => setViewP({ type: "list" })}
+      />
+      <GluerView
+        visible={view.type === "gluer"}
         onBack={() => setViewP({ type: "list" })}
       />
     </div>
@@ -495,6 +526,23 @@ export function OverlayRoot() {
 
   // Settings live HERE — never unmount, never reset on close
   const { s, ready, isOn, toggle } = useSettings();
+
+  // Desviador state — updated by listening to the userscript's state events
+  const [desvActive, setDesvActive] = useState(false);
+  const [desvCount,  setDesvCount]  = useState(0);
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const d = (e as CustomEvent).detail as { active: boolean; scheduled: unknown[] };
+      setDesvActive(d.active);
+      setDesvCount(d.scheduled.length);
+    };
+    document.addEventListener("xbot:desviador:state", handler);
+    return () => document.removeEventListener("xbot:desviador:state", handler);
+  }, []);
+
+  const isIncomingsPage = /screen=overview_villages.*mode=incomings.*subtype=attacks/.test(
+    window.location.href
+  );
 
   // Count gaps from live DOM — poll every 2 s so the button appears/disappears
   // as the user navigates or the incomings table updates.
@@ -527,9 +575,11 @@ export function OverlayRoot() {
   // View state lifted here so the drawer width can react to it
   const [view, setView] = useState<View>(() => {
     const v = sessionStorage.getItem("xbot_panel_view");
-    if (v === "fakes") return { type: "fakes" };
-    if (v === "snipe") return { type: "snipe" };
-    if (v === "balancer") return { type: "balancer" };
+    if (v === "fakes")     return { type: "fakes" };
+    if (v === "snipe")     return { type: "snipe" };
+    if (v === "balancer")  return { type: "balancer" };
+    if (v === "desviador") return { type: "desviador" };
+    if (v === "gluer")     return { type: "gluer" };
     return { type: "list" };
   });
   const setViewP = (v: View) => {
@@ -543,8 +593,23 @@ export function OverlayRoot() {
     setOpen(true);
   };
 
-  const isSnipe = view.type === "snipe";
+  // Open drawer directly to desviador view
+  const openDesviador = () => {
+    setViewP({ type: "desviador" });
+    setOpen(true);
+  };
+
+  // Auto-open gluer panel when the userscript selects an attack
+  useEffect(() => {
+    const h = () => { setViewP({ type: "gluer" }); setOpen(true); };
+    document.addEventListener("xbot:gluer:select", h);
+    return () => document.removeEventListener("xbot:gluer:select", h);
+  }, []);
+
+  const isSnipe   = view.type === "snipe";
   const isBalancer = view.type === "balancer";
+  const isGluer   = view.type === "gluer";
+  const isInfoVillage = /screen=info_village/.test(window.location.href);
   return (
     <>
       <div className="trigger-stack">
@@ -556,6 +621,27 @@ export function OverlayRoot() {
             title={`${gapCount} gap${gapCount !== 1 ? "s" : ""} — open snipe planner`}
             aria-label="Snipe planner">
             🏹<span className="trigger-snipe-count">{gapCount}</span>
+          </button>
+        )}
+
+        {isInfoVillage && (
+          <button className="trigger trigger--gluer"
+            onClick={() => { setViewP({ type: "gluer" }); setOpen(true); }}
+            title="Kumin Gluer — clica num ataque para calcular tempos"
+            aria-label="Kumin Gluer">
+            <img src={chrome.runtime.getURL("icons/colatudo.png")}
+                 alt="Kumin Gluer" className="trigger-icon-img" />
+          </button>
+        )}
+
+        {(isIncomingsPage || desvActive) && (
+          <button className="trigger trigger--desviador" onClick={openDesviador}
+            title={desvActive ? `Desviador — ${desvCount} programado(s)` : "Desviador"}
+            aria-label="Desviador">
+            🔀
+            {desvActive && desvCount > 0 && (
+              <span className="trigger-snipe-count">{desvCount}</span>
+            )}
           </button>
         )}
 
@@ -571,7 +657,8 @@ export function OverlayRoot() {
       
       <div className={`drawer${open ? " drawer--open" : ""}
         ${isSnipe ? " drawer--snipe" : ""}
-        ${isBalancer ? " drawer--balancer" : ""}`}>
+        ${isBalancer ? " drawer--balancer" : ""}
+        ${isGluer ? " drawer--snipe" : ""}`}>
         <Panel
           visible={open}
           onClose={() => setOpen(false)}

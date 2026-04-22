@@ -14,6 +14,12 @@
   if (window.__twMassRenamerLoaded) return;
   window.__twMassRenamerLoaded = true;
 
+  // ── Extension config ─────────────────────────────────────────────────────────
+  var _cfg          = (window.__twSuiteCfg && window.__twSuiteCfg('mass_label_renamer')) || {};
+  var minDelayMs    = (_cfg.minDelaySeconds  !== undefined ? _cfg.minDelaySeconds  : 120) * 1000;
+  var randomExtraMs = (_cfg.randomExtraMax   !== undefined ? _cfg.randomExtraMax   : 30)  * 1000;
+  var labelIndex    =  _cfg.labelIndex       !== undefined ? _cfg.labelIndex       : 0;
+
   // ── User preferences ────────────────────────────────────────────────────────
   var tamanho_letra     = 8;         // button font-size (px)
   var pagina_de_ataques = 'coluna';  // row highlight mode: 'coluna' | 'linha' | 'nada'
@@ -75,7 +81,10 @@
   // ── Row-painting helpers ────────────────────────────────────────────────────
   function setBg($el, value) {
     if (!$el || !$el.length) return;
-    $el.attr('style', ($el.attr('style') || '') + 'background:' + value + ' !important;');
+    /* Strip any previously injected background before setting the new one,
+       preventing accumulation when called repeatedly by the setInterval. */
+    var cleaned = ($el.attr('style') || '').replace(/\bbackground:[^;]+;?\s*/gi, '').trim();
+    $el.attr('style', (cleaned ? cleaned + ';' : '') + 'background:' + value + ' !important;');
   }
 
   function isSupport(row) {
@@ -143,28 +152,7 @@
     }
   }
 
-  // ── Per-row rename buttons (overview_villages incomings table) ──────────────
-  function injectRowButtons($cmdCell) {
-    var html = '<span class="rename-buttons" style="float:right;">';
-    TAGS.forEach(function (tag, num) {
-      html += '<button type="button" data-cmd="' + tag[0] + '" title="' + tag[0] + '" style="' + btnStyle(num) + '">' + tag[1] + '</button>';
-    });
-    html += '</span>';
-    $cmdCell.append(html);
-
-    $cmdCell.find('.rename-buttons button').off('click').on('click', function () {
-      var tagStr = window.$(this).data('cmd');
-      $cmdCell.find('.rename-icon').click();
-      var $input = $cmdCell.find('input[type=text]');
-      if ($input.length) {
-        var base = $input.val().split(' ')[0];
-        $input.val(tagStr.startsWith(' |') ? $input.val() + tagStr : base + ' ' + tagStr);
-        $cmdCell.find('input[type=button]').click();
-      }
-    });
-  }
-
-  // ── Legacy path: per-row buttons on main overview ───────────────────────────
+  // ── Per-row buttons on main overview ────────────────────────────────────────
   function injectButtonsLegacy(nr, row) {
     var $row = window.$(row);
     $row.find('.rename-buttons').remove();
@@ -188,11 +176,61 @@
     });
   }
 
+  // ── "Etiqueta" bulk-label: auto-submit after human delay ─────────────────────
+  var _etiquetaScheduled = false;
+
+  function scheduleAutoEtiqueta() {
+    var $btn = window.$('input[type=submit][name=label]');
+    if (!$btn.length || _etiquetaScheduled) return;
+    _etiquetaScheduled = true;
+
+    var $form    = $btn.closest('form');
+    var origVal  = $btn.val();
+    var delayMs  = minDelayMs + Math.random() * randomExtraMs;
+    var deadline = Date.now() + delayMs;
+
+    /* Show a live countdown on the button */
+    var tickId = setInterval(function () {
+      var left = Math.ceil((deadline - Date.now()) / 1000);
+      $btn.val(origVal + ' (' + left + 's)');
+    }, 500);
+
+    setTimeout(function () {
+      clearInterval(tickId);
+      $btn.val(origVal);
+
+      /* Select all row checkboxes via TW's own helper */
+      var $selectAll = $form.find('input.selectAll, #select_all');
+      if ($selectAll.length) {
+        $selectAll.prop('checked', true);
+        if (typeof window.selectAll === 'function') {
+          window.selectAll($form[0], true);
+        }
+      } else {
+        $form.find('input[type=checkbox]').prop('checked', true);
+      }
+
+      /* Select the configured label radio */
+      var $radios = $form.find('input[type=radio]');
+      if ($radios.length > labelIndex) {
+        $radios.eq(labelIndex).prop('checked', true);
+      }
+
+      $form.submit();
+
+      /* Allow re-scheduling for the next cycle (handles AJAX submits that
+         don't reload the page; full reloads re-schedule naturally on boot) */
+      _etiquetaScheduled = false;
+    }, delayMs);
+  }
+
   // ── Main polling loop (incomings table) ─────────────────────────────────────
   function runIncomingsTable() {
     setInterval(function () {
       var $rows = window.$('#incomings_table tr.nowrap');
       if (!$rows.length) $rows = window.$('#incomings_table tbody tr');
+
+      scheduleAutoEtiqueta();
 
       $rows.each(function (nr, row) {
         var $row     = window.$(row);
@@ -205,10 +243,14 @@
           : window.$.trim($cmdCell.text());
         if (!name) return;
 
-        if ($cmdCell.find('.rename-buttons').length === 0 && $cmdCell.find('.rename-icon').length > 0) {
-          injectRowButtons($cmdCell);
+        /* Use the same injection as screen=overview so both pages share one interface */
+        if ($row.find('.rename-buttons').length === 0 && $row.find('.quickedit-content').length > 0) {
+          injectButtonsLegacy(nr, row);
         }
 
+        /* Only repaint when the label has actually changed — avoids style accumulation */
+        if ($row.data('bito-name') === name) return;
+        $row.data('bito-name', name);
         paintRow($row, row, name);
       });
     }, 250);

@@ -64,6 +64,8 @@ function pngChunk(type: string, data: Buffer): Buffer {
 const MODULES_DIR = "tw-suite-extension/modules";
 const USERSCRIPT_MAP: Record<string, string> = {
   [`${MODULES_DIR}/auto_mint.user.js`]:            "auto_mint.user.js",
+  [`${MODULES_DIR}/desviador.user.js`]:            "desviador.user.js",
+  [`${MODULES_DIR}/kumin_gluer.user.js`]:          "kumin_gluer.user.js",
   [`${MODULES_DIR}/extended_profile.user.js`]:     "extended_profile.user.js",
   [`${MODULES_DIR}/fakes.user.js`]:                "fakes.user.js",
   [`${MODULES_DIR}/mano_de_deus.user.js`]:         "mano_de_deus.user.js",
@@ -120,6 +122,10 @@ function extensionAssetsPlugin() {
           : original;
         writeFileSync(join("dist/modules", dstFile), combined, "utf8");
       }
+
+      // Copy custom module icons
+      if (existsSync("colatudo.png"))
+        copyFileSync("colatudo.png", "dist/icons/colatudo.png");
 
       const jqSrc = `${MODULES_DIR}/jquery-3.7.1.min.js`;
       if (existsSync(jqSrc))

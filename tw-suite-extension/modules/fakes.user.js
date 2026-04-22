@@ -965,47 +965,433 @@ async function main(){
     setTimeout(()=>console.groupEnd(), 1500);
 }
 
-/* ---------------- START ---------------- */
+/* ---------------- FETCH-BASED ENGINE ---------------- */
 
-console.info("[FAKE] Script loaded – version 6.0 (xBot overlay)");
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-// IMPORTANT: run the coords-change check ASAP on startup
-// (this can trigger a reload; safe to do before building UI)
-maybeResetPlanAndStartNewRunOnCoordsChange();
+function villageKeyById(id) { return `id:${id}`; }
+function getSentFromVillage_id(id) {
+    const map = loadVillageCounts();
+    return map[villageKeyById(id)] || 0;
+}
+function incSentForVillage_id(id) {
+    const map = loadVillageCounts();
+    const key = villageKeyById(id);
+    map[key] = (map[key] || 0) + 1;
+    saveVillageCounts(map);
+    return map[key];
+}
 
-
-// Write total coords count for the progress bar in the overlay
-sessionStorage.setItem("fake_total_coords", String(getCoords().length));
-try { localStorage.setItem(LS_TOTAL_PERSIST, String(getCoords().length)); } catch {};
-
-if (isConfirmPage()) {
-    console.info("[FAKE] Confirm page detected");
-    if (!isPaused()) sendFake();
-    else uiLog("Paused on confirm page – sendFake() skipped", "warn");
-
-} else if (location.href.includes("screen=place") && document.forms[0]) {
-    console.info("[FAKE] Rally point detected");
-
-    // Pause-aware loop: runs main() each cycle, re-checking pause flag live.
-    // This means pause/resume from the overlay takes effect immediately —
-    // no page refresh needed.
-    (function cycle() {
-        if (isPaused()) {
-            setTimeout(cycle, 1000);
-            return;
+async function fetchAllVillages() {
+    // Fast path: game_data.player.villages is often pre-populated by TW
+    const gv = game_data?.player?.villages;
+    if (gv) {
+        const arr = Array.isArray(gv) ? gv : Object.values(gv);
+        const villages = arr
+            .map(v => {
+                const idRaw = v.id ?? v.villageId ?? v.village_id;
+                const id = idRaw ? parseInt(idRaw, 10) : 0;
+                const coord = v.coord
+                    || (v.x != null && v.y != null ? `${v.x}|${v.y}` : null);
+                const points = v.points ? parseInt(v.points, 10) : 0;
+                return { id, coord, points };
+            })
+            .filter(v => v.id && v.coord);
+        if (villages.length) {
+            uiLog(`Villages from game_data: ${villages.length}`, 'info');
+            return villages;
         }
-        // Reload config each cycle so overlay changes apply immediately
+    }
+
+    // Fallback: parse overview HTML (try multiple mode URLs)
+    const base = game_data.player.sitter > 0
+        ? `game.php?t=${game_data.player.id}&screen=overview_villages`
+        : `game.php?screen=overview_villages`;
+    const urls = [
+        `${base}&mode=prod&page=-1`,
+        `${base}&mode=combined&page=-1`,
+        `${base}&page=-1`,
+    ];
+
+    for (const url of urls) {
+        try {
+            const html = await (await fetch(url, { credentials: 'include' })).text();
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            const villages = [];
+            const seen = new Set();
+
+            for (const row of doc.querySelectorAll('tr')) {
+                // Accept any in-cell link whose href contains village=<number>
+                const link = row.querySelector('td a[href*="village="]');
+                if (!link) continue;
+                const idMatch = link.href.match(/[?&]village=(\d+)/);
+                if (!idMatch) continue;
+                const id = parseInt(idMatch[1], 10);
+                if (!id || seen.has(id)) continue;
+                seen.add(id);
+
+                const coordMatch = row.textContent.match(/(\d{1,3})\|(\d{1,3})/);
+                if (!coordMatch) continue;
+                const coord = `${coordMatch[1]}|${coordMatch[2]}`;
+
+                const points = num(
+                    row.querySelector('.points')?.textContent ||
+                    row.querySelector('td:nth-child(3)')?.textContent
+                );
+                villages.push({ id, coord, points: points || 0 });
+            }
+
+            if (villages.length) {
+                uiLog(`Villages from ${url}: ${villages.length}`, 'info');
+                return villages;
+            }
+        } catch (e) {
+            uiLog(`fetchAllVillages (${url}): ${e?.message || e}`, 'warn');
+        }
+    }
+
+    return [];
+}
+
+async function fetchVillagePoints(villageId) {
+    // Used when fetchAllVillages couldn't determine a village's points.
+    // Reuses the same overview URL that getCurrentVillagePoints() relies on.
+    const base = game_data.player.sitter > 0
+        ? `game.php?t=${game_data.player.id}&screen=overview_villages`
+        : `game.php?screen=overview_villages`;
+    try {
+        const html = await (await fetch(`${base}&mode=prod&page=-1`, { credentials: 'include' })).text();
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        for (const row of doc.querySelectorAll('tr')) {
+            const link = row.querySelector('td a[href*="village="]');
+            if (!link) continue;
+            const m = link.href.match(/[?&]village=(\d+)/);
+            if (!m || parseInt(m[1], 10) !== villageId) continue;
+            return num(
+                row.querySelector('.points')?.textContent ||
+                row.querySelector('td:nth-child(3)')?.textContent
+            ) || 0;
+        }
+    } catch {}
+    return 0;
+}
+
+async function fetchRallyPointData(villageId) {
+    const url = `/game.php?village=${villageId}&screen=place`;
+    const html = await (await fetch(url, { credentials: 'include' })).text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+
+    const ALL_UNITS = ['spear','sword','axe','archer','spy','light','marcher','heavy','ram','catapult','snob','knight'];
+    const available = {};
+    for (const unit of ALL_UNITS) {
+        const allLink = doc.getElementById(`units_entry_all_${unit}`);
+        if (allLink) {
+            available[unit] = num(allLink.textContent);
+        } else {
+            const input = doc.getElementById(`unit_input_${unit}`) || doc.querySelector(`input[name="${unit}"]`);
+            available[unit] = input?.dataset?.allCount ? num(input.dataset.allCount) : 0;
+        }
+    }
+
+    const hiddenInputs = {};
+    doc.querySelectorAll('input[type="hidden"]').forEach(inp => {
+        if (inp.name) hiddenInputs[inp.name] = inp.value || '';
+    });
+
+    const form = doc.querySelector('form');
+    const formAction = form?.getAttribute('action') || url;
+
+    let outgoing = 0;
+    const outgoingContainer = doc.getElementById("commands_outgoings");
+    if (outgoingContainer) {
+        const ids = new Set();
+        for (const row of outgoingContainer.querySelectorAll("tr.command-row")) {
+            const attackIcon = row.querySelector('img[src*="graphic/command/attack_small"]');
+            if (!attackIcon) continue;
+            const el = row.querySelector(".command_hover_details[data-command-id]");
+            const id = el?.getAttribute("data-command-id");
+            if (id) ids.add(id);
+        }
+        outgoing = ids.size;
+    }
+
+    return { available, hiddenInputs, formAction, outgoing };
+}
+
+function getAvailablePopFrom(available) {
+    const popValues = { spear:1, sword:1, axe:1, archer:1, spy:2, light:4, marcher:4, heavy:6, ram:5, catapult:8 };
+    let total = 0;
+    for (const unit in popValues) total += (available[unit] || 0) * popValues[unit];
+    return total;
+}
+
+function calculateFakeTroopsFrom(available, requiredPop) {
+    const troops = {};
+    let popUsed = 0, infantryUsed = 0, cavalryUsed = 0;
+
+    const scoutsCap = Math.max(0, SETTINGS.maxScouts | 0);
+    const maxInf    = Math.max(0, SETTINGS.maxInfantry | 0);
+    const maxCav    = Math.max(0, SETTINGS.maxCavalry | 0);
+    const siegeCap  = Math.max(0, SETTINGS.maxCatapults | 0);
+
+    const scouts = Math.min(scoutsCap, available.spy || 0);
+    if (scouts === 0) return null;
+    troops.spy = scouts;
+    popUsed += scouts * 2;
+
+    if (siegeCap > 0 && (available.catapult || 0) > 0) {
+        troops.catapult = 1; popUsed += 8;
+    } else if (siegeCap > 0 && (available.ram || 0) > 0) {
+        troops.ram = 1; popUsed += 5;
+    } else {
+        return null;
+    }
+
+    const fillers = [
+        { unit: "spear", pop: 1, group: "inf" },
+        { unit: "sword", pop: 1, group: "inf" },
+        { unit: "axe",   pop: 1, group: "inf" },
+        { unit: "light", pop: 4, group: "cav" },
+        { unit: "heavy", pop: 6, group: "cav" }
+    ];
+
+    for (const f of fillers) {
+        let avail = available[f.unit] || 0;
+        while (avail > 0 && popUsed + f.pop <= requiredPop) {
+            if (f.group === "inf" && infantryUsed >= maxInf) break;
+            if (f.group === "cav" && cavalryUsed >= maxCav) break;
+            troops[f.unit] = (troops[f.unit] || 0) + 1;
+            popUsed += f.pop;
+            if (f.group === "inf") infantryUsed++;
+            if (f.group === "cav") cavalryUsed++;
+            avail--;
+        }
+        if (popUsed >= requiredPop) break;
+    }
+
+    if (siegeCap > 1 && popUsed < requiredPop) {
+        while (popUsed < requiredPop) {
+            const usedSiege = (troops.catapult || 0) + (troops.ram || 0);
+            if (usedSiege >= siegeCap) break;
+            const catsUsed = troops.catapult || 0, ramsUsed = troops.ram || 0;
+            if ((available.catapult || 0) > catsUsed) { troops.catapult = catsUsed + 1; popUsed += 8; continue; }
+            if ((available.ram      || 0) > ramsUsed)  { troops.ram      = ramsUsed + 1; popUsed += 5; continue; }
+            break;
+        }
+    }
+
+    if (popUsed < requiredPop) return null;
+    return Object.keys(troops).length ? troops : null;
+}
+
+function parseArrivalFromDoc(doc) {
+    const node = doc.querySelector("#arrival_time, .arrival_time, #date_arrival");
+    if (!node) return null;
+    const match = node.textContent.trim().match(/(\d{1,2}):(\d{2}):(\d{2})\s*(am|pm)?/i);
+    if (!match) return null;
+    let h = parseInt(match[1], 10);
+    const m = parseInt(match[2], 10), s = parseInt(match[3], 10);
+    const ampm = (match[4] || "").toLowerCase();
+    if (ampm === "am" && h === 12) h = 0;
+    else if (ampm === "pm" && h !== 12) h += 12;
+    const now = new Date();
+    const arrival = new Date(now);
+    arrival.setHours(h, m, s, 0);
+    if (arrival.getTime() < now.getTime() - 60_000) arrival.setDate(arrival.getDate() + 1);
+    return arrival;
+}
+
+async function sendFakeViaFetch(villageId, target, troops, rallyData) {
+    const [tx, ty] = target.split('|').map(Number);
+    const { hiddenInputs, formAction } = rallyData;
+
+    // Build attack POST: all hidden inputs from the form + target coords + units
+    const body1 = new URLSearchParams();
+    for (const [k, v] of Object.entries(hiddenInputs)) body1.set(k, v);
+    body1.set('x', String(tx));
+    body1.set('y', String(ty));
+    body1.set('attack', '1');
+    for (const [unit, amount] of Object.entries(troops)) body1.set(unit, String(amount));
+
+    const resp1 = await fetch(formAction, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body1.toString()
+    });
+    if (!resp1.ok) return { success: false, skip: false, msg: `Attack POST ${resp1.status}` };
+
+    const html1 = await resp1.text();
+    const doc1 = new DOMParser().parseFromString(html1, 'text/html');
+
+    // Locate confirmation form
+    const confirmForm =
+        doc1.getElementById('command-data-form') ||
+        doc1.querySelector('form[action*="try=confirm"]') ||
+        doc1.querySelector('form');
+    if (!confirmForm) return { success: false, skip: false, msg: 'No confirmation form in response' };
+
+    // Check arrival window before committing
+    const arrival = parseArrivalFromDoc(doc1);
+    if (arrival && !isArrivalAllowed(arrival)) {
+        return { success: false, skip: true, msg: `Arrival outside window: ${arrival.toLocaleTimeString()}`, arrival };
+    }
+
+    // Collect all inputs from the confirmation form, then add submit trigger
+    const body2 = new URLSearchParams();
+    for (const input of confirmForm.querySelectorAll('input')) {
+        if (input.name) body2.set(input.name, input.value || '');
+    }
+    body2.set('submit_confirm', '1');
+
+    await sleep(randomDelay(CONFIG.confirmDelay, CONFIG.confirmRandom));
+
+    const confirmAction =
+        confirmForm.getAttribute('action') ||
+        `/game.php?village=${villageId}&screen=place&try=confirm`;
+    const resp2 = await fetch(confirmAction, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body2.toString()
+    });
+    if (!resp2.ok) return { success: false, skip: false, msg: `Confirm POST ${resp2.status}` };
+
+    return { success: true, msg: 'Sent', arrival };
+}
+
+async function runFetchLoop() {
+    uiLog('Fetch loop starting…', 'info');
+
+    let villages = [];
+    try {
+        villages = await fetchAllVillages();
+    } catch (e) {
+        uiLog(`fetchAllVillages error: ${e?.message || e}`, 'err');
+        return;
+    }
+    if (!villages.length) { uiLog('No villages found', 'err'); return; }
+    uiLog(`Found ${villages.length} village(s)`, 'info');
+
+    while (true) {
+        if (isPaused()) { await sleep(1000); continue; }
+
         CONFIG   = loadConfig();
         SETTINGS = loadSettings();
-        main().then(() => {
-            // main() switches the village and navigation continues naturally.
-            // If we're still on the same page (e.g. paused mid-run), wait and retry.
-            setTimeout(cycle, 2000);
-        }).catch((e) => {
-            console.error("[FAKE] cycle error", e);
-            setTimeout(cycle, 3000);
-        });
-    })();
+
+        const coords = getCoords();
+        sessionStorage.setItem("fake_total_coords", String(coords.length));
+        try { localStorage.setItem(LS_TOTAL_PERSIST, String(coords.length)); } catch {}
+
+        let index = currentIndex();
+        if (index >= coords.length) {
+            if (CONFIG.stopAtEnd) { uiLog('All targets used (stopAtEnd)', 'info'); break; }
+            index = 0; setIndex(0);
+        }
+
+        const perVillageCap = Math.max(1, parseInt(CONFIG.fakesPerVillage, 10) || 1);
+        let anyAttempted = false;
+
+        for (const village of villages) {
+            if (isPaused()) break;
+
+            // Re-read index each village iteration so prior sends affect it
+            index = currentIndex();
+            if (index >= coords.length) {
+                if (CONFIG.stopAtEnd) break;
+                index = 0; setIndex(0);
+            }
+
+            const sentHere = getSentFromVillage_id(village.id);
+            if (sentHere >= perVillageCap) continue;
+
+            const pick = findNextEligibleTarget(coords, index, village.coord);
+            if (!pick.target) { uiLog('No eligible targets left', 'info'); return; }
+
+            anyAttempted = true;
+
+            let rallyData;
+            try {
+                rallyData = await fetchRallyPointData(village.id);
+            } catch (e) {
+                uiLog(`[${village.coord}] Rally fetch error: ${e?.message || e}`, 'err');
+                continue;
+            }
+
+            const { available, outgoing } = rallyData;
+
+            if (outgoing >= perVillageCap) {
+                uiLog(`[${village.coord}] Outgoing cap (${outgoing}/${perVillageCap}) — skipping`, 'warn');
+                continue;
+            }
+
+            if (village.points < 100) {
+                uiLog(`[${village.coord}] Points too low — skipping`, 'warn');
+                continue;
+            }
+
+            const requiredPop = Math.ceil(village.points * 2 / 100);
+            const availPop = getAvailablePopFrom(available);
+            if (availPop < requiredPop) {
+                uiLog(`[${village.coord}] Not enough troops (${availPop}/${requiredPop}) — skipping`, 'warn');
+                continue;
+            }
+
+            const troops = calculateFakeTroopsFrom(available, requiredPop);
+            if (!troops) {
+                uiLog(`[${village.coord}] Cannot build troops — skipping`, 'warn');
+                continue;
+            }
+
+            uiLog(`[${village.coord}] Sending fake → ${pick.target}`, 'info');
+            await sleep(randomDelay(CONFIG.attackDelay, CONFIG.attackRandom));
+
+            let result;
+            try {
+                result = await sendFakeViaFetch(village.id, pick.target, troops, rallyData);
+            } catch (e) {
+                uiLog(`[${village.coord}] Send error: ${e?.message || e}`, 'err');
+                continue;
+            }
+
+            if (result.success) {
+                setIndex(pick.idx + 1);
+                const vNow = incSentForVillage_id(village.id);
+                const tNow = incTargetSent(pick.target);
+                const planned = ensureTargetPlanned(pick.target).planned;
+                const sentTotal = parseInt(sessionStorage.getItem("fake_sent") || "0", 10) + 1;
+                sessionStorage.setItem("fake_sent", String(sentTotal));
+                try { localStorage.setItem(LS_SENT_PERSIST, String(sentTotal)); } catch {}
+                uiLog(`[${village.coord}] ⚔ → ${pick.target} (vil ${vNow}/${perVillageCap}, tgt ${tNow}/${planned})`, 'info');
+                await sleep(randomDelay(CONFIG.switchDelay, CONFIG.switchRandom));
+            } else if (result.skip) {
+                uiLog(`[${village.coord}] Skip → ${result.msg}`, 'warn');
+                setIndex(pick.idx + 1);
+            } else {
+                uiLog(`[${village.coord}] Failed → ${result.msg}`, 'err');
+            }
+        }
+
+        if (!anyAttempted) { uiLog('All villages at cap — done', 'info'); break; }
+        await sleep(2000);
+    }
+}
+
+/* ---------------- START ---------------- */
+
+console.info("[FAKE] Script loaded – version 7.0 (fetch mode)");
+
+maybeResetPlanAndStartNewRunOnCoordsChange();
+
+sessionStorage.setItem("fake_total_coords", String(getCoords().length));
+try { localStorage.setItem(LS_TOTAL_PERSIST, String(getCoords().length)); } catch {}
+
+if (location.href.includes("screen=place") && !location.href.includes("try=confirm")) {
+    console.info("[FAKE] Rally point detected — starting fetch loop");
+    runFetchLoop().catch(e => {
+        console.error("[FAKE] runFetchLoop fatal error:", e);
+        uiLog(`Fatal error: ${e?.message || e}`, "err");
+    });
 }
 
 })();

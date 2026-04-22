@@ -5,12 +5,16 @@ export interface ModuleConfig {
   matchPattern: RegExp;
   scriptFile: string;
   icon: string;
+  /** Optional filename inside dist/icons/ — renders as <img> instead of the emoji */
+  iconImg?: string;
 }
 
 export type ModuleId =
   | "auto_mint"
+  | "desviador"
   | "extended_profile"
   | "fakes"
+  | "kumin_gluer"
   | "mano_de_deus"
   | "mass_label_renamer"
   | "noble_sender_trainer"
@@ -39,12 +43,29 @@ export const MODULE_CONFIGS: ModuleConfig[] = [
     icon: "🪙",
   },
   {
+    id: "desviador",
+    label: "Desviador",
+    description: "Abre automaticamente o rally point 30–40s antes de ataques marcados com [Desviar], envia apoio e cancela após o tempo configurado.",
+    matchPattern: /screen=overview_villages.*mode=incomings.*subtype=attacks|screen=place/,
+    scriptFile: "desviador.user.js",
+    icon: "🔀",
+  },
+  {
     id: "extended_profile",
     label: "Extended Profile",
     description: "Adds extended player stats: history, tribe changes, ennoblements, daily stats.",
     matchPattern: /screen=info_player/,
     scriptFile: "extended_profile.user.js",
     icon: "👤",
+  },
+  {
+    id: "kumin_gluer",
+    label: "Kumin Gluer",
+    description: "Clica num ataque em info_village para calcular tempos de saída e enviar para o Kumin autosender.",
+    matchPattern: /screen=info_village|screen=memo/,
+    scriptFile: "kumin_gluer.user.js",
+    icon: "⚔️",
+    iconImg: "colatudo.png",
   },
   {
     id: "fakes",

@@ -7,7 +7,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 /* ─── Types ─────────────────────────────────────────────────────────────── */
 interface BalancerSettings {
   isMinting: boolean; lowPoints: number; highPoints: number; highFarm: number;
-  builtOutPercentage: number; needsMorePercentage: number; reservePerVillage: number;
+  builtOutPercentage: number; needsMorePercentage: number; reservePerVillage: number; recruitReserve: number;
   maxDistance: number; hqPriorityEnabled: boolean; maxedOutPoints: number;
   lowPointsLongQueueHours: number; hqNormalQueueMaxHours: number; sendAllEnabled: boolean; sendAllIntervalMs: number;
   useClusters: boolean; numClusters: number; debugMode: boolean;
@@ -61,7 +61,7 @@ type Tab = "sendlist" | "settings" | "locks" | "hq";
 const SETTINGS_KEY = "tm_whbalancer_settings";
 const DEFAULT_SETTINGS: BalancerSettings = {
   isMinting: false, lowPoints: 3000, highPoints: 7000, highFarm: 23000,
-  builtOutPercentage: 0.26, needsMorePercentage: 0.7, reservePerVillage: 0,
+  builtOutPercentage: 0.26, needsMorePercentage: 0.7, reservePerVillage: 0, recruitReserve: 20000,
   maxDistance: 9999, hqPriorityEnabled: false, maxedOutPoints: 10471,
   lowPointsLongQueueHours: 3, hqNormalQueueMaxHours: 6, sendAllEnabled: false, sendAllIntervalMs: 250,
   useClusters: false, numClusters: 1, debugMode: false,
@@ -611,6 +611,8 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
           "Bypasses all thresholds and balances purely by average. Use when manually filling warehouses.")}
         {numField("Reserve per village (not sent)", "reservePerVillage", 1000,
           "Amount subtracted from every village's stock before computing excess. These resources are never sent.")}
+        {numField("Recruit reserve (high-pts, low-farm)", "recruitReserve", 1000,
+          "High-points villages below the high-farm threshold keep at least this amount per resource for troop training. Default 20000.")}
         {numField("Global max distance (fields)", "maxDistance",50,
           "Routes longer than this distance will be skipped entirely.")}
       </div>

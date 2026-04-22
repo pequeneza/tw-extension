@@ -53,8 +53,26 @@
     incoming: "A caminho:"
   };
 
-  const NOBLE_COST = { wood: 40000, clay: 50000, iron: 50000 };
-  const MAX_LINES = 120;
+  const NOBLE_COST        = { wood: 40000, clay: 50000, iron: 50000 };
+  const MAX_LINES         = 120;
+  const AUTO_TRAIN_KEY          = 'autoTraining';   // suffixed with village id
+  const AUTO_TRAIN_CNT          = 'autoTrainCount'; // suffixed with village id
+
+  function atKey(base) {
+    const vid = (typeof game_data !== 'undefined' && game_data.village)
+      ? game_data.village.id : 'unknown';
+    return base + '_' + vid;
+  }
+  const AT_MIN_REFRESH_GAP_MS   = 60_000;
+  const AT_REFRESH_ON_MISSING   = 10_000;   // fallback arm delay (no cell found)
+  const AT_REFRESH_JITTER       = 10_000;   // +0–10 s random on top of fallback
+  const AT_LS_LAST_REFRESH      = LS_PREFIX + 'lastRefresh';
+  const AT_MAX_WAIT_MS          = 24 * 60 * 60 * 1000; // stop if next noble > 24 h
+
+  let atRefreshTimer   = null;
+  let atTrainProgress  = false;
+
+  function atRandRefresh() { return AT_REFRESH_ON_MISSING + Math.random() * AT_REFRESH_JITTER; }
 
   let settings = { requestedNobles: 1, ignoreBelowPoints: 1500 };
   let playerVillages = [];
@@ -475,6 +493,144 @@
     isSending = false;
   }
 
+  // ==================== AUTO-TRAIN ====================
+  function getVillageResources() {
+    if (typeof game_data !== 'undefined' && game_data.village) {
+      return {
+        wood: game_data.village.wood  || 0,
+        clay: game_data.village.stone || 0,
+        iron: game_data.village.iron  || 0,
+      };
+    }
+    return {
+      wood: num(document.querySelector('#wood')?.textContent),
+      clay: num(document.querySelector('#stone')?.textContent),
+      iron: num(document.querySelector('#iron')?.textContent),
+    };
+  }
+
+  /* Parse "Recursos disponíveis hoje às HH:MM" from #train_snob_cell.
+     Returns ms until that time, or null if not found / already past. */
+  function msUntilReady() {
+    const cell = document.querySelector('#train_snob_cell');
+    if (!cell) return null;
+    const m = cell.textContent.match(/(\d{1,2}):(\d{2})/);
+    if (!m) return null;
+    const now   = new Date();
+    const ready = new Date(now);
+    ready.setHours(parseInt(m[1], 10), parseInt(m[2], 10), 0, 0);
+    if (ready <= now) ready.setDate(ready.getDate() + 1);
+    return ready.getTime() - now.getTime();
+  }
+
+  /* Returns the "Treinar unidade" recruit link if resources are available,
+     null otherwise. TW renders <a class="btn btn-recruit"> only when ready. */
+  function findRecruitBtn() {
+    return document.querySelector('a.btn-recruit, a.btn.btn-recruit');
+  }
+
+  function atCanRefreshNow() {
+    const last = Number(localStorage.getItem(AT_LS_LAST_REFRESH) || '0');
+    return !Number.isFinite(last) || (Date.now() - last) >= AT_MIN_REFRESH_GAP_MS;
+  }
+
+  function atSafeRefresh(reason) {
+    if (!atCanRefreshNow()) {
+      log('Auto-recrutar: refresh bloqueado (muito cedo).', 'warn');
+      return;
+    }
+    localStorage.setItem(AT_LS_LAST_REFRESH, String(Date.now()));
+    log(`Auto-recrutar: a recarregar página (${reason})…`, 'warn');
+    location.reload();
+  }
+
+  function atArmRefresh(reason) {
+    if (atRefreshTimer) return;
+    const delay = atRandRefresh();
+    atRefreshTimer = setTimeout(() => {
+      atRefreshTimer = null;
+      atSafeRefresh(reason);
+    }, delay);
+  }
+
+  function atDisarmRefresh() {
+    if (atRefreshTimer) clearTimeout(atRefreshTimer);
+    atRefreshTimer = null;
+  }
+
+  function autoTrainIfReady(manual = false) {
+    if (!lsGet(atKey(AUTO_TRAIN_KEY), false)) return;
+    if (atTrainProgress) return;
+    atTrainProgress = true;
+
+    setTimeout(() => {
+      try {
+        /* On manual activation check the button first — resources may already
+           be available and the user just wants an immediate attempt. */
+        if (manual) {
+          const recruitBtn = findRecruitBtn();
+          if (recruitBtn) {
+            atDisarmRefresh();
+            log('✅ Botão de recrutar disponível — a treinar nobre…', 'ok');
+            recruitBtn.click();
+            /* Flag stays active — TW will reload and we check again */
+            return;
+          }
+          log('Botão não disponível agora — a usar agendador…', 'info');
+        }
+
+        /* Use the cell time as the authoritative readiness signal.
+           TW sometimes leaves the recruit button stale even when resources arrive,
+           so on auto-refresh we never trust the button without a timed refresh first. */
+        const untilMs = msUntilReady();
+
+        if (untilMs !== null && untilMs > 0) {
+          /* Stop if next nobleman is more than 24 h away */
+          if (untilMs > AT_MAX_WAIT_MS) {
+            log('⏹ Próximo nobre em mais de 24h — auto-recrutar desativado.', 'warn');
+            lsSet(atKey(AUTO_TRAIN_KEY), false);
+            return;
+          }
+          const jitter   = 5000 + Math.random() * 10_000;
+          const waitMs   = untilMs + jitter;
+          const readySec = Math.round(untilMs / 1000);
+          log(`⏳ Recursos prontos em ${readySec}s — a aguardar…`, 'warn');
+          atDisarmRefresh();
+          if (atRefreshTimer) clearTimeout(atRefreshTimer);
+          atRefreshTimer = setTimeout(() => {
+            atRefreshTimer = null;
+            atSafeRefresh('ready time reached');
+          }, waitMs);
+          return;
+        }
+
+        /* Cell time passed / no cell — check button after scheduled refresh */
+        const recruitBtn = findRecruitBtn();
+        if (recruitBtn) {
+          atDisarmRefresh();
+          log('✅ Botão de recrutar disponível — a treinar nobre…', 'ok');
+          recruitBtn.click();
+          /* Flag stays active — TW will reload and we check again */
+        } else {
+          log('⚠ Tempo passou mas botão ainda não visível — a recarregar…', 'warn');
+          atArmRefresh('btn not rendered after ready time');
+        }
+      } finally {
+        atTrainProgress = false;
+      }
+    }, 500);
+  }
+
+  function atStopInterval() {
+    if (atRefreshTimer) clearTimeout(atRefreshTimer);
+    atRefreshTimer = null;
+  }
+
+  /* Run once on page load if the auto-train flag is set for THIS village */
+  if (lsGet(atKey(AUTO_TRAIN_KEY), false)) {
+    setTimeout(autoTrainIfReady, 1200);
+  }
+
   // ==================== SIDEBAR INSERTION ====================
   function getRightSidebar() {
     // Common TW classic layouts
@@ -517,6 +673,9 @@
                 <button id="refresh-btn" class="btn" type="button">${LANG.refresh_list}</button>
                 <button id="send-btn" class="btn" type="button">${LANG.send_and_train}</button>
                 <button id="selectall-btn" class="btn" type="button">${LANG.deselect_all}</button>
+              </div>
+              <div class="shk-actions">
+                <button id="auto-train-btn" class="btn" type="button">▶ Auto Recrutar</button>
               </div>
 
               <div id="shk-incoming-line">${LANG.incoming} —</div>
@@ -565,6 +724,28 @@
     };
 
     $('#send-btn').onclick = startSendingAndTraining;
+
+    const autoBtn = $('#auto-train-btn');
+    function syncAutoBtn() {
+      const on = lsGet(atKey(AUTO_TRAIN_KEY), false);
+      autoBtn.textContent = on ? '■ Parar Auto Recrutar' : '▶ Auto Recrutar';
+      autoBtn.style.background = on ? '#b30000' : '';
+    }
+    syncAutoBtn();
+    autoBtn.onclick = () => {
+      const on = lsGet(atKey(AUTO_TRAIN_KEY), false);
+      if (on) {
+        lsSet(atKey(AUTO_TRAIN_KEY), false);
+        atStopInterval();
+        log('Auto-recrutar desativado.', 'warn');
+      } else {
+        lsSet(atKey(AUTO_TRAIN_KEY), true);
+        lsSet(atKey(AUTO_TRAIN_CNT), parseInt($('#nobles-input')?.value, 10) || 1);
+        log('Auto-recrutar ativado — a verificar recursos…', 'ok');
+        autoTrainIfReady(true);
+      }
+      syncAutoBtn();
+    };
 
     fetchAllVillages()
       .then(buildVillageTable)

@@ -552,6 +552,7 @@
           highFarm: 23000,
           lowPoints: 3000,
           builtOutPercentage: 0.2,
+          recruitReserve: 20000,
           needsMorePercentage: 0.7,
 
           premiumInstantEnabled: false,
@@ -593,6 +594,7 @@
         if (!s.highFarm) s.highFarm = 23000;
         if (!s.lowPoints && s.lowPoints !== 0) s.lowPoints = 1;
         if (!s.builtOutPercentage && s.builtOutPercentage !== 0) s.builtOutPercentage = 0.25;
+        if (typeof s.recruitReserve === "undefined") s.recruitReserve = 20000;
         if (!s.needsMorePercentage && s.needsMorePercentage !== 0) s.needsMorePercentage = 0.85;
 
         if (typeof s.premiumInstantEnabled === "undefined") s.premiumInstantEnabled = false;
@@ -647,6 +649,7 @@
         if (isNaN(s.lowPoints)) s.lowPoints = 1;
 
         s.reservePerVillage = Math.max(0, parseInt(s.reservePerVillage, 10) || 0);
+        s.recruitReserve    = Math.max(0, parseInt(s.recruitReserve,    10) || 20000);
         s.maxDistance = Math.max(1, parseInt(s.maxDistance, 10) || 9999);
 
         // Merge suite popup config over stored settings
@@ -1196,13 +1199,17 @@
         // reservePerVillage, and up to builtOutPercentage×WH if it has that much.
         // Using min(stock, wh_leave) means a village below the threshold keeps everything
         // it has — avoiding spurious excess when stock < wh_leave.
+        // HIGH-PTS but not HIGH-FARM = actively recruiting troops → keep recruitReserve
+        // per resource on top of the normal floor so troops can be trained.
         if (v.farmSpaceUsed > s.highFarm || v.points > s.highPoints) {
-          const wh_leave  = s.builtOutPercentage * wh;
-          const res_leave = s.reservePerVillage || 0;
+          const isRecruiting = v.points > s.highPoints && v.farmSpaceUsed <= s.highFarm;
+          const wh_leave     = s.builtOutPercentage * wh;
+          const res_leave    = s.reservePerVillage || 0;
+          const rec_leave    = isRecruiting ? (s.recruitReserve || 20000) : 0;
 
-          const leaveWood  = Math.max(res_leave, Math.min(v.wood  + inc.wood,  wh_leave));
-          const leaveStone = Math.max(res_leave, Math.min(v.stone + inc.stone, wh_leave));
-          const leaveIron  = Math.max(res_leave, Math.min(v.iron  + inc.iron,  wh_leave));
+          const leaveWood  = Math.max(res_leave, rec_leave, Math.min(v.wood  + inc.wood,  wh_leave));
+          const leaveStone = Math.max(res_leave, rec_leave, Math.min(v.stone + inc.stone, wh_leave));
+          const leaveIron  = Math.max(res_leave, rec_leave, Math.min(v.iron  + inc.iron,  wh_leave));
 
           if (v.wood  + inc.wood  > leaveWood)  tempWood  = Math.round((v.wood  + inc.wood)  - leaveWood);
           if (v.stone + inc.stone > leaveStone) tempStone = Math.round((v.stone + inc.stone) - leaveStone);
@@ -1405,7 +1412,7 @@
 
         // Non-low-points villages whose queue exceeds hqNormalQueueMaxHours are not
         // boosted as shortage receivers — they have enough time for a future run.
-        const normalQueueMaxSec = ((s.hqNormalQueueMaxHours ?? 6)) * 3600;
+        const normalQueueMaxSec = s.hqNormalQueueMaxHours * 3600;
         if (!isLowPtsV && normalQueueMaxSec > 0 && (hq.queueEndsSec || 0) > normalQueueMaxSec) {
           wbLog(`[WH] HQ skip ${v.name}: queue ${((hq.queueEndsSec||0)/3600).toFixed(1)}h > max ${s.hqNormalQueueMaxHours}h`);
           continue;
@@ -1613,7 +1620,12 @@
           // When clustering is active, intra-cluster donors are tried first (sorted by distance),
           // then cross-cluster donors as fallback (also sorted by distance).
           // This is where clustering actually affects resource flow — not post-hoc re-sorting.
-          const eligibleDonors = donors.filter(d => d[res] > 0 && d.merchantsLeft > 0);
+          const receiverIsHqBoosted = state.hqBoostedIds?.has(tgtId);
+          const eligibleDonors = donors.filter(d => {
+            if (d[res] <= 0 || d.merchantsLeft <= 0) return false;
+            if (receiverIsHqBoosted && state.hqBoostedIds?.has(d.id)) return false;
+            return true;
+          });
 
           let sortedDonors;
           if (clusterEnabled && numClusters >= 2) {
@@ -2513,6 +2525,9 @@
         <label>Reserve per village (not sent)</label>
         <input type="number" id="tmwh_reservePerVillage" value="${s.reservePerVillage}">
 
+        <label>Recruit reserve (high-pts, low-farm)</label>
+        <input type="number" id="tmwh_recruitReserve" value="${s.recruitReserve}">
+
         <label>Global max distance (fields)</label>
         <input type="number" id="tmwh_maxDistance" value="${s.maxDistance}">
 
@@ -3009,6 +3024,7 @@
       s.sendAllIntervalMs = parseInt($("#tmwh_sendAllIntervalMs").val(), 10);
 
       s.reservePerVillage    = parseInt($("#tmwh_reservePerVillage").val(), 10);
+      s.recruitReserve       = parseInt($("#tmwh_recruitReserve").val(),    10);
       s.maxDistance          = parseInt($("#tmwh_maxDistance").val(),       10);
       s.hqPriorityEnabled    = $("#tmwh_hqPriorityEnabled").is(":checked");
       s.maxedOutPoints       = parseInt($("#tmwh_maxedOutPoints").val(), 10);
@@ -3022,6 +3038,7 @@
       if (isNaN(s.highPoints)) s.highPoints = 12000;
       if (isNaN(s.highFarm)) s.highFarm = 99999;
       if (isNaN(s.builtOutPercentage)) s.builtOutPercentage = 0.25;
+      if (isNaN(s.recruitReserve))    s.recruitReserve    = 20000;
       if (isNaN(s.needsMorePercentage)) s.needsMorePercentage = 0.85;
       if (isNaN(s.maxedOutPoints) || s.maxedOutPoints <= 0) s.maxedOutPoints = 10471;
       if (isNaN(s.lowPointsLongQueueHours)) s.lowPointsLongQueueHours = 3;

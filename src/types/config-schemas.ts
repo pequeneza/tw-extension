@@ -481,6 +481,26 @@ export const MODULE_CONFIG_SCHEMAS: ModuleConfigSchemas = {
     ],
   },
 
+  tw_utils: {
+    storageKey: "tw_suite_cfg_tw_utils",
+    fields: [
+      {
+        key: "villageSwitcher",
+        label: "Village Switcher",
+        type: "checkbox",
+        default: true,
+        help: "No mapa, mostra botão para trocar para uma aldeia própria selecionada.",
+      },
+      {
+        key: "incomingFilter",
+        label: "Incoming Filter",
+        type: "checkbox",
+        default: true,
+        help: "Adiciona botão nas tabelas de incomings para ocultar/mostrar apoios.",
+      },
+    ],
+  },
+
   tw_snipe_scheduler: {
     storageKey: "tw_suite_cfg_snipe_scheduler",
     fields: [

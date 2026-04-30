@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TW Utils
 // @namespace    tw_utils
-// @version      1.0.0
+// @version      1.1.0
 // @description  Utilitários variados para o TribalWars PT.
 // @match        https://*.tribalwars.com.pt/game.php*
 // ==/UserScript==
@@ -9,8 +9,11 @@
 (function () {
     'use strict';
 
-    if (window.__twUtilsLoaded) { window.__twUtilsOpen?.(); return; }
+    if (window.__twUtilsLoaded) return;
     window.__twUtilsLoaded = true;
+
+    /* Settings injected by xBot via the config bridge */
+    const cfg = window.__twSuiteCfg?.('tw_utils') ?? {};
 
     /* ═══════════════════════════════════════════════════════════════════════
        HELPERS
@@ -20,243 +23,195 @@
         return new URLSearchParams(window.location.search).get('screen') || '';
     }
 
-    function getCurrentVillageId() {
-        if (typeof game_data !== 'undefined' && game_data.village?.id)
-            return String(game_data.village.id);
-        return new URLSearchParams(window.location.search).get('village') || '';
-    }
-
-    /* ═══════════════════════════════════════════════════════════════════════
-       SETTINGS
-    ═══════════════════════════════════════════════════════════════════════ */
-
-    const STORAGE_KEY = 'tw_utils_settings';
-
-    /* Registry of all utilities — add new entries here when extending */
-    const UTIL_DEFS = [
-        {
-            id: 'villageSwitcher',
-            label: 'Village Switcher',
-            description: 'No mapa, mostra botão para trocar para uma aldeia própria selecionada.',
-        },
-    ];
-
-    function loadSettings() {
-        try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch { return {}; }
-    }
-
-    function saveSettings(s) {
-        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch {}
-    }
-
-    function isEnabled(id) {
-        return loadSettings()[id] !== false; // enabled by default
-    }
-
     /* ═══════════════════════════════════════════════════════════════════════
        CSS
     ═══════════════════════════════════════════════════════════════════════ */
 
     const CSS = `
-#twutils-toggle { display:flex; align-items:center; justify-content:center;
-                  background:#5a3a1a; cursor:pointer; font-size:15px; user-select:none; }
-#twutils-toggle:hover { background:#7d5c2e; }
-#twutils-toggle.twutils-active { border-color:#f4e4bc !important; box-shadow:0 0 6px #f4e4bc; }
-
-#twutils-panel { position:fixed; top:60px; right:20px; z-index:99998;
-                 background:#f4e4bc; border:2px solid #7d5c2e; border-radius:6px;
-                 font-family:Verdana,sans-serif; font-size:12px; color:#3b2a1a;
-                 box-shadow:0 4px 20px rgba(0,0,0,0.45); min-width:260px; }
-#twutils-panel * { box-sizing:border-box; }
-#twutils-titlebar { background:#7d5c2e; color:#f4e4bc; padding:8px 12px; border-radius:4px 4px 0 0;
-                    display:flex; align-items:center; justify-content:space-between;
-                    user-select:none; cursor:move; }
-#twutils-titlebar span { font-weight:bold; font-size:13px; }
-#twutils-titlebar button { background:none; border:none; color:#f4e4bc; font-size:15px;
-                            cursor:pointer; padding:2px 6px; line-height:1; border-radius:3px; }
-#twutils-titlebar button:hover { background:rgba(255,255,255,0.15); }
-#twutils-list { padding:10px 12px; display:flex; flex-direction:column; gap:8px; }
-.twutils-item { display:flex; align-items:flex-start; gap:8px; padding:6px 8px;
-                background:#e8d5a3; border:1px solid #c9a96e; border-radius:4px; }
-.twutils-item label { font-weight:bold; font-size:12px; cursor:pointer; }
-.twutils-item p { margin:2px 0 0; font-size:10px; color:#7d5c2e; }
-.twutils-item input[type=checkbox] { margin-top:2px; cursor:pointer; flex-shrink:0; }
-
-#twutils-switch-btn { display:block; width:100%; margin-top:6px;
-                      background:#5a3a1a; color:#f4e4bc; border:1px solid #3b2a1a;
-                      border-radius:3px; padding:4px 10px; font-size:11px; font-weight:bold;
-                      cursor:pointer; font-family:Verdana,sans-serif; text-align:center; }
-#twutils-switch-btn:hover { background:#7d5c2e; }
+.tw-incf-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    vertical-align: -3px;
+    line-height: 0;
+    padding: 3px 4px;
+    border: 1px solid #603000;
+    border-radius: 3px;
+    background: #e9d0a9;
+    box-shadow: 1px 1px 2px rgba(0,0,0,0.30);
+    margin: 0 4px 0 2px;
+    user-select: none;
+}
+.tw-incf-btn:hover {
+    background: #f0dca0;
+    border-color: #4a2000;
+}
+.tw-incf-btn.active {
+    background: #d4b8a0;
+    border-color: #8b3a3a;
+    box-shadow: inset 1px 1px 2px rgba(0,0,0,0.30);
+}
+.tw-incf-btn img { display: block; width: 18px; height: 18px; }
+.tw-incf-forbidden {
+    display: none;
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+.tw-incf-btn.active .tw-incf-forbidden { display: block; }
+.tw-incf-forbidden::before {
+    content: '';
+    position: absolute;
+    inset: 1px;
+    border: 2px solid #cc0000;
+    border-radius: 50%;
+    box-sizing: border-box;
+}
+.tw-incf-forbidden::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 8%;
+    width: 84%;
+    height: 1.5px;
+    background: #cc0000;
+    transform: rotate(135deg);
+    transform-origin: center;
+    margin-top: -0.75px;
+}
 `;
 
     function injectStyle() {
-        if (document.getElementById('twutils-style')) return;
+        if (document.getElementById('tw-utils-style')) return;
         const st = document.createElement('style');
-        st.id = 'twutils-style';
+        st.id = 'tw-utils-style';
         st.textContent = CSS;
         document.head.appendChild(st);
     }
 
     /* ═══════════════════════════════════════════════════════════════════════
-       SETTINGS PANEL
-    ═══════════════════════════════════════════════════════════════════════ */
-
-    let _panelOpen = false;
-
-    function buildPanel() {
-        const settings = loadSettings();
-        const panel = document.createElement('div');
-        panel.id = 'twutils-panel';
-        panel.innerHTML = `
-<div id="twutils-titlebar">
-  <span>⚙️ TW Utils</span>
-  <button id="twutils-close" title="Fechar">✕</button>
-</div>
-<div id="twutils-list">
-${UTIL_DEFS.map(u => `
-  <div class="twutils-item">
-    <input type="checkbox" id="twutils-cb-${u.id}" data-util="${u.id}"${settings[u.id] !== false ? ' checked' : ''}>
-    <div>
-      <label for="twutils-cb-${u.id}">${u.label}</label>
-      <p>${u.description}</p>
-    </div>
-  </div>`).join('')}
-</div>`;
-
-        panel.querySelector('#twutils-close').addEventListener('click', togglePanel);
-        panel.querySelectorAll('input[type=checkbox]').forEach(cb => {
-            cb.addEventListener('change', () => {
-                const s = loadSettings();
-                s[cb.dataset.util] = cb.checked;
-                saveSettings(s);
-            });
-        });
-
-        makeDraggable(panel, panel.querySelector('#twutils-titlebar'));
-        document.body.appendChild(panel);
-    }
-
-    function togglePanel() {
-        _panelOpen = !_panelOpen;
-        document.getElementById('twutils-toggle')?.classList.toggle('twutils-active', _panelOpen);
-        if (_panelOpen) {
-            buildPanel();
-        } else {
-            document.getElementById('twutils-panel')?.remove();
-        }
-    }
-
-    /* ═══════════════════════════════════════════════════════════════════════
        VILLAGE SWITCHER
-       Watches for map popups of own villages and injects a switch button.
-       Own-village detection: popup contains a link to screen=place (rally
-       point), which TW only renders for the current player's own villages.
+       Registers a native a.mp button via TWMap.context so TW handles
+       own-village detection, positioning and __village__ substitution.
     ═══════════════════════════════════════════════════════════════════════ */
 
     function initVillageSwitcher() {
-        new MutationObserver(mutations => {
-            if (getCurrentScreen() !== 'map') return;
-            for (const m of mutations) {
-                for (const node of m.addedNodes) {
-                    if (node.nodeType !== 1) continue;
-                    tryInjectSwitchBtn(node);
-                    node.querySelectorAll('[id*="popup"],[class*="popup"]').forEach(tryInjectSwitchBtn);
-                }
-                /* Clean up orphaned button when popup is removed */
-                for (const node of m.removedNodes) {
-                    if (node.nodeType !== 1) continue;
-                    if (node.querySelector?.('#twutils-switch-btn') || node.id?.includes('popup')) {
-                        document.getElementById('twutils-switch-btn')?.remove();
-                    }
-                }
-            }
-        }).observe(document.body, { childList: true, subtree: true });
-    }
+        if (getCurrentScreen() !== 'map') return;
+        if (typeof TWMap === 'undefined' || !TWMap?.context || !TWMap?.urls?.ctx) return;
 
-    function tryInjectSwitchBtn(el) {
-        if (el.querySelector?.('#twutils-switch-btn')) return;
+        const container = document.getElementById('map-ctx-buttons');
+        if (!container) return;
 
-        /* Only inject for own villages — identified by presence of a rally-point link */
-        const placeLink = el.querySelector?.('a[href*="screen=place"][href*="village="]');
-        if (!placeLink) return;
+        container.insertAdjacentHTML('beforeend',
+            `<a class="mp" id="mp_switch" title="Mudar para esta aldeia" href="/game.php?screen=map"` +
+            ` style="opacity:0;display:none;background-position:-384px 0px;"></a>` +
+            `<style>#mp_switch:hover{background-position:-384px -24px !important;}</style>`
+        );
 
-        const m = placeLink.href.match(/[?&]village=(\d+)/);
-        if (!m) return;
-        const targetVillageId = m[1];
+        TWMap.context._ownOrder.push('mp_switch');
+        TWMap.context._circlePos.push([-12, -80]);
 
-        if (targetVillageId === getCurrentVillageId()) return;
+        const sitterFrag = game_data.player.sitter !== '0'
+            ? `t=${game_data.player.id}&`
+            : '';
 
-        const coordM = el.textContent.match(/\((\d+)\|(\d+)\)/);
-
-        const btn = document.createElement('button');
-        btn.id = 'twutils-switch-btn';
-        btn.textContent = '⇄ Trocar aldeia';
-        btn.addEventListener('click', e => {
-            e.stopPropagation();
-            const url = new URL(window.location.href);
-            url.searchParams.set('village', targetVillageId);
-            if (coordM) url.hash = `${coordM[1]};${coordM[2]}`;
-            window.location.href = url.toString();
+        Object.defineProperty(TWMap.urls.ctx, 'mp_switch', {
+            get() {
+                return `/game.php?village=__village__&${sitterFrag}screen=map${location.hash}`;
+            },
         });
-
-        el.appendChild(btn);
     }
 
     /* ═══════════════════════════════════════════════════════════════════════
-       DRAG HELPER
+       INCOMING FILTER
+       Adds a support-icon toggle button to incoming tables (#show_incoming_units,
+       #commands_incomings). Clicking hides all support rows; clicking again
+       restores them. The icon gets a red forbidden overlay when active.
     ═══════════════════════════════════════════════════════════════════════ */
 
-    function makeDraggable(el, handle) {
-        let ox = 0, oy = 0, dragging = false;
-        handle.addEventListener('mousedown', e => {
-            dragging = true;
-            ox = e.clientX - el.getBoundingClientRect().left;
-            oy = e.clientY - el.getBoundingClientRect().top;
-            e.preventDefault();
-        });
-        document.addEventListener('mousemove', e => {
-            if (!dragging) return;
-            el.style.left  = (e.clientX - ox) + 'px';
-            el.style.top   = (e.clientY - oy) + 'px';
-            el.style.right = 'auto';
-        });
-        document.addEventListener('mouseup', () => { dragging = false; });
+    const SUPPORT_FRAGMENT = 'graphic/command/support.webp';
+
+    function supportIconUrl() {
+        const base = (typeof game_data !== 'undefined' && game_data.graphic_path)
+            ? game_data.graphic_path
+            : 'https://dspt.innogamescdn.com/asset/610fa902/';
+        return `${base}${SUPPORT_FRAGMENT}`;
     }
 
-    /* ═══════════════════════════════════════════════════════════════════════
-       TOGGLE BUTTON
-    ═══════════════════════════════════════════════════════════════════════ */
+    function isSupportRow(tr) {
+        return [...tr.querySelectorAll('img:not([data-twincf])')].some(img => img.src.includes(SUPPORT_FRAGMENT));
+    }
 
-    function ensureToggleButton() {
-        if (document.getElementById('twutils-toggle')) return;
-        const anchor = document.getElementById('new_quest');
-        if (!anchor) return;
+    function applyFilter(table, hide) {
+        table.querySelectorAll('tbody tr, tr').forEach(tr => {
+            if (tr.closest('thead')) return;
+            if (isSupportRow(tr)) tr.style.display = hide ? 'none' : '';
+        });
+    }
 
-        const btn = document.createElement('div');
-        btn.className = 'quest';
-        btn.id = 'twutils-toggle';
-        btn.title = 'TW Utils';
-        btn.textContent = '⚙️';
-        btn.addEventListener('click', togglePanel);
-        anchor.parentNode.insertBefore(btn, anchor.nextSibling);
+    function attachFilterButton(table) {
+        if (table.dataset.twIncfAttached) return;
+        table.dataset.twIncfAttached = '1';
+
+        const headerCell =
+            table.querySelector('thead tr th:first-child') ||
+            table.querySelector('thead tr td:first-child') ||
+            table.querySelector('tr:first-child th:first-child') ||
+            table.querySelector('tr:first-child td:first-child');
+
+        if (!headerCell) return;
+
+        const btn = document.createElement('span');
+        btn.className = 'tw-incf-btn';
+        btn.title = 'Ocultar / mostrar apoios';
+
+        const img = document.createElement('img');
+        img.src = supportIconUrl();
+        img.alt = 'Apoio';
+        img.dataset.twincf = '1';
+
+        const forbidden = document.createElement('span');
+        forbidden.className = 'tw-incf-forbidden';
+
+        btn.appendChild(img);
+        btn.appendChild(forbidden);
+
+        let hidden = false;
+        btn.addEventListener('click', () => {
+            hidden = !hidden;
+            btn.classList.toggle('active', hidden);
+            applyFilter(table, hidden);
+        });
+
+        headerCell.insertAdjacentElement('afterbegin', btn);
+    }
+
+    function processTables() {
+        document.querySelectorAll(
+            '#show_incoming_units, #commands_incomings, ' +
+            'table#show_incoming_units, table#commands_incomings'
+        ).forEach(el => {
+            const table = el.matches('table') ? el : el.querySelector('table');
+            if (table) attachFilterButton(table);
+        });
+    }
+
+    function initIncomingFilter() {
+        processTables();
+        new MutationObserver(processTables)
+            .observe(document.body, { childList: true, subtree: true });
     }
 
     /* ═══════════════════════════════════════════════════════════════════════
        BOOT
     ═══════════════════════════════════════════════════════════════════════ */
 
-    window.__twUtilsOpen = togglePanel;
-
     function boot() {
         injectStyle();
-        ensureToggleButton();
-        let tries = 0;
-        const t = setInterval(() => {
-            ensureToggleButton();
-            if (document.getElementById('twutils-toggle') || ++tries > 60) clearInterval(t);
-        }, 200);
-
-        if (isEnabled('villageSwitcher')) initVillageSwitcher();
+        if (cfg.villageSwitcher !== false) initVillageSwitcher();
+        if (cfg.incomingFilter !== false) initIncomingFilter();
     }
 
     if (typeof $ !== 'undefined' && typeof TribalWars !== 'undefined') {

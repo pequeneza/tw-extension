@@ -121,8 +121,8 @@ export const MODULE_CONFIGS: ModuleConfig[] = [
   },
   {
     id: "tw_utils",
-    label: "TW Utils",
-    description: "Utilitários variados: Village Switcher e outros melhoramentos do jogo.",
+    label: "TW Tweaks",
+    description: "Small Tweaks to improve your game experience",
     matchPattern: /.*/,
     scriptFile: "tw_utils.user.js",
     icon: "⚙️",

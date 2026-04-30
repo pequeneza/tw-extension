@@ -14,13 +14,17 @@
 import { MODULE_CONFIGS, STORAGE_KEY } from "../types/modules";
 import type { ModuleSettings } from "../types/modules";
 
+const VALIDATION_URL = "https://license.vivaomadeira.com/validate";
+
 type BgMessage =
   | { type: "GET_ACTIVE_TAB_URL" }
-  | { type: "RELOAD_ACTIVE_TAB" };
+  | { type: "RELOAD_ACTIVE_TAB" }
+  | { type: "VALIDATE_LICENSE"; key: string };
 
 type BgResponse =
   | { type: "ACTIVE_TAB_URL"; url: string | null }
-  | { type: "ACK" };
+  | { type: "ACK" }
+  | { type: "LICENSE_RESULT"; valid: boolean };
 
 // ─── Suppress "no-op fetch handler" warning ───────────────────────────────────
 // Returning nothing (undefined) lets the browser handle the request normally.
@@ -83,6 +87,17 @@ chrome.runtime.onMessage.addListener(
           if (id != null) chrome.tabs.reload(id);
           sendResponse({ type: "ACK" });
         });
+        return true;
+
+      case "VALIDATE_LICENSE":
+        fetch(VALIDATION_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ key: message.key }),
+        })
+          .then((r) => r.json())
+          .then((data: { valid: boolean }) => sendResponse({ type: "LICENSE_RESULT", valid: data.valid }))
+          .catch(() => sendResponse({ type: "LICENSE_RESULT", valid: false }));
         return true;
 
       default:

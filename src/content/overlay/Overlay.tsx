@@ -3,6 +3,7 @@ import React, {
 } from "react";
 import {
   MODULE_CONFIGS, ModuleId, STORAGE_KEY, ModuleSettings,
+  LICENSE_STORAGE_KEY, LICENSE_CACHE_KEY,
 } from "../../types/modules";
 import {
   MODULE_CONFIG_SCHEMAS, FieldDef, ModuleConfigSchema,
@@ -30,7 +31,8 @@ type View = { type: "list" } |
             { type: "snipe" } |
             { type: "balancer" } |
             { type: "desviador" } |
-            { type: "gluer" };
+            { type: "gluer" } |
+            { type: "license" };
 
 /* ─── useSettings — lives in OverlayRoot, never unmounts ─────────────────── */
 function useSettings() {
@@ -220,6 +222,104 @@ function Field({ f, val, onChange }: {
           }
         }}
       />
+    </div>
+  );
+}
+
+/* ─── LicenseView ─────────────────────────────────────────────────────────── */
+function LicenseView({ visible, onBack, onClose }: {
+  visible: boolean; onBack: () => void; onClose: () => void;
+}) {
+  const [keyInput, setKeyInput] = useState("");
+  const [savedKey, setSavedKey] = useState("");
+  const [status, setStatus] = useState<"idle" | "checking" | "invalid" | "error" | "saved">("idle");
+  const anim = useMountAnim(visible);
+
+  useEffect(() => {
+    if (!visible) return;
+    storageGet([LICENSE_STORAGE_KEY]).then((r) => {
+      const k = (r[LICENSE_STORAGE_KEY] as string) ?? "";
+      setSavedKey(k);
+      setKeyInput(k);
+      setStatus("idle");
+    });
+  }, [visible]);
+
+  async function save() {
+    const key = keyInput.trim().toUpperCase();
+    if (!key) return;
+    setStatus("checking");
+    try {
+      const { valid } = await new Promise<{ valid: boolean }>((res, rej) =>
+        chrome.runtime.sendMessage({ type: "VALIDATE_LICENSE", key }, (r) =>
+          chrome.runtime.lastError ? rej(chrome.runtime.lastError) : res(r)
+        )
+      );
+      if (!valid) { setStatus("invalid"); return; }
+    } catch {
+      setStatus("error"); return;
+    }
+    await new Promise<void>((res) => chrome.storage.sync.set({ [LICENSE_STORAGE_KEY]: key }, res));
+    await new Promise<void>((res) => chrome.storage.local.remove(LICENSE_CACHE_KEY, res));
+    setSavedKey(key);
+    setStatus("saved");
+  }
+
+  const dirty = keyInput.trim().toUpperCase() !== savedKey;
+
+  return (
+    <div className={`cfg-view${anim ? " in" : ""}`}
+         style={{ display: visible ? "flex" : "none" }}>
+      <div className="cfg-header">
+        <button className="back-btn" onClick={onBack}>
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M9 2L4 7l5 5" stroke="currentColor" strokeWidth="1.8"
+              strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </button>
+        <span className="cfg-icon">🔑</span>
+        <div className="cfg-header-text">
+          <span className="cfg-title">License Key</span>
+          <span className="cfg-subtitle">Activate xBot</span>
+        </div>
+        <button className="close-btn" onClick={onClose} aria-label="Close">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M2 2l10 10M12 2L2 12" stroke="currentColor"
+              strokeWidth="1.8" strokeLinecap="round"/>
+          </svg>
+        </button>
+      </div>
+
+      <div className="cfg-body">
+        <div className="cfg-section">
+          <div className="field">
+            <span className="field-label">Your key</span>
+            <input
+              className="input"
+              type="text"
+              placeholder="XXXX-XXXX-XXXX-XXXX"
+              value={keyInput}
+              spellCheck={false}
+              style={{ fontFamily: "'DM Mono', monospace", letterSpacing: "0.06em" }}
+              onChange={(e) => { setKeyInput(e.target.value.toUpperCase()); setStatus("idle"); }}
+            />
+          </div>
+          {status === "checking" && <div className="lic-status">Checking…</div>}
+          {status === "saved"    && <div className="lic-status lic-status--ok">✓ Saved &amp; validated</div>}
+          {status === "invalid"  && <div className="lic-status lic-status--err">Invalid or revoked key</div>}
+          {status === "error"    && <div className="lic-status lic-status--err">Could not reach license server</div>}
+        </div>
+      </div>
+
+      <div className="cfg-footer">
+        <button
+          className={`btn btn-save${dirty ? " btn-save--dirty" : ""}${status === "saved" ? " btn-save--saved" : ""}`}
+          onClick={save}
+          disabled={!dirty || status === "checking"}
+        >
+          {status === "checking" ? "Checking…" : status === "saved" ? "✓ Saved" : dirty ? "Save & validate" : "No changes"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -472,6 +572,9 @@ function Panel({
               if (s[m.id] === true) toggle(m.id);
             })}>All off</button>
           <span className="footer-ver">v1.0</span>
+          <button className="footer-btn footer-btn--key"
+            onClick={() => setViewP({ type: "license" })}
+            title="License key">🔑</button>
         </div>
       </div>
 
@@ -505,6 +608,11 @@ function Panel({
       <GluerView
         visible={view.type === "gluer"}
         onBack={() => setViewP({ type: "list" })}
+      />
+      <LicenseView
+        visible={view.type === "license"}
+        onBack={() => setViewP({ type: "list" })}
+        onClose={onClose}
       />
     </div>
   );
@@ -580,6 +688,7 @@ export function OverlayRoot() {
     if (v === "balancer")  return { type: "balancer" };
     if (v === "desviador") return { type: "desviador" };
     if (v === "gluer")     return { type: "gluer" };
+    if (v === "license")   return { type: "license" };
     return { type: "list" };
   });
   const setViewP = (v: View) => {

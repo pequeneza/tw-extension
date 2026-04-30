@@ -514,6 +514,7 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
 }
 .footer-btn:hover { background: var(--n100); border-color: var(--n300); color: var(--n700); }
 .footer-btn--danger:hover { background: var(--r-bg); border-color: var(--r-br); color: var(--r500); }
+.footer-btn--key { margin-left: auto; padding: 5px 8px; }
 .footer-ver {
   margin-left: auto;
   font-size: 10.5px;
@@ -718,6 +719,15 @@ select.input {
 .field-check:last-child { border-bottom: none; }
 .field-check:hover { background: var(--n50); }
 .field-check-text { flex: 1; min-width: 0; }
+
+/* ── License status ──────────────────────────────────────────────────────── */
+.lic-status {
+  font-size: 11.5px;
+  color: var(--n400);
+  padding: 4px 2px;
+}
+.lic-status--ok  { color: var(--g600); }
+.lic-status--err { color: var(--r500); }
 
 /* ── Config footer ───────────────────────────────────────────────────────── */
 .cfg-footer {
@@ -1334,6 +1344,26 @@ select.input {
   border: 1px solid var(--a-br);
   border-radius: 6px;
   padding: 5px 10px;
+}
+
+.desv-toasts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 12px 6px;
+}
+.desv-toast {
+  background: var(--g600);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 10px;
+  border-radius: 6px;
+  animation: desv-toast-in 0.2s ease;
+}
+@keyframes desv-toast-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 .desv-body {

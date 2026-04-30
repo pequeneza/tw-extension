@@ -9,7 +9,7 @@
  * directly by the userscript; no need to send them via CustomEvent.
  */
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 /* ─── Storage keys (must match desviador.user.js) ────────────────────────── */
 const CANCEL_SEC_KEY = "twDesviador_cancelSec";
@@ -29,6 +29,11 @@ interface DesvState {
   active: boolean;
   scheduled: ScheduledEntry[];
   notifPermission: "granted" | "denied" | "default";
+}
+
+interface CancelToast {
+  id: number;
+  village: string;
 }
 
 /* ─── Helpers ─────────────────────────────────────────────────────────────── */
@@ -75,6 +80,8 @@ export function DesviadorView({
     parseInt(localStorage.getItem(ALERT_SEC_KEY) || "60", 10)
   );
   const [now, setNow] = useState(Date.now());
+  const [toasts, setToasts] = useState<CancelToast[]>([]);
+  const toastIdRef = useRef(0);
 
   /* Clock tick for countdown columns */
   useEffect(() => {
@@ -89,6 +96,18 @@ export function DesviadorView({
       setDesvState((e as CustomEvent<DesvState>).detail);
     document.addEventListener("xbot:desviador:state", handler);
     return () => document.removeEventListener("xbot:desviador:state", handler);
+  }, []);
+
+  /* Cancel confirmation toasts */
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { village } = (e as CustomEvent<{ village: string }>).detail;
+      const id = ++toastIdRef.current;
+      setToasts(t => [...t, { id, village }]);
+      setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 4000);
+    };
+    document.addEventListener("xbot:desviador:canceled", handler);
+    return () => document.removeEventListener("xbot:desviador:canceled", handler);
   }, []);
 
   /* Send command to the userscript */
@@ -110,7 +129,11 @@ export function DesviadorView({
     localStorage.setItem(ALERT_SEC_KEY, String(v));
   };
 
-  const sorted = [...desvState.scheduled].sort((a, b) => a.arrivalMs - b.arrivalMs);
+  /* Unfired entries sorted by fireAt (next to fire first), fired entries at the bottom */
+  const sorted = [...desvState.scheduled].sort((a, b) => {
+    if (a.fired !== b.fired) return a.fired ? 1 : -1;
+    return a.fireAt - b.fireAt;
+  });
 
   const isOnIncomings = /screen=overview_villages.*mode=incomings.*subtype=attacks/.test(
     window.location.href
@@ -201,6 +224,17 @@ export function DesviadorView({
         )}
       </div>
 
+      {/* ── Cancel toasts ── */}
+      {toasts.length > 0 && (
+        <div className="desv-toasts">
+          {toasts.map(t => (
+            <div key={t.id} className="desv-toast">
+              ✓ Apoio cancelado — aldeia {t.village}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* ── Attack list ── */}
       <div className="desv-body">
         {sorted.length === 0 ? (
@@ -212,7 +246,7 @@ export function DesviadorView({
                 <th className="desv-th desv-th--dot" />
                 <th className="desv-th">Ataque</th>
                 <th className="desv-th">Aldeia</th>
-                <th className="desv-th">Abre em</th>
+                <th className="desv-th">Envia em</th>
                 <th className="desv-th">Chega</th>
               </tr>
             </thead>

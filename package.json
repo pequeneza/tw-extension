@@ -9,7 +9,8 @@
     "build:scripts": "node build-scripts.mjs",
     "typecheck":     "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
     "clean":         "rimraf dist",
-    "clean:all":     "rimraf dist node_modules"
+    "clean:all":     "rimraf dist node_modules",
+    "test":          "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

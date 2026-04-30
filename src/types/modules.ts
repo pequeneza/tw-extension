@@ -19,6 +19,7 @@ export type ModuleId =
   | "mass_label_renamer"
   | "noble_sender_trainer"
   | "resource_buyer"
+  | "simulador"
   | "tw_snipe_scheduler"
   | "wh_balancer";
 
@@ -32,6 +33,8 @@ export interface ModuleSettings {
  * This prevents scripts from running unintentionally on page navigation.
  */
 export const STORAGE_KEY = "xbot_settings_v1";
+export const LICENSE_STORAGE_KEY = "xbot_license";
+export const LICENSE_CACHE_KEY = "xbot_license_cache";
 
 export const MODULE_CONFIGS: ModuleConfig[] = [
   {
@@ -87,7 +90,7 @@ export const MODULE_CONFIGS: ModuleConfig[] = [
     id: "mass_label_renamer",
     label: "Mass Label + Renamer",
     description: "BITO colour buttons on every incoming row + floating panel to bulk-apply any tag with a human delay.",
-    matchPattern: /screen=overview_villages.*mode=incomings|screen=overview/,
+    matchPattern: /screen=overview_villages.*mode=incomings|screen=overview|screen=info_village/,
     scriptFile: "mass_label_renamer.user.js",
     icon: "🏷️",
   },
@@ -106,6 +109,14 @@ export const MODULE_CONFIGS: ModuleConfig[] = [
     matchPattern: /screen=market.*mode=exchange/,
     scriptFile: "resource_buyer.user.js",
     icon: "🛒",
+  },
+  {
+    id: "simulador",
+    label: "Simulador",
+    description: "Planeador de ataques coordenados: busca velocidades do servidor, calcula Hora de Saída e gera links de ataque pré-preenchidos.",
+    matchPattern: /^(?!.*screen=memo).*/,
+    scriptFile: "simulador.user.js",
+    icon: "🗺️",
   },
   {
     id: "tw_snipe_scheduler",

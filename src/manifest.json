@@ -4,7 +4,10 @@
   "version": "1.0.0",
   "description": "TribalWars PT automation suite — 10 modules, in-game overlay. Opt-in per module.",
   "permissions": ["storage", "scripting", "activeTab", "tabs", "notifications"],
-  "host_permissions": ["https://*.tribalwars.com.pt/*"],
+  "host_permissions": [
+    "https://*.tribalwars.com.pt/*",
+    "https://license.vivaomadeira.com/*"
+  ],
 
   "background": {
     "service_worker": "background/service-worker.js",

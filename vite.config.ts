@@ -74,6 +74,7 @@ const USERSCRIPT_MAP: Record<string, string> = {
   [`${MODULES_DIR}/resource_buyer.user.js`]:       "resource_buyer.user.js",
   [`${MODULES_DIR}/tw_snipe_scheduler.user.js`]:   "tw_snipe_scheduler.user.js",
   [`${MODULES_DIR}/wh_balancer.user.js`]:          "wh_balancer.user.js",
+  [`${MODULES_DIR}/simulador.user.js`]:             "simulador.user.js",
 };
 
 const BRIDGE_SRC = "src/modules/tw-suite-config-bridge.js";

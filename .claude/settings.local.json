@@ -3,7 +3,10 @@
     "allow": [
       "Bash(node -e ' *)",
       "Bash(npm run *)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(scp *)",
+      "Bash(npm test *)",
+      "Bash(npm install *)"
     ]
   }
 }

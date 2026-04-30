@@ -296,8 +296,54 @@ function useCountdown(etaSec: number | null | undefined, msAtFetch: number | nul
 }
 
 /* ─── PpPlanItem ─────────────────────────────────────────────────────────── */
-function PpPlanItem({ plan, onSent }: { plan: PpPlan; onSent: (src:string,tgt:string,w:number,s:number,i:number)=>void }) {
+function PpPlanItem({ plan, onSent, onCancel, sendAllIntervalMs }: {
+  plan: PpPlan;
+  onSent: (src:string,tgt:string,w:number,s:number,i:number)=>void;
+  onCancel: (planId: string) => void;
+  sendAllIntervalMs: number;
+}) {
   const remaining = useCountdown(plan.lastArrivalEtaSec, plan.lastArrivalMsAtFetch);
+  const [tradeAccepted, setTradeAccepted] = React.useState(false);
+  const [allShipmentsSent, setAllShipmentsSent] = React.useState(false);
+  const [sendingAll, setSendingAll] = React.useState(false);
+  const timerRef = React.useRef<ReturnType<typeof setTimeout>|null>(null);
+  React.useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
+
+  const canTrade = plan.instant || (remaining !== null && remaining <= 0);
+  const showShipments = !tradeAccepted && !plan.instant && !allShipmentsSent && plan.shipments.length > 0;
+
+  const handleSendAll = React.useCallback(() => {
+    if (sendingAll) return;
+    setSendingAll(true);
+    const shipments = plan.shipments;
+    const interval = Math.max(100, sendAllIntervalMs || 400);
+    let i = 0;
+    function sendNext() {
+      if (i >= shipments.length) { setSendingAll(false); setAllShipmentsSent(true); return; }
+      const s = shipments[i++]!;
+      dispatch("xbot:balancer:send", { src: s.source, tgt: s.target, wood: s.wood, stone: s.stone, iron: s.iron, idx: -1 });
+      timerRef.current = setTimeout(sendNext, interval);
+    }
+    sendNext();
+  }, [sendingAll, plan.shipments, sendAllIntervalMs]);
+
+  const handleAcceptTrade = () => {
+    dispatch("xbot:balancer:acceptTrade", {
+      planId: plan.id,
+      villageId: plan.targetVillageId,
+      payRes: plan.payRes,
+      neededRes: plan.neededRes,
+      tradeAmount: plan.tradeAmount,
+    });
+    setTradeAccepted(true);
+  };
+
+  const handleCancel = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    dispatch("xbot:balancer:cancelPlan", { planId: plan.id });
+    onCancel(plan.id);
+  };
+
   return (
     <div className="cfg-section bal-pp-plan">
       <div className="bal-pp-header">
@@ -313,13 +359,8 @@ function PpPlanItem({ plan, onSent }: { plan: PpPlan; onSent: (src:string,tgt:st
                 → <strong>{plan.targetVillageName}</strong>, trade for <ResIcon res={plan.neededRes as any}/> (10pp)</>
           }
         </span>
-        {plan.instant && plan.marketUrl && (
-          <a className="bal-pp-market-link" href={plan.marketUrl} target="_self" title="Open market">
-            🏪 Trade
-          </a>
-        )}
       </div>
-      {!plan.instant && remaining != null && (
+      {showShipments && remaining != null && (
         <div className="bal-pp-eta">
           <span className="bal-pp-eta-label">Last merchant arrives in:</span>
           <span className={`bal-pp-eta-val${remaining <= 0 ? " bal-pp-eta-val--ready" : ""}`}>
@@ -327,12 +368,17 @@ function PpPlanItem({ plan, onSent }: { plan: PpPlan; onSent: (src:string,tgt:st
           </span>
         </div>
       )}
-      {!plan.instant && remaining == null && plan.shipments.length > 0 && (
+      {showShipments && remaining == null && (
         <div className="bal-pp-eta">
           <span className="bal-pp-eta-label" style={{ color:"var(--n300)" }}>ETA: send shipments to track arrival</span>
         </div>
       )}
-      {!plan.instant && plan.shipments.length > 0 && (
+      {allShipmentsSent && !tradeAccepted && (
+        <div className="bal-pp-eta">
+          <span className="bal-pp-eta-val" style={{ color:"var(--g600)" }}>✓ Shipments sent — timer tracking arrival…</span>
+        </div>
+      )}
+      {showShipments && (
         <table className="bal-table" style={{ marginTop:4 }}>
           <thead>
             <tr className="bal-thead-tr bal-thead-tr--pp">
@@ -354,13 +400,61 @@ function PpPlanItem({ plan, onSent }: { plan: PpPlan; onSent: (src:string,tgt:st
           </tbody>
         </table>
       )}
+      {tradeAccepted && (
+        <div style={{ padding:"4px 0", fontSize:11, color:"var(--g600)" }}>
+          ✓ Trade sent — waiting for completion…
+        </div>
+      )}
+      {!tradeAccepted && plan.instant && remaining != null && remaining <= 0 && (
+        <div className="bal-pp-eta">
+          <span className="bal-pp-eta-val bal-pp-eta-val--ready">✓ Arrived — trade now!</span>
+        </div>
+      )}
+      <div style={{ display:"flex", gap:6, marginTop:6 }}>
+        {showShipments && !sendingAll && (
+          <button
+            className="btn btn-save btn-save--dirty"
+            style={{ flex:2, fontSize:11, padding:"5px 0", background:"var(--g600)", borderColor:"var(--g600)" }}
+            onClick={handleSendAll}>
+            ✓ Send All ({plan.shipments.length})
+          </button>
+        )}
+        {sendingAll && (
+          <button className="btn btn-ghost" style={{ flex:2, fontSize:11, padding:"5px 0" }} disabled>
+            <span className="spinner"/> Sending…
+          </button>
+        )}
+        {canTrade && !tradeAccepted && (
+          <button
+            className="btn btn-save btn-save--dirty"
+            style={{ flex:2, fontSize:11, padding:"5px 0" }}
+            onClick={handleAcceptTrade}>
+            ⚡ Accept Trade (10pp)
+          </button>
+        )}
+        <button
+          className="btn btn-ghost"
+          style={{ flex:1, fontSize:11, padding:"5px 0" }}
+          onClick={handleCancel}>
+          ✗ Cancel
+        </button>
+      </div>
     </div>
   );
 }
 
-function PpPlanRows({ plans, onSent }: { plans: PpPlan[]; onSent: (src:string,tgt:string,w:number,s:number,i:number)=>void }) {
-  if (!plans.length) return null;
-  return <>{plans.map(plan => <PpPlanItem key={plan.id} plan={plan} onSent={onSent} />)}</>;
+function PpPlanRows({ plans, onSent, sendAllIntervalMs }: {
+  plans: PpPlan[];
+  onSent: (src:string,tgt:string,w:number,s:number,i:number)=>void;
+  sendAllIntervalMs: number;
+}) {
+  const [cancelledIds, setCancelledIds] = React.useState<Set<string>>(new Set());
+  const handleCancel = React.useCallback((planId: string) => {
+    setCancelledIds(prev => new Set([...prev, planId]));
+  }, []);
+  const visible = plans.filter(p => !cancelledIds.has(p.id));
+  if (!visible.length) return null;
+  return <>{visible.map(plan => <PpPlanItem key={plan.id} plan={plan} onSent={onSent} onCancel={handleCancel} sendAllIntervalMs={sendAllIntervalMs} />)}</>;
 }
 
 function PpShipmentRow({ shipment: s, onSent }: { shipment: PpShipment; onSent:(src:string,tgt:string,w:number,st:number,i:number)=>void }) {
@@ -497,7 +591,7 @@ function SendListTab({ links, summary, running, status, detected, clusterMap, pp
           </div>
         </div>
       )}
-      <PpPlanRows plans={ppPlans} onSent={() => {}} />
+      <PpPlanRows plans={ppPlans} onSent={() => {}} sendAllIntervalMs={sendAllIntervalMs} />
       {links.length > 0 && (
         <div className="cfg-section" style={{ padding:0 }}>
           <table className="bal-table">

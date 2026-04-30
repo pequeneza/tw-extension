@@ -1,14 +1,15 @@
 import React, { useEffect, useState } from "react";
-import { STORAGE_KEY, ModuleSettings, MODULE_CONFIGS } from "../types/modules";
+import { STORAGE_KEY, ModuleSettings, MODULE_CONFIGS, LICENSE_STORAGE_KEY, LICENSE_CACHE_KEY } from "../types/modules";
 
 const BOT_ENABLED_KEY = "xbot_enabled";
 
-function readStorage(): Promise<{ enabled: boolean; settings: ModuleSettings }> {
+function readStorage(): Promise<{ enabled: boolean; settings: ModuleSettings; licenseKey: string }> {
   return new Promise((res) =>
-    chrome.storage.sync.get([BOT_ENABLED_KEY, STORAGE_KEY], (r) => {
+    chrome.storage.sync.get([BOT_ENABLED_KEY, STORAGE_KEY, LICENSE_STORAGE_KEY], (r) => {
       res({
-        enabled:  (r[BOT_ENABLED_KEY] as boolean) === true,
-        settings: (r[STORAGE_KEY]     as ModuleSettings) ?? {},
+        enabled:    (r[BOT_ENABLED_KEY]     as boolean)       === true,
+        settings:   (r[STORAGE_KEY]         as ModuleSettings) ?? {},
+        licenseKey: (r[LICENSE_STORAGE_KEY] as string)        ?? "",
       });
     })
   );
@@ -22,14 +23,28 @@ function writeSettings(s: ModuleSettings): Promise<void> {
   return new Promise((res) => chrome.storage.sync.set({ [STORAGE_KEY]: s }, res));
 }
 
+function writeLicenseKey(key: string): Promise<void> {
+  return new Promise((res) =>
+    chrome.storage.sync.set({ [LICENSE_STORAGE_KEY]: key }, () =>
+      // Bust the cache so the new key is validated immediately
+      chrome.storage.local.remove(LICENSE_CACHE_KEY, res)
+    )
+  );
+}
+
 export function App() {
-  const [enabled,  setEnabled]  = useState<boolean | null>(null);
-  const [settings, setSettings] = useState<ModuleSettings>({});
+  const [enabled,    setEnabled]    = useState<boolean | null>(null);
+  const [settings,   setSettings]   = useState<ModuleSettings>({});
+  const [licenseKey, setLicenseKey] = useState("");
+  const [licenseInput, setLicenseInput] = useState("");
+  const [licenseStatus, setLicenseStatus] = useState<"idle" | "saving">("idle");
 
   useEffect(() => {
-    readStorage().then(({ enabled, settings }) => {
+    readStorage().then(({ enabled, settings, licenseKey }) => {
       setEnabled(enabled);
       setSettings(settings);
+      setLicenseKey(licenseKey);
+      setLicenseInput(licenseKey);
     });
   }, []);
 
@@ -38,14 +53,12 @@ export function App() {
     const next = !enabled;
 
     if (!next) {
-      // Turning OFF: snapshot current, disable all
       await chrome.storage.sync.set({ xbot_snapshot: settings });
       const allOff: ModuleSettings = {};
       for (const mod of MODULE_CONFIGS) allOff[mod.id] = false;
       await writeSettings(allOff);
       setSettings(allOff);
     } else {
-      // Turning ON: restore snapshot
       const snap = await new Promise<ModuleSettings>((res) =>
         chrome.storage.sync.get("xbot_snapshot", (r) =>
           res((r["xbot_snapshot"] as ModuleSettings) ?? {})
@@ -59,9 +72,19 @@ export function App() {
     setEnabled(next);
   }
 
+  async function saveLicense() {
+    const trimmed = licenseInput.trim();
+    setLicenseStatus("saving");
+    await writeLicenseKey(trimmed);
+    setLicenseKey(trimmed);
+    setLicenseStatus("idle");
+  }
+
   const isLoading    = enabled === null;
   const isOn         = enabled === true;
+  const hasLicense   = licenseKey.length > 0;
   const activeCount  = MODULE_CONFIGS.filter((m) => settings[m.id] === true).length;
+  const licenseChanged = licenseInput.trim() !== licenseKey;
 
   return (
     <>
@@ -74,9 +97,10 @@ export function App() {
 
         <div className="body">
           <button
-            className={`big-toggle${isOn ? " on" : ""}${isLoading ? " loading" : ""}`}
+            className={`big-toggle${isOn ? " on" : ""}${isLoading ? " loading" : ""}${!hasLicense ? " disabled" : ""}`}
             onClick={toggle}
-            disabled={isLoading}
+            disabled={isLoading || !hasLicense}
+            title={!hasLicense ? "Enter a license key to activate" : undefined}
           >
             <span className="toggle-ring">
               <span className="toggle-dot" />
@@ -88,10 +112,40 @@ export function App() {
           </div>
 
           <div className="status-hint">
-            {isLoading ? "" : isOn
+            {isLoading
+              ? ""
+              : !hasLicense
+              ? "License required"
+              : isOn
               ? `${activeCount} module${activeCount !== 1 ? "s" : ""} enabled`
               : "All modules paused"}
           </div>
+        </div>
+
+        <div className="license-section">
+          <label className="license-label">License key</label>
+          <div className="license-row">
+            <input
+              className="license-input"
+              type="text"
+              placeholder="XXXX-XXXX-XXXX-XXXX"
+              value={licenseInput}
+              onChange={(e) => setLicenseInput(e.target.value)}
+              spellCheck={false}
+            />
+            {licenseChanged && (
+              <button
+                className="license-save"
+                onClick={saveLicense}
+                disabled={licenseStatus === "saving"}
+              >
+                {licenseStatus === "saving" ? "…" : "Save"}
+              </button>
+            )}
+          </div>
+          {hasLicense && !licenseChanged && (
+            <div className="license-ok">Key saved</div>
+          )}
         </div>
 
         <div className="footer">
@@ -172,6 +226,40 @@ const CSS = `
   .status-label.active { color: #15803d; }
 
   .status-hint { font-size: 11px; color: #9ca3af; text-align: center; min-height: 16px; }
+
+  .license-section {
+    padding: 0 14px 12px;
+    border-top: 1px solid #f3f4f6;
+    padding-top: 10px;
+    display: flex; flex-direction: column; gap: 5px;
+  }
+
+  .license-label {
+    font-size: 10px; font-weight: 600; color: #6b7280;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+
+  .license-row { display: flex; gap: 4px; }
+
+  .license-input {
+    flex: 1; min-width: 0;
+    padding: 4px 6px;
+    font-size: 10.5px; font-family: monospace;
+    border: 1px solid #e5e7eb; border-radius: 5px;
+    color: #111827; background: #f9fafb;
+    outline: none;
+  }
+  .license-input:focus { border-color: #6b7280; background: #fff; }
+
+  .license-save {
+    padding: 4px 8px;
+    font-size: 10.5px; font-weight: 600;
+    background: #111827; color: #fff;
+    border: none; border-radius: 5px; cursor: pointer;
+  }
+  .license-save:disabled { opacity: 0.5; }
+
+  .license-ok { font-size: 10px; color: #16a34a; }
 
   .footer {
     padding: 8px 14px 10px; border-top: 1px solid #f3f4f6;

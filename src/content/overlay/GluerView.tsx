@@ -124,6 +124,14 @@ function toDatetimeLocal(ms: number) {
        + `.${pad3(d.getMilliseconds())}`;
 }
 
+/** Parse "YYYY-MM-DD HH:MM:SS.mmm" back to epoch ms (null if invalid). */
+function parseArrivalInput(s: string): number | null {
+  const m = s.trim().match(/^(\d{4})-(\d{2})-(\d{2})[\sT](\d{2}):(\d{2}):(\d{2})\.(\d{1,3})$/);
+  if (!m) return null;
+  const d = new Date(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!, +m[7]!.padEnd(3, "0"));
+  return Number.isNaN(d.getTime()) ? null : d.getTime();
+}
+
 function fmtCountdown(diffMs: number) {
   const sign = diffMs < 0 ? "-" : "";
   const abs  = Math.abs(diffMs);
@@ -171,14 +179,6 @@ function unitIconUrl(unit: string) {
 function clampInt(n: number, lo: number, hi: number) {
   if (!Number.isFinite(n)) return lo;
   return Math.max(lo, Math.min(hi, Math.trunc(n)));
-}
-
-/** Parse "YYYY-MM-DD HH:MM:SS.mmm" back to epoch ms (null if invalid). */
-function parseArrivalInput(s: string): number | null {
-  const m = s.trim().match(/^(\d{4})-(\d{2})-(\d{2})[\sT](\d{2}):(\d{2}):(\d{2})\.(\d{1,3})$/);
-  if (!m) return null;
-  const d = new Date(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!, +m[7]!.padEnd(3, "0"));
-  return Number.isNaN(d.getTime()) ? null : d.getTime();
 }
 
 /* ─── Kumin BB string (no template) ──────────────────────────────────────── */

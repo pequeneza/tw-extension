@@ -16,6 +16,30 @@
     const CACHE_KEY    = 'twKuminGluer_commandCache';
     const SETTINGS_KEY = 'twKuminGluer_settings';
 
+    const NT_COUNT = {
+        noNT:                          1,
+        twoNoblesSame:                 2,
+        threeNoblesSame:               3,
+        fourNoblesSame:                4,
+        fiveNoblesSame:                5,
+        secondNobleWithRest:           2,
+        thirdNobleWithRest:            3,
+        fourNobleWithRest:             4,
+        fiveNobleWithRest:             5,
+        splitSecondThirdNobleNT:       2,
+        secondNobleBuffNT:             2,
+        thirdNobleBuffNT:              3,
+        secondNobleBuffWith5NoblesNT:  5,
+        secondNobleBuffWith2NoblesNT:  2,
+        firstNobleRedNT:               1,
+        secondNobleRedNT:              2,
+        thirdNobleRedNT:               3,
+        fourthNobleRedNT:              4,
+        firstNobleRed5NT:              1,
+        secondNobleRed5NT:             2,
+        thirdNobleRed5NT:              3,
+    };
+
     function loadSettings() {
         try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch { return {}; }
     }
@@ -92,6 +116,7 @@
        SCHEDULED PANEL — always visible inside #commands_outgoings
        Reads from localStorage cache written by the memo page.
     ========================================================= */
+
     function initScheduledPanel() {
         let attempts = 0;
         const wait = () => {
@@ -138,36 +163,13 @@
             container.appendChild(header);
             container.appendChild(panel);
 
+            refreshBtn.title = 'Atualizar da cache (visita screen=memo para dados frescos)';
             const render = () => renderFromCache(targetCoords, panel);
             refreshBtn.addEventListener('click', render);
             render();
         };
         wait();
     }
-
-    const NT_COUNT = {
-        noNT:                          1,
-        twoNoblesSame:                 2,
-        threeNoblesSame:               3,
-        fourNoblesSame:                4,
-        fiveNoblesSame:                5,
-        secondNobleWithRest:           2,
-        thirdNobleWithRest:            3,
-        fourNobleWithRest:             4,
-        fiveNobleWithRest:             5,
-        splitSecondThirdNobleNT:       2,
-        secondNobleBuffNT:             2,
-        thirdNobleBuffNT:              3,
-        secondNobleBuffWith5NoblesNT:  5,
-        secondNobleBuffWith2NoblesNT:  2,
-        firstNobleRedNT:               1,
-        secondNobleRedNT:              2,
-        thirdNobleRedNT:               3,
-        fourthNobleRedNT:              4,
-        firstNobleRed5NT:              1,
-        secondNobleRed5NT:             2,
-        thirdNobleRed5NT:              3,
-    };
 
     function renderFromCache(targetCoords, panel) {
         const ntTemplate = loadSettings().ntTemplate || 'noNT';
@@ -188,7 +190,6 @@
         const commands = (cache.commands || []).filter(c => c.targetCoords === targetCoords);
         const updatedAt = cache.updatedAt ? new Date(cache.updatedAt) : null;
 
-        /* Timestamp line */
         const tsLine = document.createElement('div');
         tsLine.style.cssText = 'font-size:10px;color:#888;margin-bottom:6px';
         tsLine.textContent = updatedAt
@@ -216,7 +217,6 @@
             hRow.appendChild(th);
         });
 
-        /* Expand commands by the NT template selected in the panel */
         const count = NT_COUNT[ntTemplate] ?? 1;
         const expanded = [];
         commands.forEach(c => {

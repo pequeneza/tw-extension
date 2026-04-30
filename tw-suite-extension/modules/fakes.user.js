@@ -1272,9 +1272,10 @@ async function runFetchLoop() {
     }
     if (!villages.length) { uiLog('No villages found', 'err'); return; }
     uiLog(`Found ${villages.length} village(s)`, 'info');
+    updateScreenLockStatus(`Found ${villages.length} village(s) — scanning targets…`);
 
     while (true) {
-        if (isPaused()) { await sleep(1000); continue; }
+        if (isPaused()) { updateScreenLockStatus('Cancelled'); await sleep(500); break; }
 
         CONFIG   = loadConfig();
         SETTINGS = loadSettings();
@@ -1285,7 +1286,7 @@ async function runFetchLoop() {
 
         let index = currentIndex();
         if (index >= coords.length) {
-            if (CONFIG.stopAtEnd) { uiLog('All targets used (stopAtEnd)', 'info'); break; }
+            if (CONFIG.stopAtEnd) { uiLog('All targets used (stopAtEnd)', 'info'); updateScreenLockStatus('All targets used — done'); break; }
             index = 0; setIndex(0);
         }
 
@@ -1344,6 +1345,7 @@ async function runFetchLoop() {
             }
 
             uiLog(`[${village.coord}] Sending fake → ${pick.target}`, 'info');
+            updateScreenLockStatus(`[${village.coord}] → ${pick.target}`);
             await sleep(randomDelay(CONFIG.attackDelay, CONFIG.attackRandom));
 
             let result;
@@ -1363,6 +1365,7 @@ async function runFetchLoop() {
                 sessionStorage.setItem("fake_sent", String(sentTotal));
                 try { localStorage.setItem(LS_SENT_PERSIST, String(sentTotal)); } catch {}
                 uiLog(`[${village.coord}] ⚔ → ${pick.target} (vil ${vNow}/${perVillageCap}, tgt ${tNow}/${planned})`, 'info');
+                updateScreenLockStatus(`⚔ Sent ${pick.target} — ${vNow}/${perVillageCap} from ${village.coord}`);
                 await sleep(randomDelay(CONFIG.switchDelay, CONFIG.switchRandom));
             } else if (result.skip) {
                 uiLog(`[${village.coord}] Skip → ${result.msg}`, 'warn');
@@ -1372,14 +1375,76 @@ async function runFetchLoop() {
             }
         }
 
-        if (!anyAttempted) { uiLog('All villages at cap — done', 'info'); break; }
+        if (!anyAttempted) { uiLog('All villages at cap — done', 'info'); updateScreenLockStatus('All villages at cap — done'); break; }
         await sleep(2000);
     }
 }
 
+/* ---------------- SCREEN LOCK OVERLAY ---------------- */
+
+let _lockEl = null;
+let _lockStatusEl = null;
+
+function showScreenLock() {
+    if (_lockEl) return;
+    sessionStorage.removeItem('fake_paused');
+
+    const el = document.createElement('div');
+    el.id = '__fake_lock__';
+    el.style.cssText = `
+        position:fixed;inset:0;z-index:999999;
+        background:rgba(0,0,0,0.5);
+        backdrop-filter:blur(5px);-webkit-backdrop-filter:blur(5px);
+        display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
+        font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    `;
+    el.innerHTML = `
+        <style>
+            @keyframes __fspin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+            #__fake_lock_cancel:hover:not(:disabled){opacity:.85}
+            #__fake_lock_cancel:disabled{opacity:.5;cursor:default}
+        </style>
+        <div style="font-size:52px;line-height:1;animation:__fspin 1.4s linear infinite;
+            filter:drop-shadow(0 0 14px rgba(255,200,50,.8))">⚔️</div>
+        <div id="__fake_lock_status" style="
+            color:#fff;font-size:14px;font-weight:500;
+            text-shadow:0 1px 4px rgba(0,0,0,.6);
+            max-width:320px;text-align:center;min-height:20px;
+        ">Starting…</div>
+        <button id="__fake_lock_cancel" style="
+            padding:8px 26px;background:#dc2626;color:#fff;
+            border:none;border-radius:7px;font-size:13px;font-weight:600;
+            cursor:pointer;transition:opacity .15s;
+            box-shadow:0 2px 10px rgba(0,0,0,.35);
+        ">Cancel</button>
+    `;
+
+    el.querySelector('#__fake_lock_cancel').addEventListener('click', () => {
+        sessionStorage.setItem('fake_paused', '1');
+        const btn = el.querySelector('#__fake_lock_cancel');
+        btn.textContent = 'Cancelling…';
+        btn.disabled = true;
+        updateScreenLockStatus('Cancelling — finishing current send…');
+    });
+
+    document.body.appendChild(el);
+    _lockEl = el;
+    _lockStatusEl = el.querySelector('#__fake_lock_status');
+}
+
+function hideScreenLock() {
+    _lockEl?.remove();
+    _lockEl = null;
+    _lockStatusEl = null;
+}
+
+function updateScreenLockStatus(msg) {
+    if (_lockStatusEl) _lockStatusEl.textContent = msg;
+}
+
 /* ---------------- START ---------------- */
 
-console.info("[FAKE] Script loaded – version 7.0 (fetch mode)");
+console.info("[FAKE] Script loaded – version 7.1 (fetch mode + screen lock)");
 
 maybeResetPlanAndStartNewRunOnCoordsChange();
 
@@ -1388,10 +1453,14 @@ try { localStorage.setItem(LS_TOTAL_PERSIST, String(getCoords().length)); } catc
 
 if (location.href.includes("screen=place") && !location.href.includes("try=confirm")) {
     console.info("[FAKE] Rally point detected — starting fetch loop");
-    runFetchLoop().catch(e => {
-        console.error("[FAKE] runFetchLoop fatal error:", e);
-        uiLog(`Fatal error: ${e?.message || e}`, "err");
-    });
+    showScreenLock();
+    runFetchLoop()
+        .catch(e => {
+            console.error("[FAKE] runFetchLoop fatal error:", e);
+            uiLog(`Fatal error: ${e?.message || e}`, "err");
+            updateScreenLockStatus(`Error: ${e?.message || e}`);
+        })
+        .finally(() => hideScreenLock());
 }
 
 })();

@@ -1894,7 +1894,9 @@
 
             if (avail < minTrade) return null;
 
-            const tradeAmt = Math.floor(Math.min(avail, s.premiumMoveAmount || idealMove, idealMove) / 1000) * 1000;
+            const curNeed   = neededRes === "wood" ? (v.wood || 0) : neededRes === "stone" ? (v.stone || 0) : (v.iron || 0);
+            const needSpace = Math.floor(Math.max(0, wh - curNeed) / 1000) * 1000;
+            const tradeAmt = Math.floor(Math.min(avail, s.premiumMoveAmount || idealMove, idealMove, needSpace) / 1000) * 1000;
             if (tradeAmt < minTrade) return null;
             if (tradeAmt < (s.premiumThreshold || 0)) return null;
 
@@ -1972,6 +1974,13 @@
       if (capLimit > 0) moveAmt = Math.min(moveAmt, capLimit);
       moveAmt = Math.floor(moveAmt / 1000) * 1000;
       if (moveAmt <= 0) return null;
+
+      // Reject or cap the plan if the target has no WH space for the resource it will receive
+      const curNeeded = neededRes === "wood" ? (target.wood || 0) : neededRes === "stone" ? (target.stone || 0) : (target.iron || 0);
+      const whFreeForNeeded = Math.floor(Math.max(0, (target.warehouseCapacity || 0) - curNeeded) / 1000) * 1000;
+      moveAmt = Math.min(moveAmt, whFreeForNeeded);
+      moveAmt = Math.floor(moveAmt / 1000) * 1000;
+      if (moveAmt < minTrade) return null;
 
       const targetC = coordsFromVillageName(target.name);
       const donorsSorted = donors
@@ -2172,6 +2181,7 @@
           </table>
 
           <div class="tm-actions" style="margin-top:6px">
+            <button class="btn btnSophie" data-tradedone="1" data-planid="${plan.id}" data-ppvid="${plan.targetVillageId}" data-ppres="${plan.payRes}" type="button" style="background:#1a6e1a;color:#fff">Trade Done ✓</button>
             <button class="btn btnSophie" data-cancelplan="1" data-planid="${plan.id}" type="button">Cancel plan</button>
             <button class="btn btnSophie" data-clearlock="1" data-planid="${plan.id}" data-ppvid="${plan.targetVillageId}" data-ppres="${plan.payRes}" type="button">Clear lock</button>
           </div>
@@ -2205,6 +2215,18 @@
         $(`#${boxId}`).remove();
 
         UI.SuccessMessage("PP lock cleared (selected route only).");
+        renderPpLockStatus();
+      });
+
+      $(`button[data-tradedone][data-planid="${plan.id}"]`).off("click").on("click", function () {
+        const vid = plan.targetVillageId;
+        const res = plan.payRes;
+        stopPlanTimer(plan.id);
+        removePpPlan(plan.id);
+        removePpLock({ villageId: vid, res });
+        removePlansByLock({ villageId: vid, res });
+        $(`#${boxId}`).remove();
+        UI.SuccessMessage("Trade complete — plan cleared.");
         renderPpLockStatus();
       });
     }
@@ -3445,43 +3467,32 @@
         moved.iron;
       const totalAll = (moved.wood || 0) + (moved.stone || 0) + (moved.iron || 0);
 
-      // Instant plans: no shipments — show a single green status row and return
+      // Instant plans: no shipments to send — show status row with cancel button only
       if (plan.instant || plan.shipments.length === 0) {
         $rows.prepend(`
-          <tr class="tmPpNowHeader">
-            <td colspan="7">
+          <tr class="tmPpNowHeader" data-planid="${plan.id}">
+            <td colspan="6">
               <span class="tmBadgePPNow">⚡ PP NOW</span>
               <b>${plan.targetVillageName}</b> already has
               <b>${numberWithCommasDots(plan.tradeAmount || 0)}</b> ${resourceLabel(plan.payRes)} —
-              instant trade for ${resourceLabel(plan.neededRes)} executing automatically (10pp).
+              instant trade for ${resourceLabel(plan.neededRes)} (10pp). Use the timer box below to confirm or cancel.
+            </td>
+            <td style="text-align:center;white-space:nowrap">
+              <button class="btn btnSophie tmPpReject" data-planid="${plan.id}" type="button" style="background:#8b1a1a;color:#fff" title="Cancel plan">✗</button>
             </td>
           </tr>
         `);
+        _bindPpRowButtons(plan, $rows);
         return;
       }
 
-      $rows.prepend(`
-        <tr class="tmPpHeader">
-          <td colspan="7">
-            <span class="tmBadgePP">PP</span>
-            Plan: move <b>${numberWithCommasDots(movedAmount || 0)}</b> ${resourceLabel(plan.payRes)}
-            → <b>${plan.targetVillageName}</b>, then instant trade for ${resourceLabel(plan.neededRes)} (10pp).
-            <span class="twmuted" style="margin-left:10px">
-              Totals:
-              ${resIconHtml("wood")} <b>${numberWithCommasDots(moved.wood || 0)}</b>
-              ${resIconHtml("stone")} <b>${numberWithCommasDots(moved.stone || 0)}</b>
-              ${resIconHtml("iron")} <b>${numberWithCommasDots(moved.iron || 0)}</b>
-              | All: <b>${numberWithCommasDots(totalAll || 0)}</b>
-            </span>
-          </td>
-        </tr>
-      `);
-
-      plan.shipments.forEach((s) => {
+      // Build shipment rows as a string so the whole block is prepended at once,
+      // keeping header on top and shipments in order below it.
+      const shipmentsHtml = plan.shipments.map((s) => {
         const src = byId.get(String(s.source));
         const tgt = byId.get(String(s.target));
-        $rows.prepend(`
-          <tr class="tmPpRow">
+        return `
+          <tr class="tmPpRow" data-planid="${plan.id}">
             <td><a class="tmLink tmVilTip" data-vid="${s.source}" href="${src?.url || "#"}">${src?.name || s.source}</a></td>
             <td><a class="tmLink tmVilTip" data-vid="${s.target}" href="${tgt?.url || "#"}">${tgt?.name || s.target}</a></td>
             <td style="text-align:center">${s.distance}</td>
@@ -3489,21 +3500,85 @@
             <td style="text-align:right">${s.stone || 0}</td>
             <td style="text-align:right">${s.iron || 0}</td>
             <td style="text-align:center">
-              <button
-                class="btn btnSophie tmSendSug"
-                data-src="${s.source}"
-                data-tgt="${s.target}"
-                data-wood="${s.wood || 0}"
-                data-stone="${s.stone || 0}"
-                data-iron="${s.iron || 0}"
-                type="button"
-              >Send</button>
+              <button class="btn btnSophie tmSendSug" data-src="${s.source}" data-tgt="${s.target}" data-wood="${s.wood || 0}" data-stone="${s.stone || 0}" data-iron="${s.iron || 0}" type="button">Send</button>
             </td>
           </tr>
-        `);
+        `;
+      }).join("");
+
+      $rows.prepend(`
+        <tr class="tmPpHeader" data-planid="${plan.id}">
+          <td colspan="6">
+            <span class="tmBadgePP">PP</span>
+            Plan: move <b>${numberWithCommasDots(movedAmount || 0)}</b> ${resourceLabel(plan.payRes)}
+            → <b>${plan.targetVillageName}</b>, then instant trade for ${resourceLabel(plan.neededRes)} (10pp).
+            <span class="twmuted" style="margin-left:10px">
+              ${resIconHtml("wood")} <b>${numberWithCommasDots(moved.wood || 0)}</b>
+              ${resIconHtml("stone")} <b>${numberWithCommasDots(moved.stone || 0)}</b>
+              ${resIconHtml("iron")} <b>${numberWithCommasDots(moved.iron || 0)}</b>
+              | All: <b>${numberWithCommasDots(totalAll || 0)}</b>
+            </span>
+          </td>
+          <td style="text-align:center;white-space:nowrap">
+            <button class="btn btnSophie tmPpAccept" data-planid="${plan.id}" type="button" style="background:#1a6e1a;color:#fff;margin-right:3px" title="Accept: send all shipments for this plan">✓</button>
+            <button class="btn btnSophie tmPpReject" data-planid="${plan.id}" type="button" style="background:#8b1a1a;color:#fff" title="Cancel this plan">✗</button>
+          </td>
+        </tr>
+        ${shipmentsHtml}
+      `);
+
+      _bindPpRowButtons(plan, $rows);
+
+      // Village detail tooltips
+      $rows.off("mouseover.pptip mouseout.pptip")
+        .on("mouseover.pptip", ".tmVilTip", function () {
+          const vid = $(this).attr("data-vid");
+          const v = byId.get(String(vid));
+          if (v) showTipAt(this, villageTooltipHtml(v));
+        })
+        .on("mouseout.pptip", ".tmVilTip", function () {
+          hideTip();
+        });
+    }
+
+    function _bindPpRowButtons(plan, $rows) {
+      // ✓ Accept — send every shipment sequentially then remove all rows for this plan
+      $rows.find(`.tmPpAccept[data-planid="${plan.id}"]`).off("click").on("click", function () {
+        const $btn = $(this);
+        $btn.prop("disabled", true).text("…");
+        $rows.find(`.tmPpReject[data-planid="${plan.id}"]`).prop("disabled", true);
+        const shipments = plan.shipments.slice();
+        const interval = Math.max(100, parseInt(state?.settings?.sendAllIntervalMs, 10) || 400);
+        let i = 0;
+        function sendNext() {
+          if (i >= shipments.length) {
+            $rows.find(`[data-planid="${plan.id}"]`).remove();
+            UI.SuccessMessage(`PP — ${shipments.length} shipment(s) sent. Timer is running in the box below.`);
+            return;
+          }
+          const s = shipments[i++];
+          sendResource(s.source, s.target, s.wood || 0, s.stone || 0, s.iron || 0);
+          setTimeout(sendNext, interval);
+        }
+        sendNext();
       });
 
-      // Bind within container (safe even if called multiple times)
+      // ✗ Reject — cancel plan, remove rows and timer box
+      $rows.find(`.tmPpReject[data-planid="${plan.id}"]`).off("click").on("click", function () {
+        const vid = plan.targetVillageId;
+        const res = plan.payRes;
+        stopPlanTimer(plan.id);
+        removePpPlan(plan.id);
+        removePpLock({ villageId: vid, res });
+        removePlansByLock({ villageId: vid, res });
+        $rows.find(`[data-planid="${plan.id}"]`).remove();
+        const boxId = `tmwh_timer_plan_${String(plan.id).replace(/[^\w]/g, "_")}`;
+        $(`#${boxId}`).remove();
+        UI.SuccessMessage("PP plan cancelled.");
+        renderPpLockStatus();
+      });
+
+      // Per-row Send buttons remain available as a fallback
       $rows.find(".tmSendSug").off("click").on("click", function () {
         const $b = $(this);
         sendResource(
@@ -3515,17 +3590,6 @@
         );
         $b.closest("tr").remove();
       });
-
-      // Village detail tooltip on PP plan rows
-      $rows.off("mouseover.pptip mouseout.pptip")
-        .on("mouseover.pptip", ".tmVilTip", function () {
-          const vid = $(this).attr("data-vid");
-          const v = byId.get(String(vid));
-          if (v) showTipAt(this, villageTooltipHtml(v));
-        })
-        .on("mouseout.pptip", ".tmVilTip", function () {
-          hideTip();
-        });
     }
 
     // ---------------- HQ BUILD QUEUE CHECK ----------------
@@ -4102,6 +4166,30 @@
     });
     document.addEventListener('xbot:balancer:clearPpLocks', () => {
       try { localStorage.removeItem('tm_whbalancer_pp_locks_v2'); } catch (e) { console.error(e); }
+    });
+    document.addEventListener('xbot:balancer:cancelPlan', (e) => {
+      try {
+        const { planId } = e.detail || {};
+        if (!planId) return;
+        stopPlanTimer(planId);
+        removePpPlan(planId);
+        if (typeof UI !== 'undefined') UI.SuccessMessage('PP plan cancelled.');
+        updateReactState({ running: false, statusText: '' });
+      } catch (err) { console.error('[WH] cancelPlan failed', err); }
+    });
+    document.addEventListener('xbot:balancer:acceptTrade', async (e) => {
+      try {
+        const { planId, villageId, payRes, neededRes, tradeAmount } = e.detail || {};
+        if (!planId || !villageId) return;
+        await doInstantTrade(villageId, payRes, neededRes, tradeAmount);
+        stopPlanTimer(planId);
+        removePpPlan(planId);
+        if (typeof UI !== 'undefined') UI.SuccessMessage('Instant trade executed!');
+        updateReactState({ running: false, statusText: '' });
+      } catch (err) {
+        console.error('[WH] acceptTrade failed', err);
+        if (typeof UI !== 'undefined') UI.ErrorMessage('Trade failed: ' + (err.message || err));
+      }
     });
     // Content script polls locks/state via request/response events
     document.addEventListener('xbot:balancer:getLocks', () => {

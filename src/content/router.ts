@@ -1,8 +1,9 @@
 /**
  * xBot — Content script, runs at document_end on every TW game page.
  *
- * Checks the global bot enabled flag first. If the bot is off, nothing runs.
- * If on:
+ * Checks the global bot enabled flag and a valid license first.
+ * If either is missing, nothing runs.
+ * If both pass:
  *  1. Writes per-module config to sessionStorage["__xbot_cfg__"] — CSP-safe,
  *     no inline <script> needed. Content scripts and page scripts share the
  *     same sessionStorage for a given tab.
@@ -12,14 +13,20 @@
  * by vite.config.ts at build time — no separate bridge injection needed here.
  */
 
-import { MODULE_CONFIGS, STORAGE_KEY, ModuleSettings } from "../types/modules";
+import { MODULE_CONFIGS, STORAGE_KEY, ModuleSettings, LICENSE_STORAGE_KEY, LICENSE_CACHE_KEY } from "../types/modules";
 import { MODULE_CONFIG_SCHEMAS } from "../types/config-schemas";
 
 const BOT_ENABLED_KEY = "xbot_enabled";
 const SESSION_CFG_KEY = "__xbot_cfg__";
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+interface LicenseCache {
+  valid: boolean;
+  ts: number;
+}
 
 function buildStorageKeys(): string[] {
-  const keys: string[] = [BOT_ENABLED_KEY, STORAGE_KEY];
+  const keys: string[] = [BOT_ENABLED_KEY, STORAGE_KEY, LICENSE_STORAGE_KEY];
   for (const schema of Object.values(MODULE_CONFIG_SCHEMAS)) {
     if (schema) keys.push(schema.storageKey);
   }
@@ -33,9 +40,39 @@ function injectScript(src: string): void {
   (document.head ?? document.documentElement).appendChild(s);
 }
 
-chrome.storage.sync.get(buildStorageKeys(), (result) => {
+async function isLicenseValid(key: string): Promise<boolean> {
+  const cached = await new Promise<LicenseCache | null>((res) =>
+    chrome.storage.local.get(LICENSE_CACHE_KEY, (r) =>
+      res((r[LICENSE_CACHE_KEY] as LicenseCache) ?? null)
+    )
+  );
+
+  if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+    return cached.valid;
+  }
+
+  try {
+    const { valid } = await new Promise<{ valid: boolean }>((res, rej) =>
+      chrome.runtime.sendMessage({ type: "VALIDATE_LICENSE", key }, (r) =>
+        chrome.runtime.lastError ? rej(chrome.runtime.lastError) : res(r)
+      )
+    );
+    chrome.storage.local.set({ [LICENSE_CACHE_KEY]: { valid, ts: Date.now() } });
+    return valid;
+  } catch {
+    return cached?.valid ?? false;
+  }
+}
+
+chrome.storage.sync.get(buildStorageKeys(), async (result) => {
   const botEnabled = (result[BOT_ENABLED_KEY] as boolean) === true;
   if (!botEnabled) return;
+
+  const licenseKey = (result[LICENSE_STORAGE_KEY] as string) ?? "";
+  if (!licenseKey) return;
+
+  const valid = await isLicenseValid(licenseKey);
+  if (!valid) return;
 
   const settings = (result[STORAGE_KEY] as ModuleSettings) ?? {};
 
@@ -58,5 +95,24 @@ chrome.storage.sync.get(buildStorageKeys(), (result) => {
     if (settings[mod.id] !== true) continue;
     if (!mod.matchPattern.test(window.location.href)) continue;
     injectScript(chrome.runtime.getURL(`modules/${mod.scriptFile}`));
+  }
+});
+
+// Dynamically inject modules toggled ON in the popup without requiring a page reload.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "sync") return;
+
+  const settingsChange = changes[STORAGE_KEY];
+  if (!settingsChange) return;
+
+  const oldSettings = (settingsChange.oldValue as ModuleSettings) ?? {};
+  const newSettings = (settingsChange.newValue as ModuleSettings) ?? {};
+
+  for (const mod of MODULE_CONFIGS) {
+    const wasEnabled = oldSettings[mod.id] === true;
+    const nowEnabled = newSettings[mod.id] === true;
+    if (!wasEnabled && nowEnabled && mod.matchPattern.test(window.location.href)) {
+      injectScript(chrome.runtime.getURL(`modules/${mod.scriptFile}`));
+    }
   }
 });

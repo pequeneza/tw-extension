@@ -439,6 +439,8 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
                              border-right:2px solid rgba(125,92,46,0.7); border-bottom:2px solid rgba(125,92,46,0.7); }
 #sim-overlay:not(.sim-docked) #sim-resize-handle { display:block; }
 #sim-toggle-btn {
+    width: 25px;
+    height: 25px;
     align-items: center;
     justify-content: center;
     background: #E9D0A9;

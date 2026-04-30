@@ -21,6 +21,7 @@ export type ModuleId =
   | "resource_buyer"
   | "planeador"
   | "tw_snipe_scheduler"
+  | "tw_utils"
   | "wh_balancer";
 
 export interface ModuleSettings {
@@ -117,6 +118,14 @@ export const MODULE_CONFIGS: ModuleConfig[] = [
     matchPattern: /^(?!.*screen=memo).*/,
     scriptFile: "planeador.user.js",
     icon: "🗺️",
+  },
+  {
+    id: "tw_utils",
+    label: "TW Utils",
+    description: "Utilitários variados: Village Switcher e outros melhoramentos do jogo.",
+    matchPattern: /.*/,
+    scriptFile: "tw_utils.user.js",
+    icon: "⚙️",
   },
   {
     id: "tw_snipe_scheduler",

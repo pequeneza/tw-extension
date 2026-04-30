@@ -1,6 +1,6 @@
 // ==UserScript==
-// @name         TW Simulador
-// @namespace    tw_simulador
+// @name         TW Planeador
+// @namespace    tw_planeador
 // @version      1.1.0
 // @description  Planeador de ataques coordenados: busca velocidades do servidor, calcula Hora de Saída e gera links de ataque pré-preenchidos.
 // @match        https://*.tribalwars.com.pt/game.php*
@@ -9,9 +9,9 @@
 /* ── Standalone injection (bookmarklet) ────────────────────────────────────
    Paste in the browser address bar or save as a bookmark:
 
-   javascript:$.getScript('RAW_URL_TO_simulador.user.js');void(0);
+   javascript:$.getScript('RAW_URL_TO_planeador.user.js');void(0);
 
-   Replace RAW_URL_TO_simulador.user.js with the direct URL to this file
+   Replace RAW_URL_TO_planeador.user.js with the direct URL to this file
    (e.g. a Dropbox raw link, GitHub raw URL, or your own server).
    ─────────────────────────────────────────────────────────────────────── */
 
@@ -19,8 +19,8 @@
     'use strict';
 
     /* ── re-open if already loaded ───────────────────────────────────────── */
-    if (window.__twSimuladorLoaded) { window.__twSimuladorOpen?.(); return; }
-    window.__twSimuladorLoaded = true;
+    if (window.__twPlaneadorLoaded) { window.__twPlaneadorOpen?.(); return; }
+    window.__twPlaneadorLoaded = true;
 
     const _screen = new URLSearchParams(window.location.search).get('screen');
     const isMemo  = _screen === 'memo';
@@ -179,7 +179,7 @@
             const res  = await fetch(`/game.php?village=${vid}&screen=overview_villages`, { credentials: 'include' });
             const text = await res.text();
             const groups = parseGroups(text);
-            console.log('[Simulador] groups found:', groups.length, groups.map(g => g.name));
+            console.log('[Planeador] groups found:', groups.length, groups.map(g => g.name));
             return groups;
         } catch {
             return [{ id: '0', name: 'Todos' }];
@@ -249,7 +249,7 @@
             if (!result.length) {
                 const doc = new DOMParser().parseFromString(text, 'text/html');
                 const tables = doc.querySelectorAll('table');
-                console.warn('[Simulador] parseVillagesTable returned empty.',
+                console.warn('[Planeador] parseVillagesTable returned empty.',
                     'URL:', url,
                     'Tables found:', tables.length,
                     Array.from(tables).map(t => ({ id: t.id, cls: t.className, rows: t.rows.length }))
@@ -257,7 +257,7 @@
             }
             return result;
         } catch (e) {
-            console.error('[Simulador] fetchVillages:', e);
+            console.error('[Planeador] fetchVillages:', e);
             return [];
         }
     }
@@ -290,7 +290,7 @@
             if (m) colUnit[idx] = m[1].toLowerCase();
         });
 
-        console.log('[Simulador] colUnit detected:', colUnit);
+        console.log('[Planeador] colUnit detected:', colUnit);
 
         const results = [];
         table.querySelectorAll('tbody tr').forEach(tr => {
@@ -438,11 +438,18 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
 #sim-resize-handle::after { content:''; position:absolute; right:3px; bottom:3px; width:9px; height:9px;
                              border-right:2px solid rgba(125,92,46,0.7); border-bottom:2px solid rgba(125,92,46,0.7); }
 #sim-overlay:not(.sim-docked) #sim-resize-handle { display:block; }
-#sim-toggle-btn { display:flex; align-items:center; justify-content:center;
-                  width:25px; height:25px; margin:4px auto;
-                  background:#5a3a1a; border:2px solid rgb(192,160,96); border-radius:4px;
-                  cursor:pointer; font-size:14px; user-select:none; box-sizing:border-box;
-                  box-shadow:rgba(0,0,0,0.6) 0px 2px 8px; }
+#sim-toggle-btn {
+    align-items: center;
+    justify-content: center;
+    background: #E9D0A9;
+    border: 1px solid #000;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 17px;
+    user-select: none;
+    box-sizing: border-box;
+    box-shadow: rgba(60, 30, 0, 0.7) 2px 2px 2px
+    }
 #sim-toggle-btn:hover { background:#7d5c2e; }
 #sim-toggle-btn.sim-btn-active { border-color:#f4e4bc; box-shadow:0 0 6px #f4e4bc; }
 `;
@@ -495,7 +502,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
   <div id="sim-titlebar">
     <span>🗺️ Planeador</span>
     <div style="display:flex;gap:4px;align-items:center;">
-      <button id="sim-refresh-coords" title="Preencher alvo com coordenadas da página">↻</button>
+      <button id="sim-refresh-all" title="Preencher alvo com coordenadas da página e atualizar hora se estiver no passado">↻</button>
       <button id="sim-dock" title="Soltar para flutuar">⊞</button>
       <button id="sim-close" title="Fechar">✕</button>
     </div>
@@ -749,13 +756,25 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
             });
         });
 
-        /* Refresh coords from page */
-        document.getElementById('sim-refresh-coords').addEventListener('click', () => {
+        /* Refresh coords + time: update target from page coords; reset arrival time to now if stored time is in the past */
+        document.getElementById('sim-refresh-all').addEventListener('click', () => {
             const c = readPageCoords();
             if (c) {
                 overlay.querySelector('[name=target]').value = `${c.x}|${c.y}`;
-                saveInputs(overlay);
             }
+
+            const dateVal = overlay.querySelector('[name=date]').value.trim();
+            const timeVal = overlay.querySelector('[name=time]').value.trim();
+            const [timePart, msPart = '0'] = timeVal.split('.');
+            const storedMs = parseDatetime(dateVal, timePart);
+            const msOffset = parseInt(msPart, 10) || 0;
+            if (!storedMs || (storedMs + msOffset) < Date.now()) {
+                const d = new Date();
+                overlay.querySelector('[name=date]').value = `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
+                overlay.querySelector('[name=time]').value = `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}.000`;
+            }
+
+            saveInputs(overlay);
         });
 
         /* Command row click → fill arrival time */
@@ -806,7 +825,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
                         : `${location.origin}/game.php?screen=memo`;
                     window.open(memoUrl, '_blank', 'noopener,noreferrer');
                 } catch (err) {
-                    console.error('[Simulador] Kumin queue error:', err);
+                    console.error('[Planeador] Kumin queue error:', err);
                 }
                 return;
             }
@@ -953,7 +972,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
     }
 
     /* ── Expose re-open hook ─────────────────────────────────────────────── */
-    window.__twSimuladorOpen = openDialog;
+    window.__twPlaneadorOpen = openDialog;
 
     /* ── Toggle button ───────────────────────────────────────────────────── */
     function ensureToggleButton() {
@@ -963,6 +982,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
 
         injectStyle();
         const btn = document.createElement('div');
+        btn.className = 'quest';
         btn.id = 'sim-toggle-btn';
         btn.title = 'Planeador';
         btn.textContent = '🗺️';

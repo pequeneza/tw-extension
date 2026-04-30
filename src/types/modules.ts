@@ -19,7 +19,7 @@ export type ModuleId =
   | "mass_label_renamer"
   | "noble_sender_trainer"
   | "resource_buyer"
-  | "simulador"
+  | "planeador"
   | "tw_snipe_scheduler"
   | "wh_balancer";
 
@@ -111,11 +111,11 @@ export const MODULE_CONFIGS: ModuleConfig[] = [
     icon: "🛒",
   },
   {
-    id: "simulador",
-    label: "Simulador",
+    id: "planeador",
+    label: "Planeador",
     description: "Planeador de ataques coordenados: busca velocidades do servidor, calcula Hora de Saída e gera links de ataque pré-preenchidos.",
     matchPattern: /^(?!.*screen=memo).*/,
-    scriptFile: "simulador.user.js",
+    scriptFile: "planeador.user.js",
     icon: "🗺️",
   },
   {

@@ -486,17 +486,24 @@ export const MODULE_CONFIG_SCHEMAS: ModuleConfigSchemas = {
     fields: [
       {
         key: "villageSwitcher",
-        label: "Village Switcher",
+        label: "Village Switcher ",
         type: "checkbox",
         default: true,
         help: "No mapa, mostra botão para trocar para uma aldeia própria selecionada.",
       },
       {
         key: "incomingFilter",
-        label: "Incoming Filter",
+        label: "Incoming Filter ",
         type: "checkbox",
         default: true,
         help: "Adiciona botão nas tabelas de incomings para ocultar/mostrar apoios.",
+      },
+      {
+        key: "quickbarCollapse",
+        label: "Quickbar Collapse ",
+        type: "checkbox",
+        default: true,
+        help: "Adiciona botão –/+ na quickbar para minimizar/expandir. Estado persiste entre páginas.",
       },
     ],
   },

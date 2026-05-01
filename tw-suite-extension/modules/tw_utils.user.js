@@ -81,6 +81,22 @@
     transform-origin: center;
     margin-top: -0.75px;
 }
+#tw-qb-toggle {
+    display: inline-block;
+    cursor: pointer;
+    font-weight: bold;
+    font-size: 13px;
+    line-height: 1.4;
+    padding: 1px 6px;
+    border: 1px solid #603000;
+    border-radius: 3px;
+    background: #e9d0a9;
+    box-shadow: 1px 1px 2px rgba(0,0,0,0.30);
+    margin: 0 6px 0 0;
+    vertical-align: middle;
+    user-select: none;
+}
+#tw-qb-toggle:hover { background: #f0dca0; border-color: #4a2000; }
 `;
 
     function injectStyle() {
@@ -205,6 +221,43 @@
     }
 
     /* ═══════════════════════════════════════════════════════════════════════
+       QUICKBAR COLLAPSE
+       Adds a –/+ button inside #quickbar_contents to collapse/expand the
+       quickbar. State persists in localStorage across page navigations.
+    ═══════════════════════════════════════════════════════════════════════ */
+
+    const QB_KEY = 'tw_qb_collapsed';
+
+    function applyQbState(contents, collapsed) {
+        const btn = document.getElementById('tw-qb-toggle');
+        if (!btn) return;
+        contents.querySelectorAll('ul').forEach(ul => { ul.style.display = collapsed ? 'none' : ''; });
+        btn.textContent = collapsed ? '+' : '−';
+        btn.title = collapsed ? 'Expandir quickbar' : 'Minimizar quickbar';
+    }
+
+    function initQuickbarCollapse() {
+        function setup() {
+            const contents = document.getElementById('quickbar_contents');
+            if (!contents || document.getElementById('tw-qb-toggle')) return;
+
+            const btn = document.createElement('span');
+            btn.id = 'tw-qb-toggle';
+            btn.addEventListener('click', () => {
+                const next = localStorage.getItem(QB_KEY) !== '1';
+                localStorage.setItem(QB_KEY, next ? '1' : '0');
+                applyQbState(contents, next);
+            });
+
+            contents.insertAdjacentElement('afterbegin', btn);
+            applyQbState(contents, localStorage.getItem(QB_KEY) === '1');
+        }
+
+        setup();
+        new MutationObserver(setup).observe(document.body, { childList: true, subtree: true });
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════════
        BOOT
     ═══════════════════════════════════════════════════════════════════════ */
 
@@ -212,6 +265,7 @@
         injectStyle();
         if (cfg.villageSwitcher !== false) initVillageSwitcher();
         if (cfg.incomingFilter !== false) initIncomingFilter();
+        if (cfg.quickbarCollapse !== false) initQuickbarCollapse();
     }
 
     if (typeof $ !== 'undefined' && typeof TribalWars !== 'undefined') {

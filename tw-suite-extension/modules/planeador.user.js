@@ -701,6 +701,11 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
         _destroyDrag   = () => draggable.destroy();
         _destroyResize = () => resizable.destroy();
         draggable.disable();
+        _destroyDrag = () => draggable.destroy();
+
+        /* Resize — active only when floating */
+        const resizable = makeResizable(overlay, document.getElementById('sim-resize-handle'));
+        _destroyResize = () => resizable.destroy();
 
         /* Dock button — toggles between embedded and floating */
         document.getElementById('sim-dock').addEventListener('click', () => {
@@ -957,9 +962,9 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
         return {
-            enable()   { enabled = true; },
-            disable()  { enabled = false; dragging = false; },
-            destroy()  {
+            enable()  { enabled = true; },
+            disable() { enabled = false; dragging = false; },
+            destroy() {
                 handle.removeEventListener('mousedown', onDown);
                 document.removeEventListener('mousemove', onMove);
                 document.removeEventListener('mouseup', onUp);
@@ -1013,7 +1018,6 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
                 if (_countdownTimer) { clearInterval(_countdownTimer); _countdownTimer = null; }
                 _destroyDrag?.(); _destroyDrag = null;
                 _destroyResize?.(); _destroyResize = null;
-                existing.remove();
                 btn.classList.remove('sim-btn-active');
             } else {
                 openDialog().then(() => btn.classList.add('sim-btn-active'));

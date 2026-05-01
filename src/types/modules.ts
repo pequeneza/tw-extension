@@ -115,7 +115,7 @@ export const MODULE_CONFIGS: ModuleConfig[] = [
     id: "planeador",
     label: "Planeador",
     description: "Planeador de ataques coordenados: busca velocidades do servidor, calcula Hora de Saída e gera links de ataque pré-preenchidos.",
-    matchPattern: /^(?!.*screen=memo).*/,
+    matchPattern: /^(?!.*screen=memo)(?!.*try=confirm)(?!.*screen=place).*/,
     scriptFile: "planeador.user.js",
     icon: "🗺️",
   },

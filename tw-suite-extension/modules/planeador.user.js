@@ -701,11 +701,6 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
         _destroyDrag   = () => draggable.destroy();
         _destroyResize = () => resizable.destroy();
         draggable.disable();
-        _destroyDrag = () => draggable.destroy();
-
-        /* Resize — active only when floating */
-        const resizable = makeResizable(overlay, document.getElementById('sim-resize-handle'));
-        _destroyResize = () => resizable.destroy();
 
         /* Dock button — toggles between embedded and floating */
         document.getElementById('sim-dock').addEventListener('click', () => {

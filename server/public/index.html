@@ -373,6 +373,33 @@
   </div>
 </div>
 
+<!-- Set Expiry Modal -->
+<div class="overlay" id="expiry-modal" onclick="onExpiryOverlayClick(event)">
+  <div class="modal">
+    <h3>Set Expiry</h3>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:16px" id="expiry-modal-key"></p>
+    <div class="field">
+      <label>Expiry</label>
+      <select id="expiry-duration" onchange="onExpiryDurationChange()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;background:var(--bg);outline:none;">
+        <option value="">No expiry (permanent)</option>
+        <option value="1m">1 month</option>
+        <option value="3m">3 months</option>
+        <option value="6m">6 months</option>
+        <option value="1y">1 year</option>
+        <option value="custom">Custom date…</option>
+      </select>
+    </div>
+    <div class="field" id="expiry-custom-field" style="display:none">
+      <label>Specific date</label>
+      <input type="date" id="expiry-expires-at" />
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeExpiryModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveExpiry()">Save</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -489,6 +516,7 @@
           <td class="date-cell">${expiryCell}</td>
           <td><span class="badge ${badgeClass}">${badgeLabel}</span></td>
           <td class="actions-cell">
+            <button class="btn btn-ghost btn-sm" onclick="openExpiryModal('${r.key}', ${JSON.stringify(r.expires_at ?? null)})">Expiry</button>
             <button class="btn btn-ghost btn-sm" onclick="toggleKey('${r.key}', ${r.active})">${r.active ? 'Revoke' : 'Restore'}</button>
             <button class="btn btn-danger btn-sm" onclick="deleteKey('${r.key}')">Delete</button>
           </td>
@@ -573,6 +601,47 @@
     navigator.clipboard.writeText(lastGeneratedKey).then(() => toast('Copied to clipboard'));
   }
 
+  // ── Expiry Modal ──────────────────────────────────────────────────────────
+  let expiryTargetKey = '';
+
+  function openExpiryModal(key, currentExpiry) {
+    expiryTargetKey = key;
+    document.getElementById('expiry-modal-key').textContent = key;
+    document.getElementById('expiry-duration').value = '';
+    document.getElementById('expiry-expires-at').value = currentExpiry ?? '';
+    document.getElementById('expiry-custom-field').style.display = currentExpiry ? 'block' : 'none';
+    if (currentExpiry) document.getElementById('expiry-duration').value = 'custom';
+    document.getElementById('expiry-modal').classList.add('open');
+  }
+
+  function closeExpiryModal() {
+    document.getElementById('expiry-modal').classList.remove('open');
+    expiryTargetKey = '';
+  }
+
+  function onExpiryOverlayClick(e) {
+    if (e.target === document.getElementById('expiry-modal')) closeExpiryModal();
+  }
+
+  function onExpiryDurationChange() {
+    const isCustom = document.getElementById('expiry-duration').value === 'custom';
+    document.getElementById('expiry-custom-field').style.display = isCustom ? 'block' : 'none';
+  }
+
+  async function saveExpiry() {
+    const duration   = document.getElementById('expiry-duration').value;
+    const expires_at = duration === 'custom' ? document.getElementById('expiry-expires-at').value : undefined;
+    const body = {};
+    if (duration && duration !== 'custom') body.duration = duration;
+    else if (expires_at) body.expires_at = expires_at;
+    else body.expires_at = null;
+
+    await apiFetch(`/admin/keys/${expiryTargetKey}`, { method: 'PATCH', body: JSON.stringify(body) });
+    toast('Expiry updated');
+    closeExpiryModal();
+    load();
+  }
+
   // ── Search ────────────────────────────────────────────────────────────────
   document.getElementById('search').addEventListener('input', e => {
     searchTerm = e.target.value;
@@ -588,7 +657,7 @@
 
   function formatDate(iso) {
     if (!iso) return '—';
-    return new Date(iso + 'Z').toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
+    return new Date(iso.length === 10 ? iso + 'T00:00:00Z' : iso).toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
   }
 
   let toastTimer;

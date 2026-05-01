@@ -118,7 +118,7 @@ export function createApp(db, adminUser, adminPass) {
   app.patch('/admin/keys/:key', requireAuth, (req, res) => {
     const { active, expires_at, duration } = req.body ?? {};
     if (active !== undefined) q.setActive.run(active ? 1 : 0, req.params.key);
-    if (expires_at !== undefined || duration !== undefined) {
+    if ('expires_at' in (req.body ?? {}) || duration !== undefined) {
       q.setExpiry.run(resolveDuration(duration, expires_at), req.params.key);
     }
     res.json({ ok: true });

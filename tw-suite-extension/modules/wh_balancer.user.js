@@ -2,7 +2,7 @@
 // @name         Tribal Wars - Warehouse Balancer v4
 // @namespace    https://pt*.tribalwars.com.pt/
 // @version      4.0.0
-// @description  The Real Balancer — reserve, max distance, settings import/export, debounced run, keyboard shortcut (Ctrl+Shift+B), enhanced summary
+// @description  The Real Balancer — reserve, max distance, settings import/export, HQ priority, PP plans, React overlay integration
 // @match        https://*.tribalwars.com.pt/game.php*
 // @grant        none
 // ==/UserScript==
@@ -13,250 +13,8 @@
   "use strict";
   if (typeof window.game_data === "undefined") return;
 
-  function whenReady(fn, tries = 0) {
-    const maxTries = 300;
-    const has$ = typeof window.$ !== "undefined";
-    const hasTW = typeof window.TribalWars !== "undefined";
-    const hasUI = typeof window.UI !== "undefined";
-    const hasDialog = typeof window.Dialog !== "undefined";
-    if (has$ && hasTW && hasUI && hasDialog) fn();
-    else if (tries < maxTries) setTimeout(() => whenReady(fn, tries + 1), 100);
-  }
-
-  whenReady(() => {
-    injectCssOnce();
-    injectLauncherButton();
-    // Keyboard shortcut: Ctrl+Shift+B opens the balancer from any page
-    document.addEventListener("keydown", (e) => {
-      if (e.ctrlKey && e.shiftKey && (e.key === "B" || e.key === "b")) {
-        e.preventDefault();
-        try { window.TM_WH_BALANCER.run(); } catch (_) {}
-      }
-    });
-  });
-
-  function injectCssOnce() {
-    if (document.getElementById("tm_whbalancer_css")) return;
-
-    const css = `
-<style id="tm_whbalancer_css">
-#tm_whbalancer_btn { margin-left: 8px; }
-#tm_whbalancer_wrap{
-  width:100%;
-  display:flex;
-  justify-content:center;
-  align-items:center;
-}
-#tm_whbalancer_btn{ margin-left:0 !important; }
-/* PP rows highlight */
-.tmWH tr.tmPpHeader td{
-  background:#c7e3ff !important;
-  border:1px solid #2a5d8a !important;
-  color:#000;
-  font-weight:bold;
-}
-.tmWH tr.tmPpRow td{
-  background:#e7f3ff !important;
-  border:1px solid #2a5d8a !important;
-}
-.tmWH .tmBadgePPNow{
-  display:inline-block;
-  padding:1px 6px;
-  border:1px solid #1a7a1a;
-  background:#d4f7d4;
-  border-radius:3px;
-  font-size:12px;
-  margin-right:6px;
-  color:#1a5c1a;
-  font-weight:bold;
-}
-.tmWH tr.tmPpNowHeader td{
-  background:#d4f7d4 !important;
-  border:1px solid #1a7a1a !important;
-  color:#000;
-  font-weight:bold;
-}
-.tmWH .tmBadgePP{
-  display:inline-block;
-  padding:1px 6px;
-  border:1px solid #2a5d8a;
-  background:#ffffff;
-  border-radius:3px;
-  font-size:12px;
-  margin-right:6px;
-}
-
-.tmWH { color:#000; font-family: Verdana, Arial, sans-serif; }
-.tmWH .twbox { background:#f3e6c1; border:1px solid #7b5b2b; padding:8px; margin-bottom:10px; }
-.tmWH .twbox .title { background:#d2b47a; border:1px solid #7b5b2b; padding:6px 8px; font-weight:bold; margin:-8px -8px 8px -8px; }
-.tmWH .twmuted { color:#3b2a12; opacity:0.9; font-size:12px; }
-.tmWH .twbadge { display:inline-block; padding:1px 6px; border:4px solid #7b5b2b; background:#fff6dc; border-radius:3px; font-size:12px; margin-left:6px; }
-
-.tmWH .tmToggle { width:100%; text-align:left; padding:6px 8px; border:1px solid #7b5b2b; background:#e2c68e; font-weight:bold; cursor:pointer; }
-.tmWH .tmToggle:after { content:"▸"; float:right; }
-.tmWH .tmToggle.open:after { content:"▾"; }
-
-.tmWH .tmSettingsBody { border:1px solid #7b5b2b; border-top:none; background:#fff6dc; padding:8px; display:none; }
-.tmWH .tmSettingsBody.open { display:block; }
-
-.tmWH .tmSubToggle{
-  width:100%;
-  box-sizing:border-box;
-  display:block;
-  text-align:left;
-  padding:6px 8px;
-  border:1px solid #7b5b2b;
-  background:#ead3a2;
-  font-weight:bold;
-  cursor:pointer;
-  margin-top:8px;
-  line-height:18px;
-}
-.tmWH button.tmSubToggle{
-  appearance:none;
-  -webkit-appearance:none;
-  border-radius:0;
-  font:inherit;
-}
-.tmWH .tmSubToggle:after{ content:"▸"; float:right; }
-.tmWH .tmSubToggle.open:after{ content:"▾"; }
-
-.tmWH .tmSubBody { border:1px solid #7b5b2b; border-top:none; background:#fffdf2; padding:8px; display:none; }
-.tmWH .tmSubBody.open { display:block; }
-
-.tmWH .tm-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px 12px; align-items:center; }
-.tmWH .tm-grid label { font-weight:bold; }
-.tmWH input[type="number"], .tmWH input[type="text"], .tmWH select { width:140px; }
-
-.tmWH .tm-actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-.tmWH .tm-flex { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; flex-wrap:wrap; }
-
-.tmWH table.vis { width:100%; }
-.tmWH table.vis th { background:#d2b47a; border:1px solid #7b5b2b; color:#000; }
-.tmWH table.vis td { background:#fff6dc; border:1px solid #7b5b2b; color:#000; }
-.tmWH tr.tmRowA td { background:#fff1c9; }
-.tmWH tr.tmRowB td { background:#fff6dc; }
-
-.tmWH a.tmLink { color:#0b4d8a; text-decoration:underline; }
-
-.tmWH .btnSophie { border:1px solid #7b5b2b; background:#e2c68e; color:#000; padding:4px 10px; cursor:pointer; }
-.tmWH .btnSophie:hover { background:#d9bb7e; }
-
-.tmWH .tmTimerBox { border:1px solid #7b5b2b; background:#fff6dc; padding:8px; margin-top:8px; }
-.tmWH .tmTimerBox .big { font-size:18px; font-weight:bold; }
-.tmWH .tmTimerBox .line { margin-top:3px; }
-.tmWH .tmTimerBox code { background:#fff1c9; border:1px solid #7b5b2b; padding:1px 4px; }
-
-.tmWH table.tmPpMiniTable { width:100%; border-collapse:collapse; margin-top:6px; }
-.tmWH table.tmPpMiniTable th, .tmWH table.tmPpMiniTable td { border:1px solid #7b5b2b; padding:3px 6px; }
-.tmWH table.tmPpMiniTable th { background:#d2b47a; }
-.tmWH table.tmPpMiniTable td { background:#fff6dc; }
-
-/* Manual locks (compact) */
-.tmWH .tmMiniRow { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-.tmWH .tmMiniRow input[type="text"] { width:110px; }
-.tmWH .tmMiniChecks { display:flex; gap:10px; align-items:center; }
-.tmWH .tmMiniChecks label { font-weight:bold; display:flex; gap:4px; align-items:center; }
-.tmWH .tmLockList { margin-top:8px; border:1px solid #7b5b2b; background:#fff6dc; max-height:160px; overflow:auto; }
-.tmWH .tmLockItem { display:flex; justify-content:space-between; gap:10px; padding:4px 6px; border-bottom:1px solid rgba(123,91,43,0.35); cursor:pointer; }
-.tmWH .tmLockItem:last-child { border-bottom:none; }
-.tmWH .tmLockBadges { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
-.tmWH .tmResIcon { width:16px; height:16px; vertical-align:middle; }
-.tmWH .tmResIconDim { opacity:0.25; }
-.tmWH .tmLockX { padding:0 8px; }
-.tmWH .tmLockComment{
-  font-size:11px;
-  color:#3b2a12;
-  opacity:0.9;
-  margin-left:6px;
-  padding:0 4px;
-  border-left:2px solid rgba(123,91,43,0.35);
-}
-.tmWH .tmCoordLink{ color:#0b4d8a; text-decoration:underline; cursor:pointer; }
-
-.tmWH .tmPpRouteRow { padding:2px 0; }
-.tmWH .tmPpMini { font-size:12px; }
-.tmWH .tmPpMini code { background:#fff1c9; border:1px solid #7b5b2b; padding:1px 4px; }
-
-#tmwh_tip_portal{
-  position:fixed;
-  display:none;
-  z-index:2147483647;
-  background:#fffdf2;
-  border:1px solid #7b5b2b;
-  padding:8px;
-  min-width:360px;
-  max-width:520px;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.25);
-  pointer-events:none;
-}
-/* HQ building priority boost */
-.tmWH tr.tmHqBoostRow td { background:#fffbe6 !important; border-color:#c8a800 !important; }
-.tmWH .tmBadgeHQ {
-  display:inline-block; padding:1px 5px;
-  border:1px solid #c8a800; background:#fff3b0;
-  border-radius:3px; font-size:11px; margin-right:4px;
-  color:#7a6000; font-weight:bold;
-}
-.tmWH .tmBadgeCC {
-  display:inline-block;
-  padding:1px 5px;
-  border:1px solid #991e43;
-  background:#e8e8f8;
-  border-radius:3px; font-size:11px; margin-right:4px;
-  color:#444466; font-weight:bold;
-}
-/* HQ building check */
-#tmwh_hq_panel {
-  max-height:260px;
-  overflow-y:auto;
-  overflow-x:hidden;
-}
-.tmHqBox { margin-top:4px; }
-.tmHqRow { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:4px 0; border-bottom:1px solid rgba(123,91,43,0.2); flex-wrap:wrap; }
-.tmHqRow:last-child { border-bottom:none; }
-.tmHqVillage { font-weight:bold; min-width:140px; }
-.tmHqBuilding { font-size:11px; color:#3b2a12; flex:1; }
-.tmHqOk { color:#1a7a1a; font-weight:bold; }
-.tmHqWarn { color:#a40000; font-weight:bold; }
-.tmHqEta { font-size:11px; color:#555; white-space:nowrap; }
-.tmHqRes { font-size:11px; }
-.tmHqShortfall { color:#a40000; }
-</style>`;
-    document.head.insertAdjacentHTML("beforeend", css);
-  }
-
-  function injectLauncherButton() {
-    if (document.getElementById("tm_whbalancer_btn") || document.getElementById("tm_whbalancer_wrap")) return;
-
-    const btn = document.createElement("button");
-    btn.id = "tm_whbalancer_btn";
-    btn.textContent = "xBalancer";
-    btn.className = "btn";
-
-    btn.addEventListener("click", () => {
-      try {
-        window.TM_WH_BALANCER.run();
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.error(e);
-        alert("WH Balancer crashed. Check console.");
-      }
-    });
-
-    const targets = [
-      document.querySelector("#menu_row2"),
-      document.querySelector("#topContainer"),
-      document.querySelector("#header_info"),
-      document.querySelector("#contentContainer")
-    ].filter(Boolean);
-
-    const wrap = document.createElement("div");
-    wrap.id = "tm_whbalancer_wrap";
-    wrap.appendChild(btn);
-
-    (targets[0] || document.body).appendChild(wrap);
-  }
+  if (window.__twWHBalancerRunning) return;
+  window.__twWHBalancerRunning = true;
 
   window.TM_WH_BALANCER = (function () {
     let state = null;
@@ -1575,6 +1333,39 @@
         });
       }
 
+      // Pre-allocate merchant capacity proportionally across each resource a donor can send.
+      // Without this, the first resource in the loop (wood) can consume all merchants,
+      // leaving none for stone/iron and allowing the warehouse to fill up and stall production.
+      for (const donor of donors) {
+        const needW = Math.ceil(donor.wood  / 1000);
+        const needS = Math.ceil(donor.stone / 1000);
+        const needI = Math.ceil(donor.iron  / 1000);
+        const totalNeed = needW + needS + needI;
+        if (totalNeed <= donor.merchantsLeft) {
+          // Enough merchants for all resources — each gets exactly what it needs.
+          donor.resBudget = { wood: needW, stone: needS, iron: needI };
+        } else {
+          // Proportionally split available merchants across resources with excess.
+          const avail = donor.merchantsLeft;
+          const totalExcess = (donor.wood + donor.stone + donor.iron) || 1;
+          let bW = donor.wood  > 0 ? Math.floor(avail * donor.wood  / totalExcess) : 0;
+          let bS = donor.stone > 0 ? Math.floor(avail * donor.stone / totalExcess) : 0;
+          let bI = donor.iron  > 0 ? Math.floor(avail * donor.iron  / totalExcess) : 0;
+          // Distribute rounding remainder to the resource with the most excess.
+          const rem = avail - bW - bS - bI;
+          if (rem > 0) {
+            if (donor.wood >= donor.stone && donor.wood >= donor.iron && donor.wood > 0) bW += rem;
+            else if (donor.stone >= donor.iron && donor.stone > 0) bS += rem;
+            else if (donor.iron > 0) bI += rem;
+          }
+          donor.resBudget = {
+            wood:  Math.min(bW, needW),
+            stone: Math.min(bS, needS),
+            iron:  Math.min(bI, needI),
+          };
+        }
+      }
+
       const RES = [
         { res: "wood",  sIdx: 0 },
         { res: "stone", sIdx: 1 },
@@ -1643,9 +1434,9 @@
 
           for (const donor of sortedDonors) {
             if (remaining <= 0) break;
-            if (donor[res] <= 0 || donor.merchantsLeft <= 0) continue;
+            if (donor[res] <= 0 || donor.merchantsLeft <= 0 || donor.resBudget[res] <= 0) continue;
 
-            const maxByMerchants = donor.merchantsLeft * 1000;
+            const maxByMerchants = Math.min(donor.merchantsLeft, donor.resBudget[res]) * 1000;
             const canSend = Math.floor(Math.min(remaining, donor[res], maxByMerchants) / 1000) * 1000;
             if (canSend <= 0) continue;
 
@@ -1662,9 +1453,11 @@
               iron:  res === "iron"  ? canSend : 0,
             });
 
-            donor[res]          -= canSend;
-            donor.merchantsLeft -= Math.ceil(canSend / 1000);
-            remaining           -= canSend;
+            const merchantsUsed     = canSend / 1000;
+            donor[res]              -= canSend;
+            donor.merchantsLeft     -= merchantsUsed;
+            donor.resBudget[res]    -= merchantsUsed;
+            remaining               -= canSend;
           }
 
           shortageResources[q][sIdx][res] = remaining;
@@ -2496,620 +2289,6 @@
         $("#tmwh_lockIron").prop("checked", !!lock.iron);
         $("#tmwh_lockComment").val(getManualCoordComment(key));
       });
-    }
-
-    // ---------------- MAIN DIALOG ----------------
-    function showMainDialog() {
-      const s = state.settings;
-      const settingsOpen = !!s.settingsOpen;
-      const premiumOpen = !!s.premiumOptionsOpen;
-
-      const html = `
-<div class="tmWH">
-  <div class="twbox">
-    <div class="title">
-      Warehouse Balancer (Standalone)
-      <span class="twbadge">Any page</span>
-    </div>
-    <div class="tm-flex">
-      <div class="twmuted">Fetches overview pages, computes plan, shows send list here.</div>
-      <div class="tm-actions">
-        <button class="btn btnSophie" id="tmwh_run" type="button">Run</button>
-        <button class="btn btnSophie" id="tmwh_export_settings" type="button">Export settings</button>
-        <button class="btn btnSophie" id="tmwh_import_settings" type="button">Import settings</button>
-        <button class="btn btnSophie" id="tmwh_close" type="button">Close</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="twbox">
-    <button class="tmToggle ${settingsOpen ? "open" : ""}" id="tmwh_toggleSettings" type="button">Settings</button>
-    <div class="tmSettingsBody ${settingsOpen ? "open" : ""}" id="tmwh_settingsBody">
-      <div class="tm-grid">
-        <label>Ignore settings</label>
-        <input type="checkbox" id="tmwh_isMinting" ${s.isMinting ? "checked" : ""}>
-
-        <label>Prioritise villages below points</label>
-        <input type="number" id="tmwh_lowPoints" value="${s.lowPoints}">
-
-        <label>Finished villages above points</label>
-        <input type="number" id="tmwh_highPoints" value="${s.highPoints}">
-
-        <label>High farm (pop)</label>
-        <input type="number" id="tmwh_highFarm" value="${s.highFarm}">
-
-        <label>WH % to keep in finished villages</label>
-        <input type="number" step="0.01" min="0.01" max="0.95" id="tmwh_builtOutPercentage" value="${s.builtOutPercentage}">
-
-        <label>WH % target for priority villages</label>
-        <input type="number" step="0.01" min="0" max="1" id="tmwh_needsMorePercentage" value="${s.needsMorePercentage}">
-
-        <label>Reserve per village (not sent)</label>
-        <input type="number" id="tmwh_reservePerVillage" value="${s.reservePerVillage}">
-
-        <label>Recruit reserve (high-pts, low-farm)</label>
-        <input type="number" id="tmwh_recruitReserve" value="${s.recruitReserve}">
-
-        <label>Global max distance (fields)</label>
-        <input type="number" id="tmwh_maxDistance" value="${s.maxDistance}">
-
-        <label>Prioritise empty build queues <a href="#" class="tmLink tmHelp" data-tip="hq_priority">?</a></label>
-        <input type="checkbox" id="tmwh_hqPriorityEnabled" ${s.hqPriorityEnabled ? "checked" : ""}>
-
-        <label>Maxed out village (points) <a href="#" class="tmLink tmHelp" data-tip="hq_maxed">?</a></label>
-        <input type="number" id="tmwh_maxedOutPoints" value="${s.maxedOutPoints}">
-        
-        <label>Low-points long queue threshold (hours): <a href="#" class="tmLink tmHelp" data-tip="LP_QueueHrs">?</a></label></label>
-        <input type="number" id="tmwh_lowPointsLongQueueHours" value="${s.lowPointsLongQueueHours}">
-
-        <label>Clusters <a href="#" class="tmLink tmHelp" data-tip="cluster_logic">?</a></label>
-        <input type="checkbox" id="tmwh_useClusters" ${s.useClusters ? "checked" : ""}>
-        
-        <label>Number of Clusters</label>
-        <input type="number" id="tmwh_numClusters" value="${s.numClusters}">
-
-        <label>Debug logging</label>
-        <input type="checkbox" id="tmwh_debugMode" ${s.debugMode ? "checked" : ""}>
-      </div>
-      <hr/>
-
-      <button class="tmSubToggle ${premiumOpen ? "open" : ""}" id="tmwh_togglePremium" type="button">
-        Instant Trade (Merchant Exchange) <span class="twbadge">10pp</span>
-        <span class="twmuted" style="font-weight:normal">(${s.premiumInstantEnabled ? "enabled" : "disabled"})</span>
-      </button>
-
-      <div class="tmSubBody ${premiumOpen ? "open" : ""}" id="tmwh_premiumBody">
-        <div class="tm-grid">
-          <label>Enable</label>
-          <input type="checkbox" id="tmwh_premiumEnabled" ${s.premiumInstantEnabled ? "checked" : ""}>
-
-          <label>Routing Strategy <a href="#" class="tmLink tmHelp" data-tip="tipStrategy">?</a></label>
-          <select id="tmwh_premiumStagingStrategy">
-            <option value="weighted" ${s.premiumStagingStrategy === "weighted" ? "selected" : ""}>Weighted donors</option>
-            <option value="largest" ${s.premiumStagingStrategy === "largest" ? "selected" : ""}>Largest donor</option>
-          </select>
-
-          <label>Threshold <a href="#" class="tmLink tmHelp" data-tip="pp_threshold">?</a></label>
-          <input type="number" id="tmwh_premiumThreshold" value="${s.premiumThreshold}">
-
-          <label>Min trade amount <a href="#" class="tmLink tmHelp" data-tip="pp_min_trade">?</a></label>
-          <input type="number" id="tmwh_premiumMinTradeAmount" value="${s.premiumMinTradeAmount}">
-
-          <label>Move amount <a href="#" class="tmLink tmHelp" data-tip="pp_move_amount">?</a></label>
-          <input type="number" id="tmwh_premiumMoveAmount" value="${s.premiumMoveAmount}">
-
-          <label>Max distance <a href="#" class="tmLink tmHelp" data-tip="pp_max_distance">?</a></label>
-          <input type="number" id="tmwh_premiumMaxDistance" value="${s.premiumMaxDistance}">
-
-          <label>Max target fill (%) <a href="#" class="tmLink tmHelp" data-tip="pp_max_fill">?</a></label>
-          <input type="number" step="0.01" min="0.1" max="0.98" id="tmwh_premiumMaxTargetFillPct" value="${s.premiumMaxTargetFillPct}">
-
-          <label>Max plans <a href="#" class="tmLink tmHelp" data-tip="pp_max_plans">?</a></label>
-          <input type="number" id="tmwh_premiumMaxPlansHardCap" value="${s.premiumMaxPlansHardCap}">
-        </div>
-
-        <hr/>
-
-        <div class="tm-grid">
-          <label>Donor keep (%) <a href="#" class="tmLink tmHelp" data-tip="pp_donor_keep_pct">?</a></label>
-          <input type="number" step="0.01" min="0" max="0.95" id="tmwh_premiumDonorKeepPct" value="${s.premiumDonorKeepPct}">
-
-          <label>Donor keep min <a href="#" class="tmLink tmHelp" data-tip="pp_donor_keep_min">?</a></label>
-          <input type="number" id="tmwh_premiumDonorKeepMin" value="${s.premiumDonorKeepMin}">
-
-          <label>Donor min excess <a href="#" class="tmLink tmHelp" data-tip="pp_donor_min_excess">?</a></label>
-          <input type="number" id="tmwh_premiumDonorMinExcess" value="${s.premiumDonorMinExcess}">
-        </div>
-
-        <div class="tm-actions" style="margin-top:8px">
-          <div id="tmwh_ppLockStatus" class="twmuted"></div>
-        </div>
-
-        <div id="tmwh_timer"></div>
-      </div>
-
-      <hr/>
-
-      <button class="tmSubToggle ${s.sendAllEnabled ? "open" : ""}" id="tmwh_toggleSendAll" type="button">Send All (automation)</button>
-      <div class="tmSubBody ${s.sendAllEnabled ? "open" : ""}" id="tmwh_sendAllBody">
-        <div class="tm-grid">
-          <label>Enable Send All</label>
-          <input type="checkbox" id="tmwh_sendAllEnabled" ${s.sendAllEnabled ? "checked" : ""}>
-
-          <label>Interval (ms)</label>
-          <input type="number" id="tmwh_sendAllIntervalMs" value="${s.sendAllIntervalMs}">
-        </div>
-        <div class="twmuted" style="margin-top:6px">
-          When you press "Send all", it clicks one row every interval (default 500ms).
-        </div>
-      </div>
-
-      <hr/>
-
-      <button class="tmSubToggle" id="tmwh_toggleManualLocks" type="button">Manual locks (coords)</button>
-      <div class="tmSubBody" id="tmwh_manualLocksBody">
-        <div class="tmMiniRow">
-          <div>
-            <span class="twmuted" style="font-weight:bold">Coords</span><br/>
-            <input type="text" id="tmwh_lockCoords" placeholder="451|601">
-          </div>
-
-          <div class="tmMiniChecks">
-            <label title="Lock Wood">${resIconHtml("wood", false)} <input type="checkbox" id="tmwh_lockWood"></label>
-            <label title="Lock Clay">${resIconHtml("stone", false)} <input type="checkbox" id="tmwh_lockStone"></label>
-            <label title="Lock Iron">${resIconHtml("iron", false)} <input type="checkbox" id="tmwh_lockIron"></label>
-          </div>
-
-          <div>
-            <span class="twmuted" style="font-weight:bold">Comment</span><br/>
-            <input type="text" id="tmwh_lockComment" placeholder="e.g. nobles, catapult..." style="width:200px">
-          </div>
-
-          <div class="tm-actions">
-            <button class="btn btnSophie" id="tmwh_saveCoordLock" type="button">Save</button>
-            <button class="btn btnSophie" id="tmwh_clearCoordLock" type="button">Clear</button>
-          </div>
-        </div>
-
-        <div class="twmuted" style="margin-top:6px">
-          Locks persist until removed. Locked resources won’t be sent to/from that village. Click coords to open the village.
-        </div>
-
-        <div class="tmLockList" id="tmwh_coordLockList"></div>
-      </div>
-
-      <div class="tm-actions" style="margin-top:10px">
-        <button class="btn btnSophie" id="tmwh_save" type="button">Save settings</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="twbox">
-    <div class="title">Results</div>
-    <div id="tmwh_summary" class="twmuted">Press Run.</div>
-  </div>
-
-  <div class="twbox" id="tmwh_map_box" style="display:none">
-    <div class="title">Cluster Map</div>
-    <div id="tmwh_map_container" style="overflow:auto"></div>
-  </div>
-
-  <div class="twbox">
-    <div class="title">
-      HQ Build Queue Check
-      <button class="btn btnSophie" id="tmwh_hq_run" type="button" style="float:right;font-size:11px;margin-top:-2px;">Check HQ</button>
-    </div>
-    <div class="twmuted" style="font-size:11px;margin-bottom:6px">
-      Fetches each village's HQ page to check if resources will be available when the current build queue finishes.
-    </div>
-    <div id="tmwh_hq_panel" class="twmuted">Press Run (with "Prioritise empty build queues" enabled) or press "Check HQ".</div>
-  </div>
-
-  <div class="twbox">
-    <div class="title">Send list</div>
-
-    <div class="tm-actions" style="margin-bottom:6px">
-      <button class="btn btnSophie" id="tmwh_sendAll" type="button">Send all</button>
-      <button class="btn btnSophie" id="tmwh_sendAllPP" type="button">Send all (PP only)</button>
-      <button class="btn btnSophie" id="tmwh_stopSendAll" type="button">Stop</button>
-    </div>
-
-    <table class="vis" id="tmwh_table">
-      <thead>
-        <tr>
-          <th>Source</th><th>Target</th><th>Dist</th><th>Wood</th><th>Stone</th><th>Iron</th><th>Action</th>
-        </tr>
-      </thead>
-      <tbody id="tmwh_rows"></tbody>
-    </table>
-  </div>
-</div>`;
-
-      Dialog.show("content", html);
-
-      // Stop keyboard events from bubbling out of the Dialog into TW's hotkey handler.
-      // TW listens for keydown on document and intercepts letter/number keys as shortcuts.
-      // .popup_box is the container TW's Dialog renders into.
-      const blockKey = (e) => e.stopPropagation();
-      document.querySelectorAll(".popup_box").forEach((box) => {
-        box.removeEventListener("keydown",  blockKey);
-        box.removeEventListener("keyup",    blockKey);
-        box.removeEventListener("keypress", blockKey);
-        box.addEventListener("keydown",  blockKey);
-        box.addEventListener("keyup",    blockKey);
-        box.addEventListener("keypress", blockKey);
-      });
-
-      // Bind all Premium tooltips using .tmHelp anchors
-      (function bindPremiumTooltips() {
-        const tips = {
-          tipStrategy: `
-            <div style="font-weight:bold; margin-bottom:6px">Staging strategy</div>
-            <div class="twmuted">
-              <b>Weighted donors</b>: splits the required amount across multiple donor villages,
-              prioritizing closer donors. More reliable when merchants are spread out.<br/><br/>
-              <b>Largest donor</b>: tries to use the biggest single donor first.
-              Fewer shipments, but can fail if that donor has low merchants or is far away.
-            </div>
-          `,
-          pp_threshold: `
-            <div style="font-weight:bold; margin-bottom:6px">Threshold</div>
-            <div class="twmuted">
-              Minimum global imbalance (most abundant resource minus least abundant resource)
-              required before the script will attempt to create a PP (Merchant Exchange) plan.
-            </div>
-          `,
-          pp_min_trade: `
-            <div style="font-weight:bold; margin-bottom:6px">Min trade amount</div>
-            <div class="twmuted">
-              Minimum amount (in the <b>paying</b> resource) that must be staged via shipments
-              before a PP plan is accepted. If the plan cannot reach this, no PP route is suggested.
-            </div>
-          `,
-          pp_move_amount: `
-            <div style="font-weight:bold; margin-bottom:6px">Move amount</div>
-            <div class="twmuted">
-              Upper cap for how much the planner will try to move for a single PP route.
-              The actual amount may be lower due to merchants, donor excess, target capacity, or distance limits.
-            </div>
-          `,
-          pp_max_distance: `
-            <div style="font-weight:bold; margin-bottom:6px">Max distance (ETA)</div>
-            <div class="twmuted">
-              Maximum distance (in fields) allowed between a donor village and the target village
-              for PP shipments. Lower values reduce travel time but may prevent plans if donors are far away.
-            </div>
-          `,
-          pp_max_fill: `
-            <div style="font-weight:bold; margin-bottom:6px">Max target fill (%)</div>
-            <div class="twmuted">
-              Prevents overfilling the target village with the paying resource.
-              Example: 0.90 means the target will not be planned above ~90% of warehouse capacity for that resource.
-            </div>
-          `,
-          pp_max_plans: `
-            <div style="font-weight:bold; margin-bottom:6px">Max plans (safety)</div>
-            <div class="twmuted">
-              Hard limit of how many PP routes the script can generate in one run.
-              Helps avoid accidental large PP spending and excessive shipments.
-            </div>
-          `,
-          pp_donor_keep_pct: `
-            <div style="font-weight:bold; margin-bottom:6px">Donor keep (%)</div>
-            <div class="twmuted">
-              Donor villages will keep at least this percentage of their warehouse capacity
-              (in the paying resource). Only amounts above that are considered excess and can be sent.
-            </div>
-          `,
-          pp_donor_keep_min: `
-            <div style="font-weight:bold; margin-bottom:6px">Donor keep min</div>
-            <div class="twmuted">
-              Minimum amount a donor village will always keep (in the paying resource),
-              regardless of the percentage keep rule.
-            </div>
-          `,
-          pp_donor_min_excess: `
-            <div style="font-weight:bold; margin-bottom:6px">Donor min excess</div>
-            <div class="twmuted">
-              Minimum excess required for a village to be considered a donor at all.
-              Villages with less excess than this are ignored to reduce tiny shipments.
-            </div>
-          `,
-          hq_maxed: `
-            <div style="font-weight:bold; margin-bottom:6px">Maxed out village (points)</div>
-            <div class="twmuted">
-              Villages at or above this points threshold are considered fully built and are
-              skipped during the HQ build queue check. Default is <b>10.471</b> — the maximum
-              points a village can reach in Tribal Wars PT.
-              Set lower if you want to exclude villages you consider finished.
-            </div>
-          `,
-          hq_priority: `
-            <div style="font-weight:bold; margin-bottom:6px">Prioritise empty build queues</div>
-            <div class="twmuted">
-              When enabled, the balancer fetches each village's HQ build queue before routing.<br/><br/>
-              Villages with an <b>empty queue</b> (ready to build) and a configured <b>next building</b> are treated as priority receivers:
-              <ul style="margin:6px 0 0 16px; padding:0">
-                <li>Their <b>shortage</b> is boosted to the exact building cost shortfall.</li>
-                <li>Their <b>excess</b> is zeroed for any resource needed by the building — they will not donate those resources.</li>
-              </ul>
-              <br/>This ensures that villages that can build right now receive resources first and keep what they need.
-              Adds one HTTP request per village to the run.
-            </div>
-          `,
-          LP_QueueHrs: `
-            <div style="font-weight:bold; margin-bottom:6px">Low-points long queue threshold (hours):</div>
-            <div class="twmuted">
-              Amount of hours a low point village needs to have in queue before becoming a resource donor<br/><br/>
-            </div>
-          `,
-          cluster_logic:`
-          <div style="font-weight:bold; margin-bottom:6px">Clusters:</div>
-          <div class="twmuted">
-            Divide villages into clusters and balance within each cluster instead of globally. 
-            Useful in very large/spread-out accounts.<br/><br/>
-          </div>
-          `
-        };
-
-        ensureTipPortal();
-        const $root = $(".tmWH");
-        $root.find(".tmHelp").off("mouseover mouseout click");
-        $root.find(".tmHelp").on("mouseover", function (e) {
-          e.preventDefault();
-          const key = $(this).attr("data-tip");
-          showTipAt(this, tips[key] || `<div class="twmuted">No help available.</div>`);
-        });
-        $root.find(".tmHelp").on("mouseout", function () { hideTip(); });
-        $root.find(".tmHelp").on("click", function (e) { e.preventDefault(); });
-      })();
-
-      // HQ Build Queue Check
-      function updateHqBtnLabel() {
-        const hasCached = state.hqData && state.hqData.size > 0;
-        $("#tmwh_hq_run").text(hasCached ? "Show HQ" : "Check HQ");
-      }
-      updateHqBtnLabel();
-
-      $("#tmwh_hq_run").on("click", async function () {
-        const $btn = $(this);
-        const hasCached = state.hqData && state.hqData.size > 0;
-        $btn.prop("disabled", true).text(hasCached ? "Loading…" : "Checking…");
-        try {
-          await runHqCheck();
-        } finally {
-          $btn.prop("disabled", false);
-          updateHqBtnLabel();
-        }
-      });
-
-      renderPpLockStatus();
-      renderManualCoordLockList();
-
-      $("#tmwh_toggleManualLocks").on("click", () => {
-        $("#tmwh_toggleManualLocks").toggleClass("open");
-        $("#tmwh_manualLocksBody").toggleClass("open");
-      });
-
-      $("#tmwh_saveCoordLock").on("click", () => {
-        try {
-          const coordsKey = normalizeCoordsKey($("#tmwh_lockCoords").val());
-          if (!coordsKey) return UI.ErrorMessage("Enter coords like 451|601.");
-
-          setManualCoordLock(coordsKey, {
-            wood: $("#tmwh_lockWood").is(":checked"),
-            stone: $("#tmwh_lockStone").is(":checked"),
-            iron: $("#tmwh_lockIron").is(":checked")
-          });
-
-          setManualCoordComment(coordsKey, $("#tmwh_lockComment").val());
-
-          UI.SuccessMessage(`Manual lock saved for ${coordsKey}.`);
-          renderManualCoordLockList();
-        } catch (e) {
-          UI.ErrorMessage(e.message || String(e));
-        }
-      });
-
-      $("#tmwh_clearCoordLock").on("click", () => {
-        try {
-          const coordsKey = normalizeCoordsKey($("#tmwh_lockCoords").val());
-          if (!coordsKey) return UI.ErrorMessage("Enter coords like 451|601.");
-
-          clearManualCoordLock(coordsKey);
-
-          UI.SuccessMessage(`Manual lock cleared for ${coordsKey}.`);
-          renderManualCoordLockList();
-        } catch (e) {
-          UI.ErrorMessage(e.message || String(e));
-        }
-      });
-
-      $("#tmwh_close").on("click", () => {
-        stopSendAll();
-        stopAllPlanTimers();
-        hideTip();
-        Dialog.close();
-      });
-
-      $("#tmwh_toggleSettings").on("click", () => {
-        $("#tmwh_toggleSettings").toggleClass("open");
-        $("#tmwh_settingsBody").toggleClass("open");
-        const ns = loadSettings();
-        ns.settingsOpen = $("#tmwh_settingsBody").hasClass("open");
-        saveSettings(ns);
-        state.settings.settingsOpen = ns.settingsOpen;
-      });
-
-      $("#tmwh_togglePremium").on("click", () => {
-        $("#tmwh_togglePremium").toggleClass("open");
-        $("#tmwh_premiumBody").toggleClass("open");
-        const ns = loadSettings();
-        ns.premiumOptionsOpen = $("#tmwh_premiumBody").hasClass("open");
-        saveSettings(ns);
-        state.settings.premiumOptionsOpen = ns.premiumOptionsOpen;
-      });
-
-      $("#tmwh_toggleSendAll").on("click", () => {
-        $("#tmwh_toggleSendAll").toggleClass("open");
-        $("#tmwh_sendAllBody").toggleClass("open");
-      });
-
-      $("#tmwh_sendAll").on("click", () => startSendAll({ onlyPp: false }));
-      $("#tmwh_sendAllPP").on("click", () => startSendAll({ onlyPp: true }));
-      $("#tmwh_stopSendAll").on("click", () => stopSendAll());
-
-      $("#tmwh_save").on("click", () => {
-        const ns = readSettingsFromUI();
-        state.settings = ns;
-        saveSettings(ns);
-        // Purge cached HQ data when HQ priority is explicitly disabled via Save
-        if (!ns.hqPriorityEnabled) {
-          state.hqData        = null;
-          state.hqLastFetchMs = null;
-          saveHqData(null, null);
-        }
-        UI.SuccessMessage("Settings saved.");
-      });
-
-      $("#tmwh_run").on("click", async function () {
-        const $btn = $(this);
-        if ($btn.prop("disabled")) return;
-        $btn.prop("disabled", true).text("Fetching...");
-        try {
-          const ns = readSettingsFromUI();
-          state.settings = ns;
-          saveSettings(ns);
-          await runComputationAndRender();
-        } catch (e) {
-          // eslint-disable-next-line no-console
-          console.error(e);
-          alert("Run failed: " + (e.message || e));
-        } finally {
-          $btn.prop("disabled", false).text("Run");
-        }
-      });
-
-      // Export settings to clipboard as JSON
-      $("#tmwh_export_settings").on("click", () => {
-        try {
-          navigator.clipboard.writeText(JSON.stringify(state.settings, null, 2));
-          UI.SuccessMessage("Settings exported to clipboard.");
-        } catch (e) {
-          UI.ErrorMessage("Clipboard write failed: " + (e.message || e));
-        }
-      });
-
-      // Import settings from clipboard JSON
-      $("#tmwh_import_settings").on("click", async () => {
-        try {
-          const text = await navigator.clipboard.readText();
-          const imported = JSON.parse(text);
-          state.settings = { ...state.settings, ...imported };
-          saveSettings(state.settings);
-          UI.SuccessMessage("Settings imported. Press Run to apply.");
-        } catch (e) {
-          UI.ErrorMessage("Import failed — copy valid JSON settings to clipboard first.");
-        }
-      });
-
-    }
-
-    function readSettingsFromUI() {
-      const s = loadSettings();
-
-      s.isMinting = $("#tmwh_isMinting").is(":checked");
-      s.lowPoints = parseInt($("#tmwh_lowPoints").val(), 10);
-      s.highPoints = parseInt($("#tmwh_highPoints").val(), 10);
-      s.highFarm = parseInt($("#tmwh_highFarm").val(), 10);
-      s.builtOutPercentage = parseFloat($("#tmwh_builtOutPercentage").val());
-      s.needsMorePercentage = parseFloat($("#tmwh_needsMorePercentage").val());
-      s.lowPointsLongQueueHours = parseFloat($("#tmwh_lowPointsLongQueueHours").val());
-      
-
-      s.premiumInstantEnabled = $("#tmwh_premiumEnabled").is(":checked");
-      s.premiumThreshold = parseInt($("#tmwh_premiumThreshold").val(), 10);
-      s.premiumMoveAmount = parseInt($("#tmwh_premiumMoveAmount").val(), 10);
-      s.premiumMinTradeAmount = parseInt($("#tmwh_premiumMinTradeAmount").val(), 10);
-      s.premiumStagingStrategy = String($("#tmwh_premiumStagingStrategy").val() || "weighted");
-      if (s.premiumStagingStrategy !== "largest" && s.premiumStagingStrategy !== "weighted") s.premiumStagingStrategy = "weighted";
-
-      s.premiumMaxDistance = parseInt($("#tmwh_premiumMaxDistance").val(), 10);
-      s.premiumMaxTargetFillPct = parseFloat($("#tmwh_premiumMaxTargetFillPct").val());
-      s.premiumMaxPlansHardCap = parseInt($("#tmwh_premiumMaxPlansHardCap").val(), 10);
-
-      s.premiumDonorKeepPct = parseFloat($("#tmwh_premiumDonorKeepPct").val());
-      s.premiumDonorKeepMin = parseInt($("#tmwh_premiumDonorKeepMin").val(), 10);
-      s.premiumDonorMinExcess = parseInt($("#tmwh_premiumDonorMinExcess").val(), 10);
-
-      s.sendAllEnabled = $("#tmwh_sendAllEnabled").is(":checked");
-      s.sendAllIntervalMs = parseInt($("#tmwh_sendAllIntervalMs").val(), 10);
-
-      s.reservePerVillage    = parseInt($("#tmwh_reservePerVillage").val(), 10);
-      s.recruitReserve       = parseInt($("#tmwh_recruitReserve").val(),    10);
-      s.maxDistance          = parseInt($("#tmwh_maxDistance").val(),       10);
-      s.hqPriorityEnabled    = $("#tmwh_hqPriorityEnabled").is(":checked");
-      s.maxedOutPoints       = parseInt($("#tmwh_maxedOutPoints").val(), 10);
-
-      //Cluster Support
-      s.useClusters = $("#tmwh_useClusters").is(":checked");
-      s.numClusters = parseInt($("#tmwh_numClusters").val(), 10);
-      s.debugMode   = $("#tmwh_debugMode").is(":checked");
-
-      if (isNaN(s.lowPoints)) s.lowPoints = 1;
-      if (isNaN(s.highPoints)) s.highPoints = 12000;
-      if (isNaN(s.highFarm)) s.highFarm = 99999;
-      if (isNaN(s.builtOutPercentage)) s.builtOutPercentage = 0.25;
-      if (isNaN(s.recruitReserve))    s.recruitReserve    = 20000;
-      if (isNaN(s.needsMorePercentage)) s.needsMorePercentage = 0.85;
-      if (isNaN(s.maxedOutPoints) || s.maxedOutPoints <= 0) s.maxedOutPoints = 10471;
-      if (isNaN(s.lowPointsLongQueueHours)) s.lowPointsLongQueueHours = 3;
-
-      if (isNaN(s.numClusters)) s.numClusters = 1;
-
-      if (isNaN(s.premiumThreshold)) s.premiumThreshold = 50000;
-      if (isNaN(s.premiumMoveAmount)) s.premiumMoveAmount = 300000;
-      if (isNaN(s.premiumMinTradeAmount)) s.premiumMinTradeAmount = 70000;
-
-      if (isNaN(s.premiumMaxDistance)) s.premiumMaxDistance = 18;
-      if (isNaN(s.premiumMaxTargetFillPct)) s.premiumMaxTargetFillPct = 0.90;
-      if (isNaN(s.premiumMaxPlansHardCap)) s.premiumMaxPlansHardCap = 12;
-
-      if (isNaN(s.premiumDonorKeepPct)) s.premiumDonorKeepPct = 0.10;
-      if (isNaN(s.premiumDonorKeepMin)) s.premiumDonorKeepMin = 20000;
-      if (isNaN(s.premiumDonorMinExcess)) s.premiumDonorMinExcess = 5000;
-
-      if (isNaN(s.sendAllIntervalMs)) s.sendAllIntervalMs = 500;
-
-      s.builtOutPercentage = Math.max(0.01, Math.min(0.95, s.builtOutPercentage));
-      s.needsMorePercentage = Math.max(0.1, Math.min(0.95, s.needsMorePercentage));
-      s.lowPointsLongQueueHours = Math.max(0, Math.min(24, s.lowPointsLongQueueHours));
-
-      s.premiumThreshold = Math.max(0, s.premiumThreshold);
-      s.premiumMoveAmount = Math.max(0, s.premiumMoveAmount);
-      s.premiumMinTradeAmount = Math.max(0, s.premiumMinTradeAmount);
-
-      s.premiumMaxDistance = Math.max(1, s.premiumMaxDistance);
-      s.premiumMaxTargetFillPct = Math.max(0.1, Math.min(0.98, s.premiumMaxTargetFillPct));
-      s.premiumMaxPlansHardCap = Math.max(1, Math.min(50, s.premiumMaxPlansHardCap));
-
-      s.premiumDonorKeepPct = Math.max(0, Math.min(0.95, s.premiumDonorKeepPct));
-      s.premiumDonorKeepMin = Math.max(0, s.premiumDonorKeepMin);
-      s.premiumDonorMinExcess = Math.max(0, s.premiumDonorMinExcess);
-
-      s.sendAllIntervalMs = Math.max(100, s.sendAllIntervalMs);
-
-      if (isNaN(s.reservePerVillage)) s.reservePerVillage = 0;
-      if (isNaN(s.maxDistance))       s.maxDistance = 9999;
-
-      // hqPriorityEnabled is boolean, no sanitisation needed
-      s.reservePerVillage = Math.max(0, s.reservePerVillage);
-      s.maxDistance       = Math.max(1, s.maxDistance);
-
-      s.settingsOpen = $("#tmwh_settingsBody").hasClass("open");
-      s.premiumOptionsOpen = $("#tmwh_premiumBody").hasClass("open");
-
-      return s;
     }
 
     // Returns the cluster map SVG+legend as an HTML string for the React panel.
@@ -4076,7 +3255,7 @@
         return;
       }
       const hqLowPts  = state?.settings?.lowPoints     || 0;
-      const hqMaxPts  = state?.settings?.maxedOutPoints || 99999;
+      const hqMaxPts  = state?.settings?.maxedOutPoints || 10471;
       const hqTotal   = state.villagesData ? state.villagesData.filter(v => v.points >= hqLowPts && v.points < hqMaxPts).length : 0;
       const hqSkippedCount = state.villagesData ? state.villagesData.length - hqTotal : 0;
       document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
@@ -4165,7 +3344,7 @@
       } catch (err) { console.error('[WH] setCoordLock failed', err); }
     });
     document.addEventListener('xbot:balancer:clearPpLocks', () => {
-      try { localStorage.removeItem('tm_whbalancer_pp_locks_v2'); } catch (e) { console.error(e); }
+      try { localStorage.removeItem(PP_LOCKS_KEY); } catch (e) { console.error(e); }
     });
     document.addEventListener('xbot:balancer:cancelPlan', (e) => {
       try {
@@ -4476,38 +3655,7 @@
       renderPpLockStatus();
     }
 
-    async function run() {
-      const savedHq = loadHqData();
-
-      state = {
-        settings: loadSettings(),
-        planTimers: new Map(),
-        incomingRes: {},
-        villagesData: [],
-        averages: null,
-        cleanLinks: [],
-        hqData: savedHq.data,
-        hqBoostedIds: new Set(),
-        hqLastFetchMs: savedHq.timestamp, 
-        pendingSends: [],   
-        sendAllTimer: null,
-
-        // Cluster support
-        useClusters: false,
-        numClusters: 1,
-
-        debugMode: false,
-        pendingSendsTTLHours: 2,
-        hqNormalQueueMaxHours: 6,
-
-      };
-
-      showMainDialog();
-      await resumePersistedPlans();
-    }
-
     return {
-      run,
       sendResource: sendResource,
       listPpPlans: () => loadPpPlans(),
       listPpLocks: () => loadPpLocks(),

@@ -1,0 +1,2 @@
+- [User Profile](user_role.md) — developer of xBot Chrome extension for TribalWars PT, works in TypeScript + vanilla JS
+- [WH Balancer Two-Entry Architecture](project_wh_balancer.md) — old xBalancer button path vs new React overlay path, what is dead code

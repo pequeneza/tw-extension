@@ -18,8 +18,8 @@
 (function () {
     'use strict';
 
-    /* ── re-open if already loaded ───────────────────────────────────────── */
-    if (window.__twPlaneadorLoaded) { window.__twPlaneadorOpen?.(); return; }
+    /* ── re-entry guard ─────────────────────────────────────────────────── */
+    if (window.__twPlaneadorLoaded) return;
     window.__twPlaneadorLoaded = true;
 
     const _screen = new URLSearchParams(window.location.search).get('screen');
@@ -362,6 +362,8 @@
     let _countdownTimer = null;
     let _docked = true;
     let _cmdType = 'Attack';
+    let _destroyDrag = null;
+    let _destroyResize = null;
 
     const CSS = `
 #sim-overlay { position:fixed; top:60px; left:50%; transform:translateX(-50%); z-index:99999;
@@ -695,6 +697,9 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
 
         /* Drag — disabled while docked */
         const draggable = makeDraggable(overlay, document.getElementById('sim-titlebar'));
+        const resizable = makeResizable(overlay, document.getElementById('sim-resize-handle'));
+        _destroyDrag   = () => draggable.destroy();
+        _destroyResize = () => resizable.destroy();
         draggable.disable();
 
         /* Dock button — toggles between embedded and floating */
@@ -722,6 +727,8 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
         /* Close button */
         document.getElementById('sim-close').addEventListener('click', () => {
             if (_countdownTimer) { clearInterval(_countdownTimer); _countdownTimer = null; }
+            _destroyDrag?.(); _destroyDrag = null;
+            _destroyResize?.(); _destroyResize = null;
             _docked = true;
             overlay.remove();
             document.getElementById('sim-toggle-btn')?.classList.remove('sim-btn-active');
@@ -950,31 +957,43 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
         return {
-            enable()  { enabled = true; },
-            disable() { enabled = false; dragging = false; },
+            enable()   { enabled = true; },
+            disable()  { enabled = false; dragging = false; },
+            destroy()  {
+                handle.removeEventListener('mousedown', onDown);
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            },
         };
     }
 
     /* ── Resize helper ───────────────────────────────────────────────────── */
     function makeResizable(el, handle) {
         let sx, sy, sw, sh, active = false;
-        handle.addEventListener('mousedown', e => {
+        const onDown = e => {
             if (el.classList.contains('sim-docked')) return;
             sx = e.clientX; sy = e.clientY;
             sw = el.offsetWidth; sh = el.offsetHeight;
             active = true;
             e.preventDefault(); e.stopPropagation();
-        });
-        document.addEventListener('mousemove', e => {
+        };
+        const onMove = e => {
             if (!active) return;
             el.style.width  = Math.max(500, sw + (e.clientX - sx)) + 'px';
             el.style.height = Math.max(260, sh + (e.clientY - sy)) + 'px';
-        });
-        document.addEventListener('mouseup', () => { active = false; });
+        };
+        const onUp = () => { active = false; };
+        handle.addEventListener('mousedown', onDown);
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+        return {
+            destroy() {
+                handle.removeEventListener('mousedown', onDown);
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            },
+        };
     }
-
-    /* ── Expose re-open hook ─────────────────────────────────────────────── */
-    window.__twPlaneadorOpen = openDialog;
 
     /* ── Toggle button ───────────────────────────────────────────────────── */
     function ensureToggleButton() {
@@ -991,8 +1010,10 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
         btn.addEventListener('click', () => {
             const existing = document.getElementById('sim-overlay');
             if (existing) {
-                existing.remove();
                 if (_countdownTimer) { clearInterval(_countdownTimer); _countdownTimer = null; }
+                _destroyDrag?.(); _destroyDrag = null;
+                _destroyResize?.(); _destroyResize = null;
+                existing.remove();
                 btn.classList.remove('sim-btn-active');
             } else {
                 openDialog().then(() => btn.classList.add('sim-btn-active'));
@@ -1018,6 +1039,9 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
     }
 
     function initMemo() {
+        /* kumin_gluer sets this flag synchronously — if it's active, let it own the queue */
+        if (window.__twKuminGluerRunning) return;
+
         const raw = localStorage.getItem(KUMIN_QUEUE_KEY);
         if (!raw) return;
         let queue;

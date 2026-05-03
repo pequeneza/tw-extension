@@ -121,21 +121,7 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
   top: unset; 
 }
 
-.trigger-snipe-count {
-  position: absolute;
-  top: -5px;
-  right: -5px;
-  background: var(--r500);
-  color: #fff;
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 1;
-  padding: 2px 3px;
-  border-radius: 6px;
-  pointer-events: none;
-}
-
-.trigger-desviador-count {
+.trigger-badge-count {
   position: absolute;
   top: -5px;
   right: -5px;
@@ -1623,8 +1609,8 @@ select.input {
   border-radius: 3px;
 }
 .trigger-icon-img {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   object-fit: contain;
   display: block;
   border-radius: 2px;

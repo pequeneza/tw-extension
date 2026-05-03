@@ -725,18 +725,18 @@ export function OverlayRoot() {
         <button className={`trigger${open ? " trigger--open" : ""}`}
           onClick={() => setOpen((o) => !o)} title="xBot" aria-label="xBot">⚡</button>
 
-        {gapCount > 0 && (
+        {gapCount > 0 && isOn("tw_snipe_scheduler") && (
           <button className="trigger trigger--snipe" onClick={openSnipe}
             title={`${gapCount} gap${gapCount !== 1 ? "s" : ""} — open snipe planner`}
             aria-label="Snipe planner">
-            🏹<span className="trigger-snipe-count">{gapCount}</span>
+            🏹<span className="trigger-badge-count">{gapCount}</span>
           </button>
         )}
 
-        {isInfoVillage && (
+        {isInfoVillage && isOn("kumin_gluer") && (
           <button className="trigger trigger--gluer"
             onClick={() => { setViewP({ type: "gluer" }); setOpen(true); }}
-            title="Kumin Gluer — clica num ataque para calcular tempos"
+            title="Kumin Gluer"
             aria-label="Kumin Gluer">
             <img src={chrome.runtime.getURL("icons/colatudo.png")}
                  alt="Kumin Gluer" className="trigger-icon-img" />
@@ -749,7 +749,7 @@ export function OverlayRoot() {
             aria-label="Desviador">
             🔀
             {desvActive && desvCount > 0 && (
-              <span className="trigger-snipe-count">{desvCount}</span>
+              <span className="trigger-badge-count">{desvCount}</span>
             )}
           </button>
         )}

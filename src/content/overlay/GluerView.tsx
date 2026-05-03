@@ -50,10 +50,16 @@ const UNIT_MIN_PER_FIELD: Record<string, number> = {
   snob: 35, knight: 10,
 };
 
-// Slowest → fastest (for display / candidate ordering)
+// Slowest → fastest — algorithmic use only (candidate computation, departure ordering)
 const UNIT_ORDER_SLOW_TO_FAST: string[] = [
   "snob", "catapult", "ram", "sword", "spear", "axe", "archer",
   "heavy", "knight", "marcher", "light", "spy",
+];
+
+// Standard TW display order — matches every game screen (training, overview, rally point)
+const UNIT_ORDER_DISPLAY: string[] = [
+  "spear", "sword", "axe", "archer", "spy", "light", "marcher",
+  "heavy", "ram", "catapult", "snob", "knight",
 ];
 
 /* ─── Types ───────────────────────────────────────────────────────────────── */
@@ -380,8 +386,8 @@ function GluerCandidateCard({ cand, target, arrivalMs, commandType, onQueue, que
 
   const { x, y } = cand.src.coord;
   const hasSelection = Object.values(amounts).some(v => v > 0);
-  // All units to display: enabled units that are in UNIT_ORDER_SLOW_TO_FAST
-  const displayUnits = UNIT_ORDER_SLOW_TO_FAST.filter(u => enabledUnits.has(u));
+  // All units to display: enabled units in standard TW display order
+  const displayUnits = UNIT_ORDER_DISPLAY.filter(u => enabledUnits.has(u));
 
   return (
     <div className={`snipe-card${queued ? " gluer-card--queued" : ""}`}>
@@ -749,7 +755,7 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
             </span>
           </div>
           <div className="gluer-unit-filter">
-            {UNIT_ORDER_SLOW_TO_FAST.map(unit => {
+            {UNIT_ORDER_DISPLAY.map(unit => {
               const on = enabledUnits.has(unit);
               return (
                 <div key={unit}

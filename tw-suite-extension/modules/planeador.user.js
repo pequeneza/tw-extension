@@ -1027,6 +1027,11 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
                 processKuminQueue(queue);
             } else if (++attempts < 50) {
                 setTimeout(waitForForm, 250);
+            } else {
+                /* Form never appeared — restore queue so it is not lost */
+                if (!localStorage.getItem(KUMIN_QUEUE_KEY)) {
+                    localStorage.setItem(KUMIN_QUEUE_KEY, JSON.stringify(queue));
+                }
             }
         };
         setTimeout(waitForForm, 600);

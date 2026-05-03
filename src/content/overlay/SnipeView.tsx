@@ -28,6 +28,12 @@ const UNIT_ORDER_FAST_TO_SLOW: string[] = [
   "spear", "axe", "archer", "sword", "ram", "catapult", "snob",
 ].filter((u) => u in UNIT_MIN_PER_FIELD);
 
+// Standard TW display order — matches every game screen (training, overview, rally point)
+const UNIT_ORDER_DISPLAY: string[] = [
+  "spear", "sword", "axe", "archer", "spy", "light", "marcher",
+  "heavy", "ram", "catapult", "snob", "knight",
+];
+
 /* ─── Types ───────────────────────────────────────────────────────────────── */
 interface Incoming { arrivalMs: number; label: string; target: Coord; }
 interface Coord    { x: number; y: number; }
@@ -464,6 +470,10 @@ function CandidateCard({ candidate, target, midGapArrivalMs }: {
     );
   }, [candidate, amounts, target, midGapArrivalMs]);
 
+  const allowedSet   = new Set(candidate.allowedUnits);
+  // Render in standard TW display order, not in algorithmic fast-to-slow order
+  const displayUnits = UNIT_ORDER_DISPLAY.filter(u => allowedSet.has(u));
+
   const { x, y } = candidate.src.coord;
   return (
     <div className="snipe-card">
@@ -485,7 +495,7 @@ function CandidateCard({ candidate, target, midGapArrivalMs }: {
         <button className="btn btn-save btn-save--dirty" onClick={openSupport}>Open support</button>
       </div>
       <div className="snipe-units">
-        {candidate.allowedUnits.map((unit) => {
+        {displayUnits.map((unit) => {
           const avail = candidate.src.troops[unit] ?? 0;
           const val   = amounts[unit] ?? 0;
           return (

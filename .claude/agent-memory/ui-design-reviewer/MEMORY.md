@@ -1,2 +1,3 @@
 - [User role and technical profile](user_role.md) — sole developer of xBot, works across React overlay and vanilla JS userscripts, expects changes applied directly
 - [TW native UI design tokens (game page)](project_tw_native_ui_tokens.md) — header colors, button palette, icon sizes; gold gradient only on light backgrounds, not dark headers
+- [Overlay trigger stack patterns](project_trigger_stack_patterns.md) — badge class name, image icon size (18px), tooltip style rules, Planeador exclusion rationale

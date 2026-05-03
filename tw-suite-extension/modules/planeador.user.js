@@ -363,13 +363,12 @@
     let _docked = true;
     let _cmdType = 'Attack';
     let _destroyDrag = null;
-    let _destroyResize = null;
 
     const CSS = `
 #sim-overlay { position:fixed; top:60px; left:50%; transform:translateX(-50%); z-index:99999;
                background:#f4e4bc; border:2px solid #7d5c2e; border-radius:6px;
                font-family:Verdana,sans-serif; font-size:12px; color:#3b2a1a;
-               box-shadow:0 4px 20px rgba(0,0,0,0.45); min-width:620px; max-width:1100px; }
+               box-shadow:0 4px 20px rgba(0,0,0,0.45); min-width:min(620px, 96vw); max-width:min(1100px, 99vw); }
 #sim-overlay * { box-sizing:border-box; }
 #sim-titlebar { background:#7d5c2e; color:#f4e4bc; padding:8px 12px; border-radius:4px 4px 0 0;
                 display:flex; align-items:center; justify-content:space-between; user-select:none; cursor:move; }
@@ -430,16 +429,10 @@ td[data-editable]:hover { outline:1px dashed #a07c2e; }
 td.sim-countdown { font-weight:bold; color:#3b2a1a; font-variant-numeric:tabular-nums; }
 td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alternate; }
 @keyframes sim-pulse { from { opacity:1; } to { opacity:0.4; } }
-#sim-overlay:not(.sim-docked) { display:flex; flex-direction:column; }
-#sim-overlay:not(.sim-docked) #sim-body { flex:1; max-height:none; overflow-y:auto; }
 #sim-overlay.sim-docked { position:static !important; transform:none !important; z-index:auto !important;
                            box-shadow:none !important; min-width:0 !important; max-width:100% !important;
                            margin:8px 0; border-radius:4px; }
 #sim-overlay.sim-docked #sim-titlebar { cursor:default; border-radius:3px 3px 0 0; }
-#sim-resize-handle { display:none; position:absolute; right:0; bottom:0; width:16px; height:16px; cursor:se-resize; }
-#sim-resize-handle::after { content:''; position:absolute; right:3px; bottom:3px; width:9px; height:9px;
-                             border-right:2px solid rgba(125,92,46,0.7); border-bottom:2px solid rgba(125,92,46,0.7); }
-#sim-overlay:not(.sim-docked) #sim-resize-handle { display:block; }
 #sim-toggle-btn {
     width: 25px;
     height: 25px;
@@ -502,13 +495,13 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
         ).join('');
 
         return `
-<div id="sim-overlay" style="position:relative">
+<div id="sim-overlay">
   <div id="sim-titlebar">
     <span>🗺️ Planeador</span>
     <div style="display:flex;gap:4px;align-items:center;">
-      <button id="sim-refresh-all" title="Preencher alvo com coordenadas da página e atualizar hora se estiver no passado">↻</button>
-      <button id="sim-dock" title="Soltar para flutuar">⊞</button>
-      <button id="sim-close" title="Fechar">✕</button>
+      <button type="button" id="sim-refresh-all" title="Preencher alvo com coordenadas da página e atualizar hora se estiver no passado">↻</button>
+      <button type="button" id="sim-dock" title="Soltar para flutuar">⊞</button>
+      <button type="button" id="sim-close" title="Fechar">✕</button>
     </div>
   </div>
   <div id="sim-controls">
@@ -523,16 +516,15 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
     <label>Sigilia(%)</label>
     <input name="sigilia" type="number" value="${saved.sigilia ?? 0}" min="0" max="100" />
     <div style="display:flex;align-items:center;gap:4px;flex-shrink:0;">
-      <button id="sim-calcular">CALCULAR</button>
-      <button class="sim-cmd-btn${(saved.commandType||'Attack')==='Attack' ? ' sim-cmd-active' : ''}" data-type="Attack" title="Ataque"><img src="https://dspt.innogamescdn.com/asset/48a2d4fb/graphic/command/attack.webp"></button>
-      <button class="sim-cmd-btn${(saved.commandType||'Attack')==='Support' ? ' sim-cmd-active' : ''}" data-type="Support" title="Apoio"><img src="https://dspt.innogamescdn.com/asset/48a2d4fb/graphic/command/support.webp"></button>
+      <button type="button" id="sim-calcular">CALCULAR</button>
+      <button type="button" class="sim-cmd-btn${(saved.commandType||'Attack')==='Attack' ? ' sim-cmd-active' : ''}" data-type="Attack" title="Ataque"><img src="https://dspt.innogamescdn.com/asset/48a2d4fb/graphic/command/attack.webp"></button>
+      <button type="button" class="sim-cmd-btn${(saved.commandType||'Attack')==='Support' ? ' sim-cmd-active' : ''}" data-type="Support" title="Apoio"><img src="https://dspt.innogamescdn.com/asset/48a2d4fb/graphic/command/support.webp"></button>
     </div>
     <input type="hidden" name="commandType" value="${saved.commandType || 'Attack'}" />
   </div>
   <div id="sim-status">Pronto. Insere o alvo e clica CALCULAR.</div>
   <div id="sim-body"></div>
   <div id="sim-pagination"></div>
-  <div id="sim-resize-handle"></div>
 </div>`;
     }
 
@@ -610,8 +602,8 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
   <td class="sim-departure">${depFmt}</td>
   <td class="sim-countdown${urgent ? ' sim-urgent' : ''}" data-dep="${depMs}">${remFmt}</td>
   <td>
-    <button class="btn-enviar" data-url="${encodeURIComponent(url)}">Enviar</button>
-    <button class="btn-kumin" data-kumin="${encodeURIComponent(JSON.stringify(kuminEntry))}">+ Kumin</button>
+    <button type="button" class="btn-enviar" data-url="${encodeURIComponent(url)}">Enviar</button>
+    <button type="button" class="btn-kumin" data-kumin="${encodeURIComponent(JSON.stringify(kuminEntry))}">+ Kumin</button>
   </td>
 </tr>`;
         }).join('');
@@ -697,9 +689,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
 
         /* Drag — disabled while docked */
         const draggable = makeDraggable(overlay, document.getElementById('sim-titlebar'));
-        const resizable = makeResizable(overlay, document.getElementById('sim-resize-handle'));
-        _destroyDrag   = () => draggable.destroy();
-        _destroyResize = () => resizable.destroy();
+        _destroyDrag = () => draggable.destroy();
         draggable.disable();
 
         /* Dock button — toggles between embedded and floating */
@@ -728,7 +718,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
         document.getElementById('sim-close').addEventListener('click', () => {
             if (_countdownTimer) { clearInterval(_countdownTimer); _countdownTimer = null; }
             _destroyDrag?.(); _destroyDrag = null;
-            _destroyResize?.(); _destroyResize = null;
+
             _docked = true;
             overlay.remove();
             document.getElementById('sim-toggle-btn')?.classList.remove('sim-btn-active');
@@ -939,58 +929,41 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
     /* ── Drag helper ─────────────────────────────────────────────────────── */
     function makeDraggable(el, handle) {
         let ox = 0, oy = 0, dragging = false, enabled = true;
+        const coords = e => e.touches ? { x: e.touches[0].clientX, y: e.touches[0].clientY }
+                                       : { x: e.clientX, y: e.clientY };
         const onDown = e => {
             if (!enabled) return;
             dragging = true;
-            ox = e.clientX - el.getBoundingClientRect().left;
-            oy = e.clientY - el.getBoundingClientRect().top;
+            const { x, y } = coords(e);
+            ox = x - el.getBoundingClientRect().left;
+            oy = y - el.getBoundingClientRect().top;
             e.preventDefault();
         };
         const onMove = e => {
             if (!dragging) return;
-            el.style.left      = (e.clientX - ox) + 'px';
-            el.style.top       = (e.clientY - oy) + 'px';
+            const { x, y } = coords(e);
+            el.style.left      = (x - ox) + 'px';
+            el.style.top       = (y - oy) + 'px';
             el.style.transform = 'none';
+            e.preventDefault();
         };
         const onUp = () => { dragging = false; };
         handle.addEventListener('mousedown', onDown);
+        handle.addEventListener('touchstart', onDown, { passive: false });
         document.addEventListener('mousemove', onMove);
+        document.addEventListener('touchmove', onMove, { passive: false });
         document.addEventListener('mouseup', onUp);
+        document.addEventListener('touchend', onUp);
         return {
             enable()  { enabled = true; },
             disable() { enabled = false; dragging = false; },
             destroy() {
                 handle.removeEventListener('mousedown', onDown);
+                handle.removeEventListener('touchstart', onDown);
                 document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('touchmove', onMove);
                 document.removeEventListener('mouseup', onUp);
-            },
-        };
-    }
-
-    /* ── Resize helper ───────────────────────────────────────────────────── */
-    function makeResizable(el, handle) {
-        let sx, sy, sw, sh, active = false;
-        const onDown = e => {
-            if (el.classList.contains('sim-docked')) return;
-            sx = e.clientX; sy = e.clientY;
-            sw = el.offsetWidth; sh = el.offsetHeight;
-            active = true;
-            e.preventDefault(); e.stopPropagation();
-        };
-        const onMove = e => {
-            if (!active) return;
-            el.style.width  = Math.max(500, sw + (e.clientX - sx)) + 'px';
-            el.style.height = Math.max(260, sh + (e.clientY - sy)) + 'px';
-        };
-        const onUp = () => { active = false; };
-        handle.addEventListener('mousedown', onDown);
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('mouseup', onUp);
-        return {
-            destroy() {
-                handle.removeEventListener('mousedown', onDown);
-                document.removeEventListener('mousemove', onMove);
-                document.removeEventListener('mouseup', onUp);
+                document.removeEventListener('touchend', onUp);
             },
         };
     }
@@ -1010,9 +983,10 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
         btn.addEventListener('click', () => {
             const existing = document.getElementById('sim-overlay');
             if (existing) {
+                existing.remove();
                 if (_countdownTimer) { clearInterval(_countdownTimer); _countdownTimer = null; }
                 _destroyDrag?.(); _destroyDrag = null;
-                _destroyResize?.(); _destroyResize = null;
+    
                 btn.classList.remove('sim-btn-active');
             } else {
                 openDialog().then(() => btn.classList.add('sim-btn-active'));
@@ -1038,14 +1012,14 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
     }
 
     function initMemo() {
-        /* kumin_gluer sets this flag synchronously — if it's active, let it own the queue */
-        if (window.__twKuminGluerRunning) return;
-
         const raw = localStorage.getItem(KUMIN_QUEUE_KEY);
         if (!raw) return;
         let queue;
         try { queue = JSON.parse(raw); } catch { return; }
         if (!Array.isArray(queue) || !queue.length) return;
+
+        /* Claim the queue immediately so KuminGluer (if also running) finds it empty */
+        localStorage.removeItem(KUMIN_QUEUE_KEY);
 
         let attempts = 0;
         const waitForForm = () => {
@@ -1062,7 +1036,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
         let idx = 0;
 
         function fillNext() {
-            if (idx >= queue.length) { localStorage.removeItem(KUMIN_QUEUE_KEY); return; }
+            if (idx >= queue.length) return;
             const e       = queue[idx++];
             const nameEl  = document.getElementById('quickAddName');
             const srcEl   = document.getElementById('quickAddSource');

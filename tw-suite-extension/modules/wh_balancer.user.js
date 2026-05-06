@@ -2958,6 +2958,21 @@
       };
     }
 
+    async function fetchAllHqData(villages, onProgress) {
+      const CONCURRENCY = 3;
+      const result = new Map();
+      for (let i = 0; i < villages.length; i += CONCURRENCY) {
+        const batch = villages.slice(i, i + CONCURRENCY);
+        if (onProgress) onProgress(i, villages.length);
+        const settled = await Promise.allSettled(batch.map(v => fetchHqNextBuilding(v.id)));
+        settled.forEach(s => {
+          if (s.status === 'fulfilled' && s.value?.villageId) result.set(s.value.villageId, s.value);
+        });
+        if (i + CONCURRENCY < villages.length) await new Promise(res => setTimeout(res, 300));
+      }
+      return result;
+    }
+
     async function runHqCheck() {
       const $panel = $("#tmwh_hq_panel");
       if (!$panel.length) return;
@@ -2989,28 +3004,22 @@
           if (check) results.push({ v, hq, check });
         }
       } else {
-        // No cached data — fetch fresh sequentially
+        // No cached data — fetch fresh in parallel batches
         const maxPts = state.settings.maxedOutPoints || 10471;
         const lowPts = state.settings.lowPoints || 0;
         const toCheck = villagesData.filter(v => v.points >= lowPts && v.points < maxPts);
         const skipped = villagesData.length - toCheck.length;
-        for (let i = 0; i < toCheck.length; i++) {
-          const v = toCheck[i];
-          $panel.html(`<div class="twmuted">Checking HQ queues… (${i + 1}/${toCheck.length}${skipped > 0 ? `, ${skipped} maxed out skipped` : ""})</div>`);
-          try {
-            const hq = await fetchHqNextBuilding(v.id);
-            const check = computeHqReadiness(v, hq);
-            if (check) results.push({ v, hq, check });
-          } catch (e) {
-            // skip villages that fail (e.g. sitter restrictions)
-          }
-          if (i < toCheck.length - 1) await new Promise(res => setTimeout(res, 300));
-        }
-        // Cache the freshly-fetched data for subsequent Check HQ calls
-        const freshMap = new Map();
-        results.forEach(({ v, hq }) => freshMap.set(String(v.id), hq));
+        const freshMap = await fetchAllHqData(toCheck, (done, total) => {
+          $panel.html(`<div class="twmuted">Checking HQ queues… (${done + 1}–${Math.min(done + 3, total)}/${total}${skipped > 0 ? `, ${skipped} maxed out skipped` : ""})</div>`);
+        });
         state.hqData = freshMap;
         state.hqLastFetchMs = getNowMs();
+        for (const v of toCheck) {
+          const hq = freshMap.get(String(v.id));
+          if (!hq) continue;
+          const check = computeHqReadiness(v, hq);
+          if (check) results.push({ v, hq, check });
+        }
       }
 
       if (!results.length) {
@@ -3284,30 +3293,23 @@
           }));
         } else {
           const toCheck = state.villagesData.filter(v => v.points >= lowPts && v.points < maxPts);
-          for (let i = 0; i < toCheck.length; i++) {
-            const v = toCheck[i];
-            const skipped = (state.villagesData ? state.villagesData.length : 0) - toCheck.length;
+          const skipped = (state.villagesData?.length ?? 0) - toCheck.length;
+          const freshMap = await fetchAllHqData(toCheck, (done, total) => {
             document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
-              detail: { loading: true, progress: i + 1, total: toCheck.length, skipped },
+              detail: { loading: true, progress: done + 1, total, skipped },
             }));
-            try {
-              const hq = await fetchHqNextBuilding(v.id);
-              const check = computeHqReadiness(v, hq);
-              const normalQueueMaxSecF = ((state.settings.hqNormalQueueMaxHours ?? 6)) * 3600;
-              const isLowPtsVF = v.points < (state.settings.lowPoints || 0);
-              const overQueueF = !isLowPtsVF && normalQueueMaxSecF > 0 && (hq?.queueEndsSec || 0) > normalQueueMaxSecF;
-              if (check) results.push({ villageName: v.name, villageUrl: v.url, villagePoints: v.points, overQueue: overQueueF, ...check });
-            } catch (_) { /* skip */ }
-            if (i < toCheck.length - 1) await new Promise(res => setTimeout(res, 300));
-          }
-          // Cache for next call
-          const freshMap = new Map();
-          results.forEach(r => {
-            const v = state.villagesData.find(vv => vv.name === r.villageName);
-            if (v) freshMap.set(String(v.id), { buildingName: r.buildingName, queueEndsSec: r.queueEndsSec, costWood: r.costWood, costStone: r.costStone, costIron: r.costIron });
           });
           state.hqData = freshMap;
           state.hqLastFetchMs = getNowMs();
+          const normalQueueMaxSec = ((state.settings.hqNormalQueueMaxHours ?? 6)) * 3600;
+          for (const v of toCheck) {
+            const hq = freshMap.get(String(v.id));
+            if (!hq) continue;
+            const check = computeHqReadiness(v, hq);
+            const isLowPtsV = v.points < (state.settings.lowPoints || 0);
+            const overQueue = !isLowPtsV && normalQueueMaxSec > 0 && (hq.queueEndsSec || 0) > normalQueueMaxSec;
+            if (check) results.push({ villageName: v.name, villageUrl: v.url, villagePoints: v.points, overQueue, ...check });
+          }
           document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
             detail: { results, cached: false, ageMin: 0 },
           }));
@@ -3554,26 +3556,16 @@
       let hqData = state.hqData || null;
 
       if (shouldFetchHq) {
-        hqData = new Map();
         const maxPts = state.settings.maxedOutPoints || 10471;
         const lowPts = state.settings.lowPoints || 0;
         const hqCandidates = villagesData.filter(v => v.points >= lowPts && v.points < maxPts);
         const hqSkipped    = villagesData.length - hqCandidates.length;
 
-        for (let i = 0; i < hqCandidates.length; i++) {
-          const v = hqCandidates[i];
-          $("#tmwh_summary").text(`Checking HQ build queues… (${i + 1}/${hqCandidates.length}${hqSkipped > 0 ? `, ${hqSkipped} skipped` : ""})`);
-          updateReactState({ running: true, statusText: `Checking HQ… (${i + 1}/${hqCandidates.length}${hqSkipped > 0 ? `, ${hqSkipped} skipped` : ""})` });
-          try {
-            const hq = await fetchHqNextBuilding(v.id);
-            if (hq?.villageId) hqData.set(hq.villageId, hq);
-          } catch (e) {
-            console.warn(`HQ fetch failed for village ${v.id}`, e);
-          }
-          if (i < hqCandidates.length - 1) {
-            await new Promise(res => setTimeout(res, 300));
-          }
-        }
+        hqData = await fetchAllHqData(hqCandidates, (done, total) => {
+          const label = `${done + 1}–${Math.min(done + 3, total)}/${total}${hqSkipped > 0 ? `, ${hqSkipped} skipped` : ""}`;
+          $("#tmwh_summary").text(`Checking HQ build queues… (${label})`);
+          updateReactState({ running: true, statusText: `Checking HQ… (${label})` });
+        });
 
         state.hqData = hqData;
         state.hqLastFetchMs = nowMs;

@@ -16,6 +16,7 @@ import React, {
 /* ─── Constants ───────────────────────────────────────────────────────────── */
 const STORAGE_KEY_PLAN   = "tw_gap_snipe_plan_v12";
 const STORAGE_KEY_MANUAL = "tw_snipe_manual_timings_v1";
+const SNIPE_QUEUE_KEY    = "tw_snipe_queue_v1";
 
 const UNIT_MIN_PER_FIELD: Record<string, number> = {
   spear: 18, sword: 22, axe: 18, archer: 18, spy: 9,
@@ -57,6 +58,19 @@ interface TimingRow { id: string; dt: string; ms: number; }
 interface ManualState {
   target: string;
   timings: Array<{ dt: string; ms: number }>;
+}
+
+interface SnipeQueueEntry {
+  id: string;
+  label: string;
+  source: string;
+  sourceVillageId: string | null;
+  target: Coord;
+  chosenSlowestUnit: string;
+  units: Record<string, number>;
+  sendMs: number;
+  arrivalMs: number;
+  midGapArrivalMs: number;
 }
 
 type Tab = "auto" | "manual";
@@ -122,6 +136,20 @@ function unitIconUrl(unit: string) {
 
 function makeId() {
   return `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
+function loadSnipeQueue(): SnipeQueueEntry[] {
+  try { return JSON.parse(localStorage.getItem(SNIPE_QUEUE_KEY) ?? "[]") ?? []; }
+  catch { return []; }
+}
+function saveSnipeQueue(q: SnipeQueueEntry[]) { localStorage.setItem(SNIPE_QUEUE_KEY, JSON.stringify(q)); }
+
+function toSnipeBBString(e: SnipeQueueEntry, idx: number): string {
+  const d    = new Date(e.arrivalMs);
+  const date = `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+  const time = `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}.${pad3(d.getMilliseconds())}`;
+  const send = fmtDateMs(e.sendMs).split(" ")[1];
+  return `#${idx+1} [b][color=#ff0000]${e.label}[/color][/b] | ${date} [b]${time}[/b] | ${e.source} → ${e.target.x}|${e.target.y} | envio: ${send}`;
 }
 
 /**
@@ -425,8 +453,11 @@ function useCountdown(sendMs: number, active: boolean) {
 }
 
 /* ─── CandidateCard ───────────────────────────────────────────────────────── */
-function CandidateCard({ candidate, target, midGapArrivalMs }: {
+function CandidateCard({ candidate, target, midGapArrivalMs, gapLabel, onQueue, queued }: {
   candidate: Candidate; target: Coord; midGapArrivalMs: number;
+  gapLabel: string;
+  onQueue: (entry: SnipeQueueEntry) => void;
+  queued: boolean;
 }) {
   const [amounts, setAmounts] = useState<Record<string, number>>(() =>
     Object.fromEntries(candidate.allowedUnits.map((u) => [u, 0]))
@@ -470,6 +501,28 @@ function CandidateCard({ candidate, target, midGapArrivalMs }: {
     );
   }, [candidate, amounts, target, midGapArrivalMs]);
 
+  const hasSelection = Object.values(amounts).some((v) => v > 0);
+
+  const handleQueue = useCallback(() => {
+    const units = Object.fromEntries(Object.entries(amounts).filter(([, v]) => v > 0));
+    if (!Object.keys(units).length) return;
+    const { x, y } = candidate.src.coord;
+    onQueue({
+      id: makeId(),
+      label: gapLabel || `Snipe ${fmtDateMs(candidate.arrivalMs).split(" ")[1]}`,
+      source: `${x}|${y}`,
+      sourceVillageId: candidate.src.villageId,
+      target,
+      chosenSlowestUnit: candidate.chosenSlowestUnit,
+      units,
+      sendMs: candidate.sendMs,
+      arrivalMs: candidate.arrivalMs,
+      midGapArrivalMs,
+    });
+    setAmounts(Object.fromEntries(candidate.allowedUnits.map((u) => [u, 0])));
+    setDrafts(Object.fromEntries(candidate.allowedUnits.map((u) => [u, "0"])));
+  }, [candidate, amounts, target, gapLabel, midGapArrivalMs, onQueue]);
+
   const allowedSet   = new Set(candidate.allowedUnits);
   // Render in standard TW display order, not in algorithmic fast-to-slow order
   const displayUnits = UNIT_ORDER_DISPLAY.filter(u => allowedSet.has(u));
@@ -493,6 +546,11 @@ function CandidateCard({ candidate, target, midGapArrivalMs }: {
         )}
         <button className="btn btn-ghost" onClick={selectAll}>Select all</button>
         <button className="btn btn-save btn-save--dirty" onClick={openSupport}>Open support</button>
+        <button
+          className={`btn${queued ? " btn-save btn-save--saved" : " btn-save btn-save--dirty"}`}
+          onClick={handleQueue}
+          disabled={past || !hasSelection}
+        >🎯 Queue</button>
       </div>
       <div className="snipe-units">
         {displayUnits.map((unit) => {
@@ -548,11 +606,13 @@ function GapPill({ idx, label, afterMs, beforeMs, selected, onClick }: {
 }
 
 /* ─── ManualTab ───────────────────────────────────────────────────────────── */
-function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor }: {
+function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor, onQueue, queuedSources }: {
   troops: VillageTroops[];
   loadingTroops: boolean;
   onLoadTroops: () => void;
   speedFactor: number;
+  onQueue: (entry: SnipeQueueEntry) => void;
+  queuedSources: Set<string>;
 }) {
   const saved = loadManualState();
 
@@ -774,12 +834,18 @@ function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor }: {
           {troops.length > 0 && candidates.length === 0 && (
             <div className="state-msg">No feasible candidates for this gap.</div>
           )}
-          {candidates.map((c, i) => (
-            <CandidateCard
-              key={`${c.src.villageId ?? i}-${c.sendMs}`}
-              candidate={c} target={target} midGapArrivalMs={midGapMs}
-            />
-          ))}
+          {candidates.map((c, i) => {
+            const srcKey = `${c.src.coord.x}|${c.src.coord.y}`;
+            return (
+              <CandidateCard
+                key={`${c.src.villageId ?? i}-${c.sendMs}`}
+                candidate={c} target={target} midGapArrivalMs={midGapMs}
+                gapLabel={`Gap #${gapIdx + 1}`}
+                onQueue={onQueue}
+                queued={queuedSources.has(srcKey)}
+              />
+            );
+          })}
         </div>
       )}
     </div>
@@ -808,6 +874,69 @@ export function SnipeView({ visible, onBack }: {
   const [autoError,  setAutoError]  = useState<string | null>(null);
   const [incomings,  setIncomings]  = useState<Incoming[]>([]);
   const [gapIdx,     setGapIdx]     = useState(0);
+
+  // Snipe queue
+  const [snipeQueue, setSnipeQueue] = useState<SnipeQueueEntry[]>(() => loadSnipeQueue());
+  const [bbCopied,   setBbCopied]   = useState(false);
+
+  function addToSnipeQueue(entry: SnipeQueueEntry) {
+    const next = [...snipeQueue, entry];
+    setSnipeQueue(next);
+    saveSnipeQueue(next);
+  }
+  function removeFromSnipeQueue(id: string) {
+    const next = snipeQueue.filter((e) => e.id !== id);
+    setSnipeQueue(next);
+    saveSnipeQueue(next);
+  }
+  function clearSnipeQueue() {
+    setSnipeQueue([]);
+    saveSnipeQueue([]);
+  }
+  function openQueueEntry(entry: SnipeQueueEntry) {
+    if (!entry.sourceVillageId) { alert("Village ID ausente — não é possível abrir."); return; }
+    localStorage.setItem(STORAGE_KEY_PLAN, JSON.stringify({
+      createdAt: Date.now(),
+      sourceVillageId: entry.sourceVillageId,
+      target: entry.target,
+      unitsToSend: entry.units,
+      midGapArrivalMs: entry.midGapArrivalMs,
+    }));
+    window.open(
+      `${location.origin}/game.php?village=${encodeURIComponent(entry.sourceVillageId)}&screen=place`,
+      "_blank", "noopener,noreferrer"
+    );
+  }
+  async function copySnipeBB() {
+    try {
+      await navigator.clipboard.writeText(snipeQueue.map((e, i) => toSnipeBBString(e, i)).join("\n"));
+      setBbCopied(true);
+      setTimeout(() => setBbCopied(false), 2200);
+    } catch { /* clipboard denied */ }
+  }
+
+  async function openInKumin() {
+    try { await navigator.clipboard.writeText(snipeQueue.map((e, i) => toSnipeBBString(e, i)).join("\n")); } catch { /* */ }
+    const kuminEntries = snipeQueue.map((e) => ({
+      name: e.label,
+      source: e.source,
+      target: `${e.target.x}|${e.target.y}`,
+      date: toDatetimeLocalMs(e.arrivalMs),
+      commandType: "Support",
+      slowestUnit: e.chosenSlowestUnit,
+      units: e.units,
+    }));
+    localStorage.setItem("twKuminGluer_queue", JSON.stringify(kuminEntries));
+    const vid = readCurrentVillageId();
+    const url = vid
+      ? `${location.origin}/game.php?village=${vid}&screen=memo`
+      : `${location.origin}/game.php?screen=memo`;
+    window.open(url, "_blank", "noopener,noreferrer");
+    setSnipeQueue([]);
+    saveSnipeQueue([]);
+  }
+
+  const queuedSources = new Set(snipeQueue.map((e) => e.source));
 
   const coordKey = (c: Coord) => `${c.x}|${c.y}`;
 
@@ -1011,12 +1140,18 @@ export function SnipeView({ visible, onBack }: {
                     {troops.length > 0 && candidates.length === 0 && (
                       <div className="state-msg">No feasible commands for this gap.</div>
                     )}
-                    {candidates.map((c, i) => (
-                      <CandidateCard
-                        key={`${c.src.villageId ?? i}-${c.sendMs}`}
-                        candidate={c} target={target!} midGapArrivalMs={midGapMs}
-                      />
-                    ))}
+                    {candidates.map((c, i) => {
+                      const srcKey = `${c.src.coord.x}|${c.src.coord.y}`;
+                      return (
+                        <CandidateCard
+                          key={`${c.src.villageId ?? i}-${c.sendMs}`}
+                          candidate={c} target={target!} midGapArrivalMs={midGapMs}
+                          gapLabel={filteredIncomings[gapIdx + 1]?.label || `Gap #${gapIdx + 1}`}
+                          onQueue={addToSnipeQueue}
+                          queued={queuedSources.has(srcKey)}
+                        />
+                      );
+                    })}
                   </div>
                 )}
               </>
@@ -1031,10 +1166,57 @@ export function SnipeView({ visible, onBack }: {
             loadingTroops={loadingTroops}
             onLoadTroops={loadTroops}
             speedFactor={speedFactor}
+            onQueue={addToSnipeQueue}
+            queuedSources={queuedSources}
           />
         )}
 
+        {/* Snipe queue */}
+        {snipeQueue.length > 0 && (
+          <div className="cfg-section">
+            <div className="section-label"
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingRight: 14 }}>
+              <span>Fila de snipes ({snipeQueue.length})</span>
+              <button className="btn btn-ghost"
+                style={{ flex: "none", fontSize: 10, padding: "1px 8px", color: "var(--r500)" }}
+                onClick={clearSnipeQueue}>
+                Limpar
+              </button>
+            </div>
+            <div style={{ padding: "0 14px" }}>
+              {snipeQueue.map((e, i) => (
+                <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 12 }}>
+                  <span style={{ color: "var(--n400)", minWidth: 18 }}>#{i + 1}</span>
+                  <span style={{ fontFamily: "var(--mono)", flex: 1 }}>{e.source} → {e.target.x}|{e.target.y}</span>
+                  <span style={{ color: "var(--n400)", fontFamily: "var(--mono)", fontSize: 11 }}>{fmtDateMs(e.sendMs).split(" ")[1]}</span>
+                  <button className="btn btn-save btn-save--dirty"
+                    style={{ fontSize: 11, padding: "1px 8px" }}
+                    onClick={() => openQueueEntry(e)}>
+                    Abrir
+                  </button>
+                  <button className="btn btn-ghost"
+                    style={{ fontSize: 11, padding: "1px 6px", color: "var(--r500)" }}
+                    onClick={() => removeFromSnipeQueue(e.id)}>
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
       </div>
+
+      {snipeQueue.length > 0 && (
+        <div className="cfg-footer" style={{ gap: 6 }}>
+          <button className="btn btn-ghost" onClick={copySnipeBB} style={{ flex: 1 }}>
+            {bbCopied ? "✓ Copiado" : "📋 Copiar BB"}
+          </button>
+          <button className="btn btn-save btn-save--dirty" onClick={openInKumin} style={{ flex: 1 }}>
+            🚀 Abrir no Kumin
+          </button>
+        </div>
+      )}
     </div>
   );
 }

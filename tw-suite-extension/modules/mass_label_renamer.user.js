@@ -216,10 +216,10 @@
         $radios.eq(labelIndex).prop('checked', true);
       }
 
-      $form.submit();
+      /* Click the button so name=label is included in the POST body —
+         $form.submit() omits the submit button value and TW ignores the request */
+      $btn[0].click();
 
-      /* Allow re-scheduling for the next cycle (handles AJAX submits that
-         don't reload the page; full reloads re-schedule naturally on boot) */
       _etiquetaScheduled = false;
     }, delayMs);
   }

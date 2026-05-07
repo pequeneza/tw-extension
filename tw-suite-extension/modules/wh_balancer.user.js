@@ -3467,18 +3467,26 @@
       const averages = computeTotalsAndAverages(villagesData, incomingRes);
 
       if (state.pendingSends.length) {
+        // TW's market overview (#trades_table) reflects new transports within ~60-90 s.
+        // For sends older than this threshold the incoming is already captured by
+        // fetchIncomingOverview above — crediting it again here would double-count,
+        // pushing the receiver above average and turning it into a spurious donor.
+        // For very recent sends the overview may not have updated yet, so we still
+        // credit them to prevent the receiver from being targeted a second time.
+        const MARKET_CATCHUP_MS = 90 * 1000;
         const vById = new Map(villagesData.map(v => [String(v.id), v]));
         for (const s of state.pendingSends) {
-          const src = vById.get(s.source);
-          const tgt = vById.get(s.target);
-          // Subtract from donor's current stock (they no longer have it)
+          const src     = vById.get(s.source);
+          const tgt     = vById.get(s.target);
+          const sendAge = nowMs - s.sentAt;
+          // Always subtract from donor — prod overview never shows in-transit resources
           if (src) {
             src.wood  = Math.max(0, src.wood  - s.wood);
             src.stone = Math.max(0, src.stone - s.stone);
             src.iron  = Math.max(0, src.iron  - s.iron);
           }
-          // Credit to receiver's incoming (they will receive it)
-          if (tgt) {
+          // Only credit receiver when the market overview likely hasn't caught up yet
+          if (tgt && sendAge < MARKET_CATCHUP_MS) {
             if (!incomingRes[s.target]) incomingRes[s.target] = { wood: 0, stone: 0, iron: 0 };
             incomingRes[s.target].wood  += s.wood;
             incomingRes[s.target].stone += s.stone;

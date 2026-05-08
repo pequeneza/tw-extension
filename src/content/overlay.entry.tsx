@@ -41,7 +41,7 @@ function mount(): void {
   mountPoint.addEventListener("keyup",    blockKey);
   mountPoint.addEventListener("keypress", blockKey);
 
-  createRoot(mountPoint).render(<OverlayRoot />);
+  createRoot(mountPoint).render(<OverlayRoot shadowHost={host} />);
 }
 
 if (document.body) {

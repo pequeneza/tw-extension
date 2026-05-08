@@ -71,6 +71,109 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
   --shadow-xl: 0 20px 40px -8px rgba(0,0,0,.16), 0 8px 16px -4px rgba(0,0,0,.08);
 }
 
+/* ── Dark / Tactical mode ────────────────────────────────────────────────── */
+:host([data-theme="dark"]) {
+  color-scheme: dark;
+  --bg:   #0f1117;
+  --n900: #e8eaf0;
+  --n700: #c4c8d4;
+  --n500: #9ca3af;
+  --n400: #6b7280;
+  --n300: #4b5563;
+  --n200: #2a2d3a;
+  --n150: #2a2d3a;
+  --n100: #1e2130;
+  --n50:  #161922;
+  --n0:   #1a1d27;
+  --bg-card: #1a1d27;
+  --shadow-md: 0 4px 6px -1px rgba(0,0,0,.32), 0 2px 4px -2px rgba(0,0,0,.24);
+  --shadow-xl: 0 20px 40px -8px rgba(0,0,0,.56), 0 8px 16px -4px rgba(0,0,0,.32);
+}
+:host([data-theme="dark"]) .panel,
+:host([data-theme="dark"]) .panel-header,
+:host([data-theme="dark"]) .cfg-view,
+:host([data-theme="dark"]) .cfg-header,
+:host([data-theme="dark"]) .cfg-footer { background: #0f1117; }
+:host([data-theme="dark"]) .search-wrap { background: #12161f; }
+:host([data-theme="dark"]) .search-input { background: #1a1d27; color: var(--n900); }
+:host([data-theme="dark"]) .card { background: #1a1d27; border-color: #2a2d3a; }
+:host([data-theme="dark"]) .card:hover { background: #1e2130; }
+:host([data-theme="dark"]) .card--on  { background: color-mix(in srgb, var(--g600) 10%, #1a1d27); }
+:host([data-theme="dark"]) .card--live { background: color-mix(in srgb, var(--g500) 12%, #1a1d27); }
+:host([data-theme="dark"]) .trigger { background: #1a1d27; border-color: #2a2d3a; color: var(--n500); }
+:host([data-theme="dark"]) .trigger:hover { background: #1e2130; color: var(--n900); }
+:host([data-theme="dark"]) .panel-footer,
+:host([data-theme="dark"]) .cfg-section-checks { background: #12161f; }
+:host([data-theme="dark"]) .stats-bar { background: #12161f; }
+:host([data-theme="dark"]) .snipe-gap-pill { background: #1a1d27; border-color: #2a2d3a; }
+:host([data-theme="dark"]) .snipe-card { background: #1a1d27; border-color: #2a2d3a; }
+:host([data-theme="dark"]) .close-btn,
+:host([data-theme="dark"]) .back-btn { background: #1e2130; border-color: #2a2d3a; }
+:host([data-theme="dark"]) .input { background: #1a1d27; border-color: #2a2d3a; color: var(--n900); }
+:host([data-theme="dark"]) .footer-btn { background: #1a1d27; border-color: #2a2d3a; color: var(--n500); }
+:host([data-theme="dark"]) .footer-btn:hover { background: #1e2130; color: var(--n900); }
+:host([data-theme="dark"]) .backdrop { background: rgba(0,0,0,0.55); }
+
+/* ── Stats bar ───────────────────────────────────────────────────────────── */
+.stats-bar {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  background: var(--b-bg);
+  border-bottom: 1px solid var(--b-br);
+  flex-shrink: 0;
+  padding: 0 12px;
+  gap: 0;
+}
+.stat-cell {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+}
+.stat-cell + .stat-cell {
+  border-left: 1px solid var(--b-br);
+  padding-left: 10px;
+  margin-left: 10px;
+}
+:host([data-theme="dark"]) .stat-cell + .stat-cell {
+  border-left-color: #2a2d3a;
+}
+.stat-label {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--n300);
+  white-space: nowrap;
+}
+.stat-value {
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--b500);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ── Theme toggle button ─────────────────────────────────────────────────── */
+.theme-btn {
+  width: 28px; height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--n150);
+  background: var(--n50);
+  color: var(--n400);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  transition: all var(--ease);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1;
+}
+.theme-btn:hover { background: var(--n100); border-color: var(--n200); color: var(--n700); }
+
 /* ── Trigger ─────────────────────────────────────────────────────────────── */
 .trigger-stack {
   position: fixed;
@@ -95,6 +198,8 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
   background: var(--n0);
   color: var(--n400);
   font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -104,7 +209,7 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
               border-color var(--ease), box-shadow var(--ease);
 }
 .trigger:hover {
-  width: 32px;
+  width: 34px;
   color: var(--n700);
   background: var(--n50);
   box-shadow: var(--shadow-xl);
@@ -114,6 +219,7 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
   background: var(--b-bg);
   border-color: var(--b-br);
   color: var(--b500);
+  box-shadow: 0 0 0 2px rgba(34,197,94,0.35), var(--shadow-md);
 }
 
 .trigger--snipe  { 
@@ -376,14 +482,13 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
 
 /* live (subset of on — stronger */
 .card--live { background: var(--g-bg); border-color: var(--g400); }
-.card--live::before { background: var(--g400); }
-.card--live::after {
-  content: 'LIVE';
-  position: absolute; top: 5px; right: 9px;
-  font-size: 8px; font-weight: 600;
-  letter-spacing: 0.06em;
-  color: var(--g500);
-  opacity: 0.8;
+.card--live::before {
+  background: var(--g400);
+  animation: border-glow 2s ease-in-out infinite;
+}
+@keyframes border-glow {
+  0%,100% { opacity: 1; box-shadow: 0 0 6px 1px var(--g400); }
+  50%      { opacity: .4; box-shadow: none; }
 }
 
 .card-icon {
@@ -1616,4 +1721,77 @@ select.input {
   display: block;
   border-radius: 2px;
 }
+
+/* ── Label + Renamer view ────────────────────────────────────────────────── */
+.trigger--label { position: relative; top: unset; }
+
+.label-tag-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 8px 14px 10px;
+}
+.label-tag-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px 3px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--n150);
+  background: var(--n0);
+  font-size: 11px;
+  color: var(--n700);
+  line-height: 1;
+}
+.label-tag-pill-name {
+  font-weight: 500;
+}
+.label-tag-count {
+  background: var(--n100);
+  color: var(--n500);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 8px;
+}
+
+.label-eta-bar-wrap {
+  padding: 4px 14px 10px;
+}
+.label-eta-text {
+  font-size: 11.5px;
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--a500);
+  margin-bottom: 5px;
+}
+.label-eta-track {
+  height: 4px;
+  background: var(--a-bg);
+  border: 1px solid var(--a-br);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.label-eta-fill {
+  height: 100%;
+  background: var(--a400);
+  border-radius: 2px;
+  transition: width 0.5s linear;
+}
+
+.label-action-help {
+  font-size: 10.5px;
+  color: var(--n300);
+  padding: 4px 14px 8px;
+}
+
+.label-footer-note {
+  padding: 10px 14px;
+  font-size: 10.5px;
+  color: var(--n300);
+  text-align: center;
+  border-top: 1px solid var(--n150);
+  flex-shrink: 0;
+}
+
 `;

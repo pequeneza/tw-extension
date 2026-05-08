@@ -14,6 +14,7 @@ import { BalancerView }   from "./BalancerView";
 import { DesviadorView }  from "./DesviadorView";
 import { GluerView }           from "./GluerView";
 import { ResourceBuyerView }  from "./ResourceBuyerView";
+import { LabelView }         from "./LabelView";
 
 /* ─── Storage ─────────────────────────────────────────────────────────────── */
 function storageGet(keys: string[]): Promise<Record<string, unknown>> {
@@ -34,6 +35,7 @@ type View = { type: "list" } |
             { type: "desviador" } |
             { type: "gluer" } |
             { type: "buyer" } |
+            { type: "label" } |
             { type: "license" };
 
 /* ─── useSettings — lives in OverlayRoot, never unmounts ─────────────────── */
@@ -438,9 +440,50 @@ function ModuleCard({ mod, isOn, isLive, hasCfg, onToggle, onCfg, index }: {
   );
 }
 
+/* ─── StatsBar ────────────────────────────────────────────────────────────── */
+function StatsBar() {
+  const [fakes,    setFakes]    = useState("0");
+  const [resMoved, setResMoved] = useState("—");
+  const [snipes,   setSnipes]   = useState("0");
+
+  useEffect(() => {
+    const tick = () => {
+      setFakes(localStorage.getItem("fake_sent_v1") ?? "0");
+      const raw = localStorage.getItem("wh_balancer_total_sent_v1");
+      setResMoved(raw !== null ? raw : "—");
+      try {
+        const arr = JSON.parse(localStorage.getItem("tw_snipe_queue_v1") ?? "[]");
+        setSnipes(String(Array.isArray(arr) ? arr.length : 0));
+      } catch {
+        setSnipes("0");
+      }
+    };
+    tick();
+    const id = setInterval(tick, 2000);
+    return () => clearInterval(id);
+  }, []);
+
+  return (
+    <div className="stats-bar">
+      <div className="stat-cell">
+        <span className="stat-label">Fakes</span>
+        <span className="stat-value">{fakes}</span>
+      </div>
+      <div className="stat-cell">
+        <span className="stat-label">Res moved</span>
+        <span className="stat-value">{resMoved}</span>
+      </div>
+      <div className="stat-cell">
+        <span className="stat-label">Snipes</span>
+        <span className="stat-value">{snipes}</span>
+      </div>
+    </div>
+  );
+}
+
 /* ─── Panel ───────────────────────────────────────────────────────────────── */
 function Panel({
-  visible, onClose, s, ready, isOn, toggle, view, setViewP,
+  visible, onClose, s, ready, isOn, toggle, view, setViewP, theme, onToggleTheme,
 }: {
   visible: boolean;
   onClose: () => void;
@@ -450,6 +493,8 @@ function Panel({
   toggle: (id: ModuleId) => void;
   view: View;
   setViewP: (v: View) => void;
+  theme: "light" | "dark";
+  onToggleTheme: () => void;
 }) {
   const [search, setSearch] = useState("");
   const searchRef           = useRef<HTMLInputElement>(null);
@@ -500,13 +545,22 @@ function Panel({
               </div>
             </div>
           </div>
-          <button className="close-btn" onClick={onClose} aria-label="Close">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <path d="M2 2l10 10M12 2L2 12" stroke="currentColor"
-                strokeWidth="1.8" strokeLinecap="round"/>
-            </svg>
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <button className="theme-btn" onClick={onToggleTheme}
+              aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              title={theme === "dark" ? "Light mode" : "Dark mode"}>
+              {theme === "dark" ? "☀" : "☾"}
+            </button>
+            <button className="close-btn" onClick={onClose} aria-label="Close">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M2 2l10 10M12 2L2 12" stroke="currentColor"
+                  strokeWidth="1.8" strokeLinecap="round"/>
+              </svg>
+            </button>
+          </div>
         </div>
+
+        {onCount > 0 && <StatsBar />}
 
         <div className="search-wrap">
           <svg className="search-icon" width="14" height="14" viewBox="0 0 20 20" fill="none">
@@ -556,6 +610,8 @@ function Panel({
                     setViewP({ type: "gluer" });
                   } else if (mod.id === "resource_buyer") {
                     setViewP({ type: "buyer" });
+                  } else if (mod.id === "mass_label_renamer") {
+                    setViewP({ type: "label" });
                   } else {
                     setViewP({ type: "config", id: mod.id });
                   }
@@ -617,6 +673,11 @@ function Panel({
         visible={view.type === "buyer"}
         onBack={() => setViewP({ type: "list" })}
       />
+      <LabelView
+        visible={view.type === "label"}
+        onBack={() => setViewP({ type: "list" })}
+        onClose={onClose}
+      />
       <LicenseView
         visible={view.type === "license"}
         onBack={() => setViewP({ type: "list" })}
@@ -627,7 +688,7 @@ function Panel({
 }
 
 /* ─── OverlayRoot ─────────────────────────────────────────────────────────── */
-export function OverlayRoot() {
+export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
   // Persist open/closed across page navigations (place→confirm→place loop)
   const [open, setOpenRaw] = useState(() =>
     sessionStorage.getItem("xbot_overlay_open") === "1"
@@ -639,6 +700,24 @@ export function OverlayRoot() {
       return val;
     });
   };
+
+  // Dark / light theme — read sessionStorage on mount, apply to shadow host
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    return (sessionStorage.getItem("xbot_theme") as "light" | "dark") ?? "light";
+  });
+  // Sync theme attribute to shadow host element on every change
+  useEffect(() => {
+    if (theme === "dark") {
+      (shadowHost as HTMLElement).dataset.theme = "dark";
+    } else {
+      delete (shadowHost as HTMLElement).dataset.theme;
+    }
+    sessionStorage.setItem("xbot_theme", theme);
+  }, [theme, shadowHost]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((t) => (t === "dark" ? "light" : "dark"));
+  }, []);
 
   // Settings live HERE — never unmount, never reset on close
   const { s, ready, isOn, toggle } = useSettings();
@@ -723,11 +802,12 @@ export function OverlayRoot() {
     return () => document.removeEventListener("xbot:gluer:select", h);
   }, []);
 
-  const isSnipe       = view.type === "snipe";
-  const isBalancer    = view.type === "balancer";
-  const isGluer       = view.type === "gluer";
+  const isSnipe        = view.type === "snipe";
+  const isBalancer     = view.type === "balancer";
+  const isGluer        = view.type === "gluer";
   const isInfoVillage  = /screen=info_village/.test(window.location.href);
   const isExchangePage = /screen=market.*mode=exchange/.test(window.location.href);
+  const isLabelPage    = /screen=overview_villages.*mode=incomings/.test(window.location.href);
   return (
     <>
       <div className="trigger-stack">
@@ -772,6 +852,12 @@ export function OverlayRoot() {
             onClick={() => { setViewP({ type: "buyer" }); setOpen(true); }}
             title="Resource Buyer" aria-label="Resource Buyer">🛒</button>
         )}
+
+        {isLabelPage && isOn("mass_label_renamer") && (
+          <button className="trigger trigger--label"
+            onClick={() => { setViewP({ type: "label" }); setOpen(true); }}
+            title="Label + Renamer" aria-label="Label + Renamer">🏷️</button>
+        )}
       </div>
       {/* Backdrop only shown when open */}
       <div className="backdrop" style={{ display: open ? "block" : "none" }}
@@ -788,6 +874,7 @@ export function OverlayRoot() {
           onClose={() => setOpen(false)}
           s={s} ready={ready} isOn={isOn} toggle={toggle}
           view={view} setViewP={setViewP}
+          theme={theme} onToggleTheme={toggleTheme}
         />
       </div>
     </>

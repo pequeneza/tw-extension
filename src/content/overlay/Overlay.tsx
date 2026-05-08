@@ -12,7 +12,8 @@ import { FakeSenderView }  from "./FakeSenderView";
 import { SnipeView }      from "./SnipeView";
 import { BalancerView }   from "./BalancerView";
 import { DesviadorView }  from "./DesviadorView";
-import { GluerView }      from "./GluerView";
+import { GluerView }           from "./GluerView";
+import { ResourceBuyerView }  from "./ResourceBuyerView";
 
 /* ─── Storage ─────────────────────────────────────────────────────────────── */
 function storageGet(keys: string[]): Promise<Record<string, unknown>> {
@@ -32,6 +33,7 @@ type View = { type: "list" } |
             { type: "balancer" } |
             { type: "desviador" } |
             { type: "gluer" } |
+            { type: "buyer" } |
             { type: "license" };
 
 /* ─── useSettings — lives in OverlayRoot, never unmounts ─────────────────── */
@@ -552,6 +554,8 @@ function Panel({
                     setViewP({ type: "balancer" });
                   } else if (mod.id === "kumin_gluer") {
                     setViewP({ type: "gluer" });
+                  } else if (mod.id === "resource_buyer") {
+                    setViewP({ type: "buyer" });
                   } else {
                     setViewP({ type: "config", id: mod.id });
                   }
@@ -607,6 +611,10 @@ function Panel({
       />
       <GluerView
         visible={view.type === "gluer"}
+        onBack={() => setViewP({ type: "list" })}
+      />
+      <ResourceBuyerView
+        visible={view.type === "buyer"}
         onBack={() => setViewP({ type: "list" })}
       />
       <LicenseView
@@ -715,10 +723,11 @@ export function OverlayRoot() {
     return () => document.removeEventListener("xbot:gluer:select", h);
   }, []);
 
-  const isSnipe   = view.type === "snipe";
-  const isBalancer = view.type === "balancer";
-  const isGluer   = view.type === "gluer";
-  const isInfoVillage = /screen=info_village/.test(window.location.href);
+  const isSnipe       = view.type === "snipe";
+  const isBalancer    = view.type === "balancer";
+  const isGluer       = view.type === "gluer";
+  const isInfoVillage  = /screen=info_village/.test(window.location.href);
+  const isExchangePage = /screen=market.*mode=exchange/.test(window.location.href);
   return (
     <>
       <div className="trigger-stack">
@@ -757,6 +766,12 @@ export function OverlayRoot() {
         <button className="trigger trigger--balancer"
           onClick={() => { setViewP({ type: "balancer" }); setOpen(true); }}
           title="WH Balancer" aria-label="WH Balancer">⚖️</button>
+
+        {isExchangePage && isOn("resource_buyer") && (
+          <button className="trigger trigger--buyer"
+            onClick={() => { setViewP({ type: "buyer" }); setOpen(true); }}
+            title="Resource Buyer" aria-label="Resource Buyer">🛒</button>
+        )}
       </div>
       {/* Backdrop only shown when open */}
       <div className="backdrop" style={{ display: open ? "block" : "none" }}

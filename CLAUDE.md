@@ -103,3 +103,81 @@ Overlay components (in `src/content/overlay/`) run in Shadow DOM. They:
 ## Additional Context
 
 Detailed architecture docs and WH Balancer algorithm specifics are in `AI_Context_Files/` at the repo root — read these before working on WH Balancer or the overlay bridge.
+
+---
+
+## Resource Buyer — Current State & Pending Work
+
+### What was done
+- `resource_buyer.user.js` was refactored from Tampermonkey userscript to Chrome extension context:
+  - Replaced `GM_getValue`/`GM_setValue` with `localStorage` (`tw_buyer_config` key)
+  - Fixed buy input selector from `input[name="buy_${res}"]` → `#premium_exchange_buy_${res} input`
+  - Increased default `MAX_PREMIUM_POINTS` from 300 → 5000
+  - Removed all vanilla JS UI (~170 lines)
+  - Added CustomEvent bridge (events below)
+- `src/content/overlay/ResourceBuyerView.tsx` created — React panel wired into the overlay
+- `Overlay.tsx` updated: View type `"buyer"` added, import, `onCfg` handler, `<ResourceBuyerView>` rendered
+
+### CustomEvent bridge (resource buyer)
+| Direction | Event name | Payload |
+|---|---|---|
+| Userscript → React | `xbot:buyer:state` | `{ running: bool, config: BuyerConfig }` |
+| React → Userscript | `xbot:buyer:start` | — |
+| React → Userscript | `xbot:buyer:stop` | — |
+| React → Userscript | `xbot:buyer:save` | `{ config: BuyerConfig }` |
+| React → Userscript | `xbot:buyer:getState` | — (probe) |
+
+### Confirmed working DOM selectors (tribalwars.com.pt exchange page)
+| Element | Selector | Notes |
+|---|---|---|
+| Village wood | `#wood` | textContent |
+| Village stone | `#stone` | textContent |
+| Village iron | `#iron` | textContent |
+| Storage capacity | `#storage` | textContent |
+| Premium points | `#premium_points` | textContent, value was 806 in testing |
+| Exchange stock wood | `#premium_exchange_stock_wood` | TD element |
+| Exchange stock stone | `#premium_exchange_stock_stone` | TD element |
+| Exchange stock iron | `#premium_exchange_stock_iron` | TD element |
+| Buy input wood | `#premium_exchange_buy_wood input` | inside TD |
+| Buy input stone | `#premium_exchange_buy_stone input` | inside TD |
+| Buy input iron | `#premium_exchange_buy_iron input` | inside TD |
+| Buy button | `.btn-premium-exchange-buy` | INPUT element (not A or button) |
+| Confirm dialog | `.confirmation-box` | ⚠ NOT yet verified live |
+| Confirm yes button | `.btn-confirm-yes` | ⚠ NOT yet verified live |
+
+### Pending fixes for ResourceBuyerView.tsx
+1. **Config sync bug** — `useEffect` in `ResourceBuyerView.tsx` re-syncs `cfg` from the userscript state on every probe (every 1.5s), overwriting the user's unsaved changes. Fix: only sync on first detection (use a `syncedRef` guard so subsequent state updates don't clobber dirty form state).
+
+2. **Resource icons** — Use the same game asset icons as `BalancerView.tsx`:
+   ```ts
+   const RES_ICON_URLS = {
+     wood:  "https://dspt.innogamescdn.com/asset/b2fb8d33/graphic/holz.png",
+     stone: "https://dspt.innogamescdn.com/asset/b2fb8d33/graphic/lehm.png",
+     iron:  "https://dspt.innogamescdn.com/asset/b2fb8d33/graphic/eisen.png",
+   };
+   ```
+   Replace the emoji labels (`🪵 Wood` etc.) with `<img>` icons matching the `ResIcon` component in `BalancerView.tsx`.
+
+3. **Field labels** — Current labels are unclear. Rename:
+   - `MAX_PREMIUM_POINTS` → "Max PP to spend" + help: "Pause buying when PP exceeds this value"
+   - `PURCHASE_PERCENTAGE` → "Fill target (0–1)" + help: "Buy until village reaches this fraction of storage. E.g. 0.7 = 70%"
+   - `MIN_STOCK_THRESHOLD` → "Min market stock" + help: "Skip a resource if the exchange has less than this amount available"
+   - `PREMIUM_POINTS_TIMEOUT` → "PP cooldown (ms)" + help: "How long to wait before retrying when PP is above max"
+   - `PAGE_RELOAD_INTERVAL` → "Safety reload (ms)" + help: "Reloads the page periodically while running to prevent stale state"
+
+4. **Trigger button** — Add a `🛒` trigger button to the `trigger-stack` in `Overlay.tsx`, visible only when on `screen=market&mode=exchange` and `isOn("resource_buyer")`. Pattern to follow:
+   ```tsx
+   {isExchangePage && isOn("resource_buyer") && (
+     <button className="trigger trigger--buyer"
+       onClick={() => { setViewP({ type: "buyer" }); setOpen(true); }}
+       title="Resource Buyer" aria-label="Resource Buyer">🛒</button>
+   )}
+   ```
+   Also add `.trigger--buyer { position: relative; top: unset; }` to `overlay-css.ts` (same as `.trigger--balancer` at line ~138).
+
+### Build command
+```bash
+npm run build
+```
+Always run after any change to `src/` or `tw-suite-extension/modules/`. The extension loads from `dist/`.
+After building, go to `chrome://extensions` and click ↺ reload on the extension.

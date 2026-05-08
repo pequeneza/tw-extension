@@ -136,6 +136,7 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
 }
 
 .trigger--balancer { position: relative; top: unset; }
+.trigger--buyer    { position: relative; top: unset; }
 
 /* ── Backdrop ────────────────────────────────────────────────────────────── */
 .backdrop {

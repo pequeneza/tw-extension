@@ -342,13 +342,27 @@
     if (isMemo) whenReady(initMemo);
 
     function initMemo() {
-        cacheKuminCommands();
+        /* Shared mutex: if planeador (or another instance) already claimed the queue
+         * in this page load, skip queue processing — go straight to caching. */
+        if (window.__kuminQueueClaimed) { cacheKuminCommands(); return; }
 
-        const raw = localStorage.getItem(QUEUE_KEY);
-        if (!raw) return;
-        let queue;
-        try { queue = JSON.parse(raw); } catch { return; }
-        if (!Array.isArray(queue) || !queue.length) return;
+        /* Read queue first — if there is one, process it before caching.
+         * Running cacheKuminCommands concurrently opens edit popups for
+         * existing rows while processQueue is also watching for a popup,
+         * causing check() to grab the wrong popup and create duplicate commands. */
+        let queue = null;
+        try {
+            const parsed = JSON.parse(localStorage.getItem(QUEUE_KEY));
+            if (Array.isArray(parsed) && parsed.length) queue = parsed;
+        } catch {}
+
+        if (!queue) {
+            cacheKuminCommands();
+            return;
+        }
+
+        /* Claim synchronously — same-thread mutex with planeador's initMemo. */
+        window.__kuminQueueClaimed = true;
 
         let attempts = 0;
         const waitForForm = () => {
@@ -356,6 +370,9 @@
                 processQueue(queue);
             } else if (++attempts < 50) {
                 setTimeout(waitForForm, 250);
+            } else {
+                window.__kuminQueueClaimed = false;
+                cacheKuminCommands();
             }
         };
         setTimeout(waitForForm, 600);
@@ -488,6 +505,10 @@
             if (idx >= queue.length) {
                 localStorage.removeItem(QUEUE_KEY);
                 console.log('[KuminGluer] All entries processed.');
+                // Cache now that no popups will be opened by processQueue
+                setTimeout(cacheKuminCommands, 1000);
+                // Auto-close if opened as a popup from the overlay
+                setTimeout(() => { try { window.close(); } catch {} }, 2500);
                 return;
             }
 
@@ -521,7 +542,8 @@
             function check() {
                 const popupDate = document.getElementById('popupDate');
                 const createBtn = findCreateNewButton();
-                if (popupDate && createBtn) {
+                // offsetParent === null means the element is hidden — wait for the real popup
+                if (popupDate && popupDate.offsetParent !== null && createBtn) {
                     nativeSet(popupDate, entry.date || '');
                     setUnitsInEditor(entry);
                     setTimeout(() => {

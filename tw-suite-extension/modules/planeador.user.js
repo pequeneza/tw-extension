@@ -781,7 +781,8 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
             document.querySelectorAll('#commands_outgoings tr.command-row').forEach(tr => {
                 if (tr.__simBound) return;
                 tr.__simBound = true;
-                tr.addEventListener('click', () => {
+                tr.addEventListener('click', (e) => {
+                    if (e.target.closest('button, .tw-incf-btn, [data-twincf], a.command-cancel, a.rename-icon')) return;
                     const endSpan = tr.querySelector('span[data-endtime]');
                     const endSec  = parseInt(endSpan?.getAttribute('data-endtime') || '0', 10);
                     if (!endSec) return;
@@ -815,6 +816,26 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
             if (kuminBtn) {
                 try {
                     const entry = JSON.parse(decodeURIComponent(kuminBtn.getAttribute('data-kumin')));
+
+                    /* Re-read the current arrival time from the inputs so that edits
+                     * made after CALCULAR (e.g. adjusting the ms field) are honoured. */
+                    const dateVal = overlay.querySelector('[name=date]').value.trim();
+                    const timeVal = overlay.querySelector('[name=time]').value.trim();
+                    const [timePart, msPart = '0'] = timeVal.split('.');
+                    const rawMs        = Math.max(0, Math.min(999, parseInt(msPart, 10) || 0));
+                    const parsedMs     = parseDatetime(dateVal, timePart);
+                    if (parsedMs) {
+                        const newArrivalMs = parsedMs + rawMs;
+                        // Travel duration is fixed per-village: arrival − departure at calc time
+                        const oldArrivalMs = new Date(entry.date).getTime();
+                        const travelMs     = oldArrivalMs - entry.sendMs;
+                        entry.sendMs       = newArrivalMs - travelMs;
+                        const ad = new Date(newArrivalMs);
+                        entry.date = `${ad.getFullYear()}-${pad2(ad.getMonth()+1)}-${pad2(ad.getDate())}`
+                                   + `T${pad2(ad.getHours())}:${pad2(ad.getMinutes())}:${pad2(ad.getSeconds())}`
+                                   + `.${String(newArrivalMs % 1000).padStart(3,'0')}`;
+                    }
+
                     const q = JSON.parse(localStorage.getItem('twKuminGluer_queue') || '[]');
                     q.push(entry);
                     localStorage.setItem('twKuminGluer_queue', JSON.stringify(q));
@@ -822,7 +843,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
                     const memoUrl = vid
                         ? `${location.origin}/game.php?village=${vid}&screen=memo`
                         : `${location.origin}/game.php?screen=memo`;
-                    window.open(memoUrl, '_blank', 'noopener,noreferrer');
+                    window.open(memoUrl, '_blank', 'width=1000,height=600,noopener,noreferrer');
                 } catch (err) {
                     console.error('[Planeador] Kumin queue error:', err);
                 }
@@ -1012,13 +1033,19 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
     }
 
     function initMemo() {
+        /* Shared mutex: if kumin_gluer (or another instance of this script) already
+         * claimed the queue in this page load, do nothing — one processor is enough. */
+        if (window.__kuminQueueClaimed) return;
+
         const raw = localStorage.getItem(KUMIN_QUEUE_KEY);
         if (!raw) return;
         let queue;
         try { queue = JSON.parse(raw); } catch { return; }
         if (!Array.isArray(queue) || !queue.length) return;
 
-        /* Claim the queue immediately so KuminGluer (if also running) finds it empty */
+        /* Claim synchronously before any async work — JS is single-threaded so this
+         * is safe: the second script to reach here sees the flag and exits. */
+        window.__kuminQueueClaimed = true;
         localStorage.removeItem(KUMIN_QUEUE_KEY);
 
         let attempts = 0;
@@ -1032,6 +1059,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
                 if (!localStorage.getItem(KUMIN_QUEUE_KEY)) {
                     localStorage.setItem(KUMIN_QUEUE_KEY, JSON.stringify(queue));
                 }
+                window.__kuminQueueClaimed = false;
             }
         };
         setTimeout(waitForForm, 600);
@@ -1068,7 +1096,8 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
             function check() {
                 const popupDate = document.getElementById('popupDate');
                 const createBtn = findCreateBtn();
-                if (popupDate && createBtn) {
+                // offsetParent === null means element is hidden — wait for the real visible popup
+                if (popupDate && popupDate.offsetParent !== null && createBtn) {
                     nativeSet(popupDate, entry.date || '');
                     setUnits(entry);
                     setTimeout(() => { createBtn.click(); setTimeout(onDone, 800); }, 400);

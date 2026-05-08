@@ -223,13 +223,27 @@
                 const arrivalTd = directTds[5];
                 if (!arrivalTd) { console.warn(`[Desviador] ${cmdId}: 6ª coluna não encontrada`); return; }
                 const msVal = parseInt(arrivalTd.querySelector('span.grey.small')?.textContent.trim() || '0', 10);
-                const timeMatch = arrivalTd.textContent.match(/(\d{2}):(\d{2}):(\d{2})/);
-                if (!timeMatch) { console.warn(`[Desviador] ${cmdId}: hora não reconhecida`); return; }
+                const cellText = arrivalTd.textContent;
+                // Try to match "DD.MM. [às] HH:MM:SS" first — present when arrival is not today
+                const dateTimeMatch = cellText.match(/(\d{1,2})\.(\d{1,2})\.\s*(?:às\s*)?(\d{2}):(\d{2}):(\d{2})/);
+                const timeOnlyMatch = !dateTimeMatch && cellText.match(/(\d{2}):(\d{2}):(\d{2})/);
+                if (!dateTimeMatch && !timeOnlyMatch) { console.warn(`[Desviador] ${cmdId}: hora não reconhecida`); return; }
 
-                const arrival = new Date(serverNowMs);
-                arrival.setHours(+timeMatch[1], +timeMatch[2], +timeMatch[3], msVal);
-                if (arrival.getTime() <= serverNowMs) arrival.setDate(arrival.getDate() + 1);
-                const arrivalMs = arrival.getTime();
+                let arrivalMs;
+                if (dateTimeMatch) {
+                    const serverNow = new Date(serverNowMs);
+                    const day = +dateTimeMatch[1], month = +dateTimeMatch[2] - 1;
+                    const h = +dateTimeMatch[3], m = +dateTimeMatch[4], s = +dateTimeMatch[5];
+                    const candidate = new Date(serverNow.getFullYear(), month, day, h, m, s, msVal);
+                    // Guard against year rollover (e.g. attack in Jan when today is Dec)
+                    if (candidate.getTime() <= serverNowMs) candidate.setFullYear(candidate.getFullYear() + 1);
+                    arrivalMs = candidate.getTime();
+                } else {
+                    const arrival = new Date(serverNowMs);
+                    arrival.setHours(+timeOnlyMatch[1], +timeOnlyMatch[2], +timeOnlyMatch[3], msVal);
+                    if (arrival.getTime() <= serverNowMs) arrival.setDate(arrival.getDate() + 1);
+                    arrivalMs = arrival.getTime();
+                }
 
                 const villageTd = row.querySelector('td.incoming_from') || directTds[1];
                 if (!villageTd) return;

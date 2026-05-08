@@ -148,6 +148,18 @@ function fmtCountdown(diffMs: number) {
   return `${sign}${pad2(h)}:${pad2(m)}:${pad2(s)}.${pad3(ms)}`;
 }
 
+function fmtPtDate(ms: number): string {
+  const now    = new Date(getServerNowMs());
+  const d      = new Date(ms);
+  const nowDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const dDay   = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const diff   = Math.round((dDay - nowDay) / 86_400_000);
+  const time   = `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}:${pad3(d.getMilliseconds())}`;
+  if (diff === 0) return `hoje às ${time}`;
+  if (diff === 1) return `amanhã às ${time}`;
+  return `a ${pad2(d.getDate())}.${pad2(d.getMonth()+1)}. às ${time}`;
+}
+
 function euclidean(a: Coord, b: Coord) {
   return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
 }
@@ -582,16 +594,13 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
   }
 
   async function openKumin() {
-    // Copy BB string too (same behaviour as Copy BB)
     try { await navigator.clipboard.writeText(bbStrings()); } catch { /* */ }
-    // Open Kumin — localStorage kept so the memo script can process the queue
     const villageId = attack?.villageId
       ?? window.location.search.match(/[?&]village=(\d+)/)?.[1];
     const url = villageId
       ? `${location.origin}/game.php?village=${villageId}&screen=memo`
       : `${location.origin}/game.php?screen=memo`;
-    window.open(url, "_blank", "noopener,noreferrer");
-    // Clear React state — memo script will clear localStorage when it finishes
+    window.open(url, "_blank", "width=1000,height=600,noopener,noreferrer");
     setQueueState([]);
   }
 
@@ -848,23 +857,52 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
               </button>
             </div>
             <div className="gluer-queue-list">
-              {queue.map((e, i) => (
-                <div key={e.id} className="gluer-queue-row">
-                  <div className="gluer-queue-info">
-                    <span className="gluer-queue-idx">#{i+1}</span>
-                    <img src={unitIconUrl(e.slowestUnit)} alt={e.slowestUnit} className="gluer-unit-icon" />
-                    <span className="gluer-queue-src">{e.source}</span>
-                    <span style={{ color: "var(--n300)", fontSize: 11 }}>→</span>
-                    <span className="gluer-queue-tgt">{e.target}</span>
-                    <span className="gluer-queue-time">{fmtDate(e.sendMs).split(" ")[1]}</span>
+              {queue.map((e, i) => {
+                const diff      = e.sendMs - now;
+                const sent      = diff <= 0;
+                const badgeClr  = sent ? "var(--n400)" : diff > 3_600_000 ? "var(--g600)" : diff > 600_000 ? "var(--a500)" : "var(--r500)";
+                const badgeBg   = sent ? "rgba(128,128,128,0.12)" : diff > 3_600_000 ? "rgba(0,180,0,0.12)" : diff > 600_000 ? "rgba(255,140,0,0.12)" : "rgba(220,30,30,0.12)";
+                const unitList  = UNIT_ORDER_DISPLAY.filter(u => (e.units[u] ?? 0) > 0);
+                return (
+                  <div key={e.id} className="gluer-queue-row" style={{ flexDirection: "column", alignItems: "stretch", gap: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span className="gluer-queue-idx">#{i+1}</span>
+                      <img src={unitIconUrl(e.slowestUnit)} alt={e.slowestUnit} className="gluer-unit-icon" />
+                      <span className="gluer-queue-src">{e.source}</span>
+                      <span style={{ color: "var(--n300)", fontSize: 11 }}>→</span>
+                      <span className="gluer-queue-tgt">{e.target}</span>
+                      <button
+                        className="btn btn-ghost"
+                        style={{ marginLeft: "auto", flex: "none", padding: "1px 6px", fontSize: 11, color: "var(--r500)" }}
+                        onClick={() => removeFromQueue(e.id)}
+                      >✕</button>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, paddingLeft: 36, paddingBottom: 2 }}>
+                      <span style={{ fontSize: 11, color: "var(--n400)", fontFamily: "var(--mono)" }}>
+                        {fmtPtDate(e.sendMs)}
+                      </span>
+                      <span style={{
+                        fontSize: 10, fontFamily: "var(--mono)", fontWeight: 700,
+                        color: badgeClr, background: badgeBg,
+                        border: `1px solid ${badgeClr}`, borderRadius: 4,
+                        padding: "1px 5px", flexShrink: 0,
+                      }}>
+                        {sent ? "enviado" : fmtCountdown(diff)}
+                      </span>
+                    </div>
+                    {unitList.length > 0 && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, paddingLeft: 36, paddingBottom: 6 }}>
+                        {unitList.map(u => (
+                          <span key={u} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+                            <img src={unitIconUrl(u)} alt={u} style={{ width: 16, height: 16 }} />
+                            <span style={{ fontSize: 11, color: "var(--n200)" }}>{e.units[u]}</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                  <button
-                    className="btn btn-ghost"
-                    style={{ flex: "none", padding: "1px 6px", fontSize: 11, color: "var(--r500)" }}
-                    onClick={() => removeFromQueue(e.id)}
-                  >✕</button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}

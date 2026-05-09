@@ -610,8 +610,6 @@ function Panel({
                     setViewP({ type: "gluer" });
                   } else if (mod.id === "resource_buyer") {
                     setViewP({ type: "buyer" });
-                  } else if (mod.id === "mass_label_renamer") {
-                    setViewP({ type: "label" });
                   } else {
                     setViewP({ type: "config", id: mod.id });
                   }

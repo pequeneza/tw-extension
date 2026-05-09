@@ -24,8 +24,11 @@
   var tamanho_letra     = 8;
 
   // Change 7: Read highlightMode and kbEnabled from config
-  var pagina_de_ataques = _cfg.highlightMode || 'coluna';
-  var kbEnabled         = _cfg.kbEnabled !== undefined ? _cfg.kbEnabled : true;
+  var pagina_de_ataques    = _cfg.highlightMode || 'coluna';
+  var kbEnabled            = _cfg.kbEnabled !== undefined ? _cfg.kbEnabled : true;
+  var originBadgeEnabled   = _cfg.originBadgeEnabled  !== undefined ? _cfg.originBadgeEnabled  : true;
+  var autoFakeEnabled      = _cfg.autoFakeEnabled      !== undefined ? _cfg.autoFakeEnabled      : false;
+  var autoFakeWindowMs     = (_cfg.autoFakeWindowSec   !== undefined ? _cfg.autoFakeWindowSec    : 10) * 1000;
 
   // ── Change 1: Revised PALETTE — stronger, distinct two-tone colors ──────────
   var PALETTE = {
@@ -234,6 +237,82 @@
     });
   }
 
+  // ── Fake-detection helpers ────────────────────────────────────────────────────
+
+  // Base travel speed in seconds per field (game_speed=1, unit_speed=1)
+  function getUnitBaseSpeedSec(row) {
+    var src = (window.$(row).find('img:eq(0)').attr('src') || '').toLowerCase();
+    if (src.indexOf('snob')     >= 0 || src.indexOf('nobre')   >= 0) return 2100; // noble 35 min
+    if (src.indexOf('ram')      >= 0)                                 return 1800; // ram   30 min
+    if (src.indexOf('catapult') >= 0 || src.indexOf('cat')     >= 0) return 1800; // cat   30 min
+    if (src.indexOf('heavy')    >= 0 || src.indexOf('hcav')    >= 0) return  660; // HC    11 min
+    if (src.indexOf('marcher')  >= 0 || src.indexOf('mounted') >= 0) return  600; // MA    10 min
+    if (src.indexOf('light')    >= 0 || src.indexOf('lcav')    >= 0) return  600; // LC    10 min
+    if (src.indexOf('spy')      >= 0 || src.indexOf('scout')   >= 0) return  540; // spy    9 min
+    if (src.indexOf('sword')    >= 0)                                 return 1320; // sword 22 min
+    return 1080; // spear / axe / archer  18 min
+  }
+
+  // Cache game speed values (available from window.game_data in main world)
+  var _gSpeed = null;
+  var _uSpeed = null;
+  function gameSpeedFactors() {
+    if (_gSpeed !== null) return;
+    _gSpeed = (window.game_data && parseFloat(window.game_data.speed))      || 1.0;
+    _uSpeed = (window.game_data && parseFloat(window.game_data.unit_speed)) || 1.0;
+  }
+
+  // Returns approximate send timestamp (ms) by back-calculating from "Chega em" + distance
+  // Columns (PT): 0=Comando, 1=Destino, 2=Origem, 3=Jogador, 4=Distância, 5=Chegada, 6=Chega em
+  function computeSendTimeMs(row) {
+    gameSpeedFactors();
+    var $row = window.$(row);
+
+    var chegaText = window.$.trim($row.find('td:eq(6)').text()).replace(',', '.');
+    var cp = chegaText.split(':');
+    if (cp.length < 2 || isNaN(parseInt(cp[0], 10))) return null;
+    var remainMs = ((parseInt(cp[0], 10) || 0) * 3600 +
+                   (parseInt(cp[1], 10) || 0) * 60  +
+                   (parseInt(cp[2], 10) || 0)) * 1000;
+
+    var dist = parseFloat(window.$.trim($row.find('td:eq(4)').text()).replace(',', '.'));
+    if (isNaN(dist) || dist <= 0) return null;
+
+    var travelMs = dist * getUnitBaseSpeedSec(row) * 1000 / (_gSpeed * _uSpeed);
+    return Date.now() + remainMs - travelMs;
+  }
+
+  // ── Auto-fake queue (throttled at 250 ms to avoid server rate-limit) ─────────
+  var _autoFakeQueue   = [];
+  var _autoFakeRunning = false;
+
+  function drainAutoFakeQueue() {
+    if (!_autoFakeQueue.length) { _autoFakeRunning = false; return; }
+    _autoFakeRunning = true;
+    var item  = _autoFakeQueue.shift();
+    var nr    = item[0];
+    var row   = item[1];
+    var $row  = window.$(row);
+    var $lbl  = $row.find('td:eq(0) .quickedit-label');
+    var name  = $lbl.length ? window.$.trim($lbl.text()) : window.$.trim($row.find('td:eq(0)').text());
+    if (singleTagIndex(name) === -1 && dualTagIndices(name) === null) {
+      $row.find('.rename-icon').click();
+      var $inp = $row.find('input[type=text]');
+      if ($inp.length) {
+        $inp.val($inp.val().split(' ')[0] + ' ' + TAGS[9][0]);
+        $row.find('input[type=button]').click();
+        injectChip(nr, row, 9);
+      }
+    }
+    setTimeout(drainAutoFakeQueue, 250);
+  }
+
+  function queueAutoFake(nr, row) {
+    window.$(row).data('mlr-auto-faked', true);
+    _autoFakeQueue.push([nr, row]);
+    if (!_autoFakeRunning) drainAutoFakeQueue();
+  }
+
   // ── Change 5: Module-scope deadline variable ─────────────────────────────────
   var _etiquetaDeadline = null;
 
@@ -309,22 +388,35 @@
   }
 
   // ── Change 6: Listen for bulk-fake CustomEvent ───────────────────────────────
+  // Processes one row at a time with a 500 ms gap to avoid TW rate-limiting.
   document.addEventListener('xbot:labelrenamer:bulk_fake', function () {
+    var queue = [];
     window.$('#incomings_table tr.nowrap').each(function (nr, row) {
       var $row   = window.$(row);
       var $label = $row.find('td:eq(0) .quickedit-label');
       var name   = $label.length ? window.$.trim($label.text()) : '';
       if (singleTagIndex(name) === -1 && dualTagIndices(name) === null) {
-        // Untagged → apply [Fake] (index 9 in TAGS)
-        $row.find('.rename-icon').click();
-        var $input = $row.find('input[type=text]');
-        if (!$input.length) return;
+        queue.push([nr, row]);
+      }
+    });
+
+    function processNext(i) {
+      if (i >= queue.length) return;
+      var nr   = queue[i][0];
+      var row  = queue[i][1];
+      var $row = window.$(row);
+      $row.find('.rename-icon').click();
+      var $input = $row.find('input[type=text]');
+      if ($input.length) {
         var base = $input.val().split(' ')[0];
         $input.val(base + ' ' + TAGS[9][0]);
         $row.find('input[type=button]').click();
         injectButtonsLegacy(nr, row);
       }
-    });
+      setTimeout(function () { processNext(i + 1); }, 250);
+    }
+
+    processNext(0);
   });
 
   // ── Change 4: Keyboard shortcuts ─────────────────────────────────────────────
@@ -392,7 +484,7 @@
 
   // ── Main polling loop (incomings table) ─────────────────────────────────────
   function runIncomingsTable() {
-    setInterval(function () {
+    function tick() {
       var $rows = window.$('#incomings_table tr.nowrap');
       if (!$rows.length) $rows = window.$('#incomings_table tbody tr');
 
@@ -434,9 +526,11 @@
         paintRow($row, row, name);
       });
 
-      // Detect Origem / Destino column indices from table headers each tick
-      var origimColIdx  = -1;
-      var destinoColIdx = -1;
+      // TW PT column order: Comando | Destino | Origem | Jogador | …
+      // Destino = td:eq(1) (our village), Origem = td:eq(2) (attacker).
+      // Header scan refines these if sort links are present.
+      var origimColIdx  = 2;
+      var destinoColIdx = 1;
       window.$('#incomings_table thead th').each(function (i, th) {
         var href = window.$(th).find('a').attr('href') || '';
         if (href.indexOf('start_village') >= 0)  origimColIdx  = i;
@@ -467,7 +561,7 @@
             tagCounts[tagKey] = (tagCounts[tagKey] || 0) + 1;
           }
 
-          if (origimColIdx === -1) return;
+          if ((!originBadgeEnabled && !autoFakeEnabled) || origimColIdx === -1) return;
 
           // Origin village (who is attacking)
           var $origTd   = $r.find('td:eq(' + origimColIdx + ')');
@@ -478,8 +572,11 @@
                              .replace(/\s*\(\d+\|\d+\)\s*/, '').trim() || origCoords;
 
           if (!originsMap[origCoords]) {
-            originsMap[origCoords] = { name: origName, targets: {} };
+            originsMap[origCoords] = { name: origName, targets: {}, cmds: [], sendTimes: [] };
           }
+
+          // Always record send time for fake-detection
+          originsMap[origCoords].sendTimes.push(computeSendTimeMs(row));
 
           // Destination village (which of our villages is being attacked)
           if (destinoColIdx !== -1) {
@@ -490,12 +587,16 @@
               var destName   = window.$.trim($destTd.find('a').first().text())
                                  .replace(/\s*\(\d+\|\d+\)\s*/, '').trim() || destCoords;
               originsMap[origCoords].targets[destCoords] = destName;
+              originsMap[origCoords].cmds.push((rname || '?') + ' → ' + (destName || destCoords));
             }
           }
         });
 
+        // Remove badges if feature was disabled mid-session
+        if (!originBadgeEnabled) { window.$('.mlr-multi-badge').remove(); }
+
         // Inject / update multi-target badges in the Origem column
-        if (origimColIdx !== -1) {
+        if (originBadgeEnabled && origimColIdx !== -1) {
           $rows.each(function (_, row) {
             var $row    = window.$(row);
             var $td     = $row.find('td:eq(' + origimColIdx + ')');
@@ -515,17 +616,47 @@
             if ($badge.length && parseInt($badge.attr('data-tc') || '0', 10) === targetCount) return;
             $badge.remove();
 
-            var col         = targetCount >= 3 ? '#ef4444' : '#f59e0b';
-            var targetList  = Object.values(info.targets).join(', ');
-            var badgeHtml   =
+            var col      = targetCount >= 3 ? '#ef4444' : '#f59e0b';
+            var tooltip  = ('A atacar ' + targetCount + ' alvos:\n' + info.cmds.join('\n'))
+                             .replace(/"/g, '“');
+            var badgeHtml =
               '<span class="mlr-multi-badge" data-tc="' + targetCount + '"' +
-              ' title="A atacar ' + targetCount + ' aldeias: ' + targetList + '"' +
+              ' title="' + tooltip + '"' +
               ' style="display:inline-flex;align-items:center;margin-left:3px;padding:0 4px;' +
               'background:' + col + ';color:#fff;border-radius:3px;font-size:9px;font-weight:700;' +
               'line-height:1.6;cursor:help;vertical-align:middle;letter-spacing:-0.02em;">×' +
               targetCount + '</span>';
             $td.find('a').last().after(badgeHtml);
           });
+        }
+
+        // ── Auto-fake detection ───────────────────────────────────────────────
+        if (autoFakeEnabled) {
+          // Find origins whose attacks cluster within the configured send window
+          var likelyFakeOrigins = {};
+          for (var oc in originsMap) {
+            var times = originsMap[oc].sendTimes.filter(function (t) { return t !== null; });
+            if (times.length < 2) continue;
+            var spread = Math.max.apply(null, times) - Math.min.apply(null, times);
+            if (spread <= autoFakeWindowMs) likelyFakeOrigins[oc] = true;
+          }
+
+          if (Object.keys(likelyFakeOrigins).length) {
+            $rows.each(function (nr, row) {
+              var $rr = window.$(row);
+              if ($rr.data('mlr-auto-faked')) return; // already processed
+
+              var oMatch = $rr.find('td:eq(' + origimColIdx + ')').text().match(/\((\d+)\|(\d+)\)/);
+              if (!oMatch || !likelyFakeOrigins[oMatch[0]]) return;
+
+              // Only auto-tag untagged rows
+              var $ll  = $rr.find('td:eq(0) .quickedit-label');
+              var nm   = $ll.length ? window.$.trim($ll.text()) : window.$.trim($rr.find('td:eq(0)').text());
+              if (singleTagIndex(nm) !== -1 || dualTagIndices(nm) !== null) return;
+
+              queueAutoFake(nr, row);
+            });
+          }
         }
 
         sessionStorage.setItem('mlr_stats_v1', JSON.stringify({
@@ -537,7 +668,11 @@
         }));
       } catch (e) {}
 
-    }, 250);
+    }
+
+    // Run immediately so first paint happens without delay, then poll every 1 s
+    tick();
+    setInterval(tick, 1000);
 
     // Change 4: set up keyboard shortcuts once table exists
     if (kbEnabled) {
@@ -546,10 +681,48 @@
   }
 
   // ── Legacy path: main overview ───────────────────────────────────────────────
+  // Uses MutationObserver instead of polling — fires only when DOM changes.
   function runLegacy() {
-    window.$('#commands_incomings .command-row').each(function (nr, row) {
-      if (!isSupport(row)) injectButtonsLegacy(nr, row);
-    });
+    function processRows() {
+      window.$('#commands_incomings .command-row').each(function (nr, row) {
+        if (isSupport(row)) return;
+
+        var $row     = window.$(row);
+        var $cmdCell = $row.find('td:eq(0)');
+        if (!$cmdCell.length) return;
+
+        var $label = $cmdCell.find('.quickedit-label');
+        var name   = $label.length
+          ? window.$.trim($label.text())
+          : window.$.trim($cmdCell.text());
+        if (!name) return;
+
+        var hasButtons = $row.find('.rename-buttons').length > 0;
+        var hasChip    = $row.find('.mlr-chip').length > 0;
+        var hasQE      = $row.find('.quickedit-content').length > 0;
+
+        if (!hasButtons && !hasChip && hasQE) {
+          var existingIdx = singleTagIndex(name);
+          if (existingIdx !== -1) {
+            injectChip(nr, row, existingIdx);
+          } else {
+            injectButtonsLegacy(nr, row);
+          }
+        }
+
+        if ($row.data('bito-name') === name) return;
+        $row.data('bito-name', name);
+        paintRow($row, row, name);
+      });
+    }
+
+    // Initial pass on load
+    processRows();
+
+    // Watch for TW injecting/updating rows — no polling needed
+    var container = document.getElementById('commands_incomings') || document.body;
+    var obs = new MutationObserver(processRows);
+    obs.observe(container, { childList: true, subtree: true });
   }
 
   // ── Boot ────────────────────────────────────────────────────────────────────

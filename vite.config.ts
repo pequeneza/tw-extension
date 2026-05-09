@@ -64,6 +64,7 @@ function pngChunk(type: string, data: Buffer): Buffer {
 const MODULES_DIR = "tw-suite-extension/modules";
 const USERSCRIPT_MAP: Record<string, string> = {
   [`${MODULES_DIR}/auto_mint.user.js`]:            "auto_mint.user.js",
+  [`${MODULES_DIR}/auto_sender.user.js`]:          "auto_sender.user.js",
   [`${MODULES_DIR}/desviador.user.js`]:            "desviador.user.js",
   [`${MODULES_DIR}/kumin_gluer.user.js`]:          "kumin_gluer.user.js",
   [`${MODULES_DIR}/extended_profile.user.js`]:     "extended_profile.user.js",

@@ -11,6 +11,7 @@ export interface ModuleConfig {
 
 export type ModuleId =
   | "auto_mint"
+  | "auto_sender"
   | "desviador"
   | "extended_profile"
   | "fakes"
@@ -38,6 +39,14 @@ export const LICENSE_STORAGE_KEY = "xbot_license";
 export const LICENSE_CACHE_KEY = "xbot_license_cache";
 
 export const MODULE_CONFIGS: ModuleConfig[] = [
+  {
+    id: "auto_sender",
+    label: "Auto Sender",
+    description: "Precision attack scheduler: watches a queue and fires attacks at exact server-time milliseconds.",
+    matchPattern: /.*/,
+    scriptFile: "auto_sender.user.js",
+    icon: "🚀",
+  },
   {
     id: "auto_mint",
     label: "Auto Mint",

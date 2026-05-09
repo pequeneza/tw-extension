@@ -415,6 +415,10 @@
              padding:3px 8px; font-size:11px; font-weight:bold; cursor:pointer; white-space:nowrap; margin-left:4px; }
 .btn-kumin:hover { background:#2a6a5a; }
 .btn-kumin:disabled { background:#5a8a7a; cursor:default; }
+.btn-autosend { background:#1a3a5a; color:#f4e4bc; border:1px solid #0d2a4a; border-radius:3px;
+                padding:3px 8px; font-size:11px; font-weight:bold; cursor:pointer; white-space:nowrap; margin-left:4px; }
+.btn-autosend:hover { background:#2a5a8a; }
+.btn-autosend:disabled { background:#5a7a9a; cursor:default; }
 .sim-unit-icon { width:16px; height:16px; vertical-align:middle; }
 #sim-pagination { padding:5px 12px; font-size:11px; color:#7d5c2e; background:#e8d5a3; border-top:1px solid #c9a96e; }
 th.sim-unit-th { cursor:pointer; transition:background 0.15s, opacity 0.15s; }
@@ -596,6 +600,11 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
                             + `.${String(arrivalMs % 1000).padStart(3,'0')}`;
             const kuminEntry = { name: r.name, source: `${r.x}|${r.y}`, target: `${targetX}|${targetY}`, date: kuminDate, commandType: _cmdType, units: troopsForUrl, sendMs: depMs };
 
+            /* AutoSender entry */
+            const autosendEntry = { src: `${r.x}|${r.y}`, tgt: `${targetX}|${targetY}`,
+                                    srcVillageId: r.villageId, tgtVillageId: targetVillageId || null,
+                                    launch: depMs, arrival: arrivalMs, units: troopsForUrl, note: r.name };
+
             return `<tr data-vid="${r.villageId}">
   <td class="sim-village-cell" title="${r.name}">${i + 1}. ${r.name}</td>
   ${unitCells}
@@ -604,6 +613,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
   <td>
     <button type="button" class="btn-enviar" data-url="${encodeURIComponent(url)}">Enviar</button>
     <button type="button" class="btn-kumin" data-kumin="${encodeURIComponent(JSON.stringify(kuminEntry))}">+ Kumin</button>
+    <button type="button" class="btn-autosend" data-autosend="${encodeURIComponent(JSON.stringify(autosendEntry))}">+ Autosend</button>
   </td>
 </tr>`;
         }).join('');
@@ -850,6 +860,24 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
                 return;
             }
 
+            const autosendBtn = e.target.closest('.btn-autosend');
+            if (autosendBtn) {
+                try {
+                    const entry = JSON.parse(decodeURIComponent(autosendBtn.getAttribute('data-autosend')));
+                    if (window.xbot_addToQueue) {
+                        window.xbot_addToQueue(entry);
+                        autosendBtn.textContent = '✓ Queued';
+                        autosendBtn.disabled = true;
+                        setTimeout(() => { autosendBtn.textContent = '+ Autosend'; autosendBtn.disabled = false; }, 2000);
+                    } else {
+                        alert('Auto Sender não está ativo. Ativa o módulo Auto Sender no xBot.');
+                    }
+                } catch (err) {
+                    console.error('[Planeador] Autosend error:', err);
+                }
+                return;
+            }
+
             const th = e.target.closest('th[data-unit]');
             if (th) {
                 const unit = th.getAttribute('data-unit');
@@ -1069,7 +1097,12 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
         let idx = 0;
 
         function fillNext() {
-            if (idx >= queue.length) return;
+            if (idx >= queue.length) {
+                // Signal kumin_gluer that queue processing is finished (crash-fix handshake)
+                window.__xbotQueueDone = true;
+                window.dispatchEvent(new Event('xbot:kumin:queue:done'));
+                return;
+            }
             const e       = queue[idx++];
             const nameEl  = document.getElementById('quickAddName');
             const srcEl   = document.getElementById('quickAddSource');

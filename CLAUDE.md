@@ -181,3 +181,72 @@ npm run build
 ```
 Always run after any change to `src/` or `tw-suite-extension/modules/`. The extension loads from `dist/`.
 After building, go to `chrome://extensions` and click ↺ reload on the extension.
+
+---
+
+## Native Autosender — Plan
+
+Goal: replace Kumin autosender dependency with a fully bundled xBot module.
+
+### What Kumin Does (reference)
+- **Command queue** — localStorage key `overviewVars_ID_{playerId}{worldId}`, JSON array with `{ src, tgt, launch, arrival, units, ntTemplate, sigilPct, leaveHome }` per entry
+- **Watcher** — runs on screen=memo, polls every second, fires when `Date.now() ≥ launch - pingOffset`
+- **Ping offset** — periodic XHR round-trips, picks weighted median with MAD outlier removal for server-client clock delta
+- **Execution** — opens `screen=place` with command data in sessionStorage; place-tab fills unit inputs, busy-wait loop for sub-100ms precision
+- **NT filling** — on `screen=place?try=confirm`, fills noble-train units and sigil % before submitting
+- **Worker timer** — overwrites `window.setInterval/setTimeout` with a SharedWorker version so background tabs don't throttle
+
+### Proposed Architecture
+
+```
+Planeador "+ Autosend" button
+        │
+        ▼
+xbot_autosender_queue (localStorage)
+        │
+        ▼
+auto_sender.user.js  ← runs on every page (matchPattern: /.*/)
+  ├─ Ping measurer  (XHR to /game.php?ajax=..., weighted median)
+  ├─ Watcher loop   (SharedWorker-based, fires at launch - pingOffset)
+  └─ Launcher       (window.open screen=place with sessionStorage payload)
+        │
+        ▼
+screen=place handler (same auto_sender.user.js, different branch)
+  ├─ Read sessionStorage["xbot_send_cmd"]
+  ├─ Fill unit inputs
+  ├─ Click "Atacar" → busy-wait at confirm screen
+  └─ Submit → close tab
+        │
+        ▼
+AutoSenderView.tsx  (React overlay panel)
+  ├─ Live queue table (entry, countdown badge, src→tgt, units)
+  ├─ Ping offset display + manual override
+  ├─ Pause / clear controls
+  └─ CustomEvent bridge: xbot:autosender:state / xbot:autosender:run
+```
+
+### Implementation Phases
+
+**Phase 1 — Core engine** (`auto_sender.user.js`)
+- SharedWorker-based timer (adapt Kumin's worker approach)
+- Ping measurer: 5 XHR samples to `/game.php`, weighted median, store offset in sessionStorage
+- Queue watcher: runs on every page, picks entries due within 30s, opens place-tab
+- screen=place handler: reads `xbot_send_cmd` from sessionStorage, fills inputs, busy-wait send
+
+**Phase 2 — Planeador integration**
+- Replace/supplement "+ Kumin" button with "+ Autosend" button
+- Button writes directly to `xbot_autosender_queue` — no Kumin dependency
+- Keep "+ Kumin" as optional for users who still use Kumin
+
+**Phase 3 — React panel** (`AutoSenderView.tsx`)
+- Live queue with Portuguese date badges (reuse `fmtPtDate` from GluerView)
+- Per-entry delete button, ping offset display, start/pause toggle
+
+**Phase 4 — NT support** (optional, post-MVP)
+- On `screen=place?try=confirm`, read `xbot_send_cmd.ntTemplate`
+- Fill noble train unit counts
+
+### Open Decisions
+1. **Kumin format compatibility** — read/write Kumin's `overviewVars_ID_*` key too, or xBot-only key?
+2. **Module identity** — new module `auto_sender` or enhance existing `tw_snipe_scheduler`?
+3. **Phase scope** — Phase 1+2 only first, or build all 3 together?

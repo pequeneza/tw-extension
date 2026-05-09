@@ -15,6 +15,7 @@ import { DesviadorView }  from "./DesviadorView";
 import { GluerView }           from "./GluerView";
 import { ResourceBuyerView }  from "./ResourceBuyerView";
 import { LabelView }         from "./LabelView";
+import { AutoSenderView }   from "./AutoSenderView";
 
 /* ─── Storage ─────────────────────────────────────────────────────────────── */
 function storageGet(keys: string[]): Promise<Record<string, unknown>> {
@@ -36,6 +37,7 @@ type View = { type: "list" } |
             { type: "gluer" } |
             { type: "buyer" } |
             { type: "label" } |
+            { type: "autosender" } |
             { type: "license" };
 
 /* ─── useSettings — lives in OverlayRoot, never unmounts ─────────────────── */
@@ -610,6 +612,8 @@ function Panel({
                     setViewP({ type: "gluer" });
                   } else if (mod.id === "resource_buyer") {
                     setViewP({ type: "buyer" });
+                  } else if (mod.id === "auto_sender") {
+                    setViewP({ type: "autosender" });
                   } else {
                     setViewP({ type: "config", id: mod.id });
                   }
@@ -676,6 +680,10 @@ function Panel({
         onBack={() => setViewP({ type: "list" })}
         onClose={onClose}
       />
+      <AutoSenderView
+        visible={view.type === "autosender"}
+        onBack={() => setViewP({ type: "list" })}
+      />
       <LicenseView
         visible={view.type === "license"}
         onBack={() => setViewP({ type: "list" })}
@@ -733,6 +741,22 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
     return () => document.removeEventListener("xbot:desviador:state", handler);
   }, []);
 
+  // Auto Sender queue count — poll localStorage
+  const [asQueueCount, setAsQueueCount] = useState(0);
+  useEffect(() => {
+    const count = () => {
+      try {
+        const q = JSON.parse(localStorage.getItem("xbot_autosender_queue") ?? "[]");
+        setAsQueueCount(Array.isArray(q)
+          ? q.filter((e: { status?: string }) => e.status === "pending" || !e.status).length
+          : 0);
+      } catch { setAsQueueCount(0); }
+    };
+    count();
+    const id = setInterval(count, 3000);
+    return () => clearInterval(id);
+  }, []);
+
   const isIncomingsPage = /screen=overview_villages.*mode=incomings.*subtype=attacks/.test(
     window.location.href
   );
@@ -772,8 +796,9 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
     if (v === "snipe")     return { type: "snipe" };
     if (v === "balancer")  return { type: "balancer" };
     if (v === "desviador") return { type: "desviador" };
-    if (v === "gluer")     return { type: "gluer" };
-    if (v === "license")   return { type: "license" };
+    if (v === "gluer")      return { type: "gluer" };
+    if (v === "autosender") return { type: "autosender" };
+    if (v === "license")    return { type: "license" };
     return { type: "list" };
   });
   const setViewP = (v: View) => {
@@ -844,6 +869,16 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
         <button className="trigger trigger--balancer"
           onClick={() => { setViewP({ type: "balancer" }); setOpen(true); }}
           title="WH Balancer" aria-label="WH Balancer">⚖️</button>
+
+        {isOn("auto_sender") && (
+          <button className="trigger trigger--autosender"
+            onClick={() => { setViewP({ type: "autosender" }); setOpen(true); }}
+            title={asQueueCount > 0 ? `Auto Sender — ${asQueueCount} na fila` : "Auto Sender"}
+            aria-label="Auto Sender">
+            🚀
+            {asQueueCount > 0 && <span className="trigger-badge-count">{asQueueCount}</span>}
+          </button>
+        )}
 
         {isExchangePage && isOn("resource_buyer") && (
           <button className="trigger trigger--buyer"

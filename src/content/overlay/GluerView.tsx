@@ -111,6 +111,8 @@ interface QueueEntry {
   sendMs: number;
   /** Epoch ms of arrival — used in BB string output */
   arrivalMs: number;
+  /** Village ID of the source — needed when sending to Auto Sender */
+  srcVillageId?: string | null;
 }
 
 /* ─── Helpers ─────────────────────────────────────────────────────────────── */
@@ -390,6 +392,7 @@ function GluerCandidateCard({ cand, target, arrivalMs, commandType, onQueue, que
       units: activeUnits,
       sendMs: effectiveSendMs,
       arrivalMs,
+      srcVillageId: cand.src.villageId,
     });
     // Reset card after queuing
     setAmounts(Object.fromEntries(cand.allowedUnits.map(u => [u, 0])));
@@ -602,6 +605,31 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
       : `${location.origin}/game.php?screen=memo`;
     window.open(url, "_blank", "width=1000,height=600,noopener,noreferrer");
     setQueueState([]);
+  }
+
+  function sendToAutosender() {
+    if (!queue.length) return;
+    try {
+      const existing: unknown[] = JSON.parse(localStorage.getItem("xbot_autosender_queue") ?? "[]");
+      const additions = queue.map(e => ({
+        id: e.id,
+        src: e.source,
+        tgt: e.target,
+        srcVillageId: e.srcVillageId ?? null,
+        tgtVillageId: null,
+        launch: e.sendMs,
+        arrival: e.arrivalMs,
+        units: e.units,
+        note: e.name,
+        status: "pending",
+        createdAt: Date.now(),
+      }));
+      localStorage.setItem("xbot_autosender_queue", JSON.stringify([...existing, ...additions]));
+      document.dispatchEvent(new CustomEvent("xbot:autosender:run", { detail: { action: "getState" } }));
+      clearQueue();
+    } catch (err) {
+      console.error("[GluerView] sendToAutosender:", err);
+    }
   }
 
   return (
@@ -910,14 +938,19 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
       </div>
 
       {/* Footer */}
-      <div className="cfg-footer" style={{ gap: 6 }}>
+      <div className="cfg-footer" style={{ gap: 6, flexWrap: "wrap" }}>
         <button className="btn btn-ghost" onClick={copyStrings}
           disabled={!queue.length} style={{ flex: 1 }}>
           {copied ? "✓ Copiado" : "📋 Copiar BB"}
         </button>
         <button className="btn btn-save btn-save--dirty" onClick={openKumin}
           disabled={!queue.length} style={{ flex: 1 }}>
-          🚀 Abrir Kumin
+          📜 Kumin
+        </button>
+        <button className="btn btn-save btn-save--dirty" onClick={sendToAutosender}
+          disabled={!queue.length} style={{ flex: 1, background: "var(--b500)" }}
+          title="Enviar para Auto Sender (xBot)">
+          🚀 Autosend
         </button>
       </div>
     </div>

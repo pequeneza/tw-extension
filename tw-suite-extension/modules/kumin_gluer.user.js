@@ -343,8 +343,18 @@
 
     function initMemo() {
         /* Shared mutex: if planeador (or another instance) already claimed the queue
-         * in this page load, skip queue processing — go straight to caching. */
-        if (window.__kuminQueueClaimed) { cacheKuminCommands(); return; }
+         * in this page load, defer caching until after their queue processing finishes
+         * to avoid concurrent popup manipulation (which causes crashes). */
+        if (window.__kuminQueueClaimed) {
+            if (window.__xbotQueueDone) {
+                setTimeout(cacheKuminCommands, 800);
+            } else {
+                window.addEventListener('xbot:kumin:queue:done', function() {
+                    setTimeout(cacheKuminCommands, 800);
+                }, { once: true });
+            }
+            return;
+        }
 
         /* Read queue first — if there is one, process it before caching.
          * Running cacheKuminCommands concurrently opens edit popups for

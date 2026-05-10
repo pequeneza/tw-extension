@@ -417,6 +417,9 @@
                         const id      = tr.id.replace('command_', '');
                         const tds     = tr.querySelectorAll('td');
                         const timerEl = tds[5]?.querySelector('b.commandTimer[data-endtime]');
+                        const endSec  = timerEl ? parseInt(timerEl.getAttribute('data-endtime'), 10) : null;
+                        const msEl    = tds[5]?.querySelector('span.grey.small');
+                        const ms      = parseInt(msEl?.textContent?.trim() || '0', 10);
                         const cached  = unitCache[id] || {};
                         return {
                             ...cached,
@@ -424,7 +427,7 @@
                             label:        tds[2]?.textContent?.trim() || cached.label || '',
                             source:       tds[3]?.textContent?.trim() || cached.source || '',
                             targetCoords: tds[4]?.textContent?.trim() || cached.targetCoords || '',
-                            sendMs:       timerEl ? parseInt(timerEl.getAttribute('data-endtime'), 10) : (cached.sendMs || null),
+                            sendMs:       endSec ? (endSec * 1000 + ms) : (cached.sendMs || null),
                         };
                     });
 
@@ -452,16 +455,19 @@
     }
 
     function extractOneCommand(tr, onDone) {
-        const tds     = tr.querySelectorAll('td');
-        const timerEl = tds[5]?.querySelector('b.commandTimer[data-endtime]');
-        const base = {
-            id:           tr.id.replace('command_', ''),
-            label:        tds[2]?.textContent?.trim() || '',
-            source:       tds[3]?.textContent?.trim() || '',
-            targetCoords: tds[4]?.textContent?.trim() || '',
-            sendMs:       timerEl ? parseInt(timerEl.getAttribute('data-endtime'), 10) : null,
-            units:        {},
-        };
+    const tds     = tr.querySelectorAll('td');
+    const timerEl = tds[5]?.querySelector('b.commandTimer[data-endtime]');
+    const endSec  = timerEl ? parseInt(timerEl.getAttribute('data-endtime'), 10) : null;
+    const msEl    = tds[5]?.querySelector('span.grey.small');
+    const ms      = parseInt(msEl?.textContent?.trim() || '0', 10);
+    const base = {
+        id:           tr.id.replace('command_', ''),
+        label:        tds[2]?.textContent?.trim() || '',
+        source:       tds[3]?.textContent?.trim() || '',
+        targetCoords: tds[4]?.textContent?.trim() || '',
+        sendMs:       endSec ? (endSec * 1000 + ms) : null,
+        units:        {},
+    };
 
         const editBtn = document.getElementById(`edit_command_${base.id}`);
         if (!editBtn) { onDone(base); return; }

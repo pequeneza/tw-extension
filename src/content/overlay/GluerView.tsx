@@ -168,7 +168,8 @@ function euclidean(a: Coord, b: Coord) {
 
 function travelMs(unit: string, from: Coord, to: Coord, speedFactor: number) {
   const mpf = UNIT_MIN_PER_FIELD[unit] ?? UNIT_MIN_PER_FIELD["spear"]!;
-  return mpf * euclidean(from, to) * speedFactor * 60 * 1000;
+  const rawMs = mpf * euclidean(from, to) * speedFactor * 60 * 1000;
+  return Math.round(rawMs / 1000) * 1000; // TW travel times are integer seconds
 }
 
 function getServerNowMs(): number {

@@ -13,6 +13,11 @@ interface QueueEntry {
   note: string;
   status: string;
   createdAt: number;
+  type?: "attack" | "support";
+  catapultTarget?: string | null;
+  ntTemplate?: string | null;
+  randomOffset?: number | null;
+  randomOffsetTime?: number | null;
 }
 
 interface ASSettings {
@@ -53,9 +58,8 @@ function fmtCountdown(diffMs: number): string {
   const abs  = Math.abs(diffMs);
   const h    = Math.floor(abs / 3_600_000);
   const m    = Math.floor((abs % 3_600_000) / 60_000);
-  const s    = Math.floor((abs % 60_000) / 1000);
-  const ms   = abs % 1000;
-  return `${sign}${pad2(h)}:${pad2(m)}:${pad2(s)}.${pad3(ms)}`;
+  const s    = Math.round((abs % 60_000) / 1000);
+  return `${sign}${pad2(h)}:${pad2(m)}:${pad2(s)}`;
 }
 
 function getServerNowMs(): number {
@@ -326,8 +330,8 @@ function ConfigTab() {
   function applyPing() {
     if (pingResult === null) return;
     const next = String(pingResult);
-    setDrafts(d => ({ ...d, clickOffset: next }));
-    update("clickOffset", pingResult);
+    setDrafts(d => ({ ...d, timingOffset: next }));
+    update("timingOffset", pingResult);
   }
 
   return (
@@ -341,7 +345,7 @@ function ConfigTab() {
           {/* Lookahead */}
           <div className="field" style={{ padding: "0 14px 8px" }}>
             <div className="field-top">
-              <span className="field-label">Antecedência (s)</span>
+              <span className="field-label">Abrir separador antes da partida (s)</span>
               <span className="field-range">20–120</span>
             </div>
             <span className="field-help">
@@ -384,22 +388,22 @@ function ConfigTab() {
             <div className="field" style={{ padding: "0 14px 8px" }}>
               <div className="field-top">
                 <span className="field-label">Multiplicador de ping</span>
-                <span className="field-range">0.1–2.0</span>
+                <span className="field-range">0–5</span>
               </div>
               <span className="field-help">
                 Multiplica o RTT medido por este factor antes de o usar como offset.
                 0.25 = ¼ do RTT (padrão Kumin).
               </span>
-              <input className="input" type="number" min={0.1} max={2.0} step={0.05}
+              <input className="input" type="number" min={0} max={5} step={0.05}
                 value={drafts.timingOffsetMultiplier}
                 onChange={e => {
                   setDrafts(d => ({ ...d, timingOffsetMultiplier: e.target.value }));
                   const n = parseFloat(e.target.value);
-                  if (Number.isFinite(n) && n >= 0.1 && n <= 2.0) update("timingOffsetMultiplier", n);
+                  if (Number.isFinite(n) && n >= 0 && n <= 5) update("timingOffsetMultiplier", n);
                 }}
                 onBlur={() => {
                   const n = parseFloat(drafts.timingOffsetMultiplier);
-                  const clamped = Number.isFinite(n) ? Math.max(0.1, Math.min(2.0, n)) : DEFAULT_SETTINGS.timingOffsetMultiplier;
+                  const clamped = Number.isFinite(n) ? Math.max(0, Math.min(5, n)) : DEFAULT_SETTINGS.timingOffsetMultiplier;
                   setDrafts(d => ({ ...d, timingOffsetMultiplier: String(clamped) }));
                   update("timingOffsetMultiplier", clamped);
                 }}
@@ -440,11 +444,16 @@ function ConfigTab() {
                 </button>
               </div>
               {pingResult !== null && (
-                <div style={{ marginTop: 6, fontSize: 11, color: "var(--n500)", display: "flex", alignItems: "center", gap: 8 }}>
-                  <span>Latência estimada: <strong>{pingResult} ms</strong></span>
-                  <button className="btn btn-ghost" style={{ padding: "1px 8px", fontSize: 10 }} onClick={applyPing}>
-                    Usar
-                  </button>
+                <div style={{ marginTop: 6, fontSize: 11, color: "var(--n500)", display: "flex", flexDirection: "column", gap: 4 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span>Latência estimada: <strong>{pingResult} ms</strong></span>
+                    <button className="btn btn-ghost" style={{ padding: "1px 8px", fontSize: 10 }} onClick={applyPing}>
+                      Usar como offset fixo
+                    </button>
+                  </div>
+                  <span style={{ fontSize: 10, color: "var(--n300)" }}>
+                    Estimativa — o motor usa medição automática do ping se "Offset automático" estiver ativo.
+                  </span>
                 </div>
               )}
             </div>

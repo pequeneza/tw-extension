@@ -70,11 +70,11 @@
     let max = 0;
     for (const [unit, count] of Object.entries(troops)) {
         if (count > 0 && BASE_SEC[unit]) {
-            const s = distance * BASE_SEC[unit] / (gameSpeed * unitSpeed); // correct
+            const s = distance * BASE_SEC[unit] / (gameSpeed * unitSpeed);
             if (s > max) max = s;
         }
     }
-    return Math.ceil(max);
+    return max;
 }
 
     function fmtDuration(sec) {
@@ -556,7 +556,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
             if (!sel) continue;                                       // no selected units in this village
             const d      = dist(r.x, r.y, targetX, targetY);
             const sec    = travelSec(sel, d, cfg.gameSpeed, cfg.unitSpeed);
-            const depMs  = arrivalMs - sec * 1000;
+            const depMs  = arrivalMs - Math.round(sec) * 1000;
             if (depMs < now) continue;                                // departure already past — skip
             rows.push({ r, d, sec, depMs });
         }
@@ -603,6 +603,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
             /* AutoSender entry */
             const autosendEntry = { src: `${r.x}|${r.y}`, tgt: `${targetX}|${targetY}`,
                                     srcVillageId: r.villageId, tgtVillageId: targetVillageId || null,
+                                    type: _cmdType.toLowerCase(),
                                     launch: depMs, arrival: arrivalMs, units: troopsForUrl, note: r.name };
 
             return `<tr data-vid="${r.villageId}">

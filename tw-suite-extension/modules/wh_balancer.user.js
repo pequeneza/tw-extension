@@ -2959,7 +2959,7 @@
     }
 
     async function fetchAllHqData(villages, onProgress) {
-      const CONCURRENCY = 3;
+      const CONCURRENCY = 2;
       const result = new Map();
       for (let i = 0; i < villages.length; i += CONCURRENCY) {
         const batch = villages.slice(i, i + CONCURRENCY);
@@ -2968,7 +2968,7 @@
         settled.forEach(s => {
           if (s.status === 'fulfilled' && s.value?.villageId) result.set(s.value.villageId, s.value);
         });
-        if (i + CONCURRENCY < villages.length) await new Promise(res => setTimeout(res, 300));
+        if (i + CONCURRENCY < villages.length) await new Promise(res => setTimeout(res, 400));
       }
       return result;
     }

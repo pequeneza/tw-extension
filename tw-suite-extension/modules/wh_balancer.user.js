@@ -1150,6 +1150,7 @@
     function applyHqBuildPriority({ villagesData, excessResources, shortageResources, incomingRes, hqData, averages }) {
       if (!hqData || !hqData.size) return;
       wbGroup("[WH] applyHqBuildPriority");
+      const s = state.settings;
       const boostedIds = new Set();
 
       // Pre-load both lock sources so we can respect them.
@@ -1200,7 +1201,7 @@
           if (ppLockSet.has(`${v.id}:${res}`)) continue;
 
           const missing = Math.max(0, cost - (v[res] + incAmt));
-          const isLowPtsVillage = v.points < (state?.settings?.lowPoints || 0);
+          const isLowPtsVillage = v.points < (s.lowPoints || 0);
 
           // Cap excess to what's above the building cost — always, regardless of whether
           // there is a shortage. A village must keep enough for construction before donating.
@@ -1250,7 +1251,7 @@
           cost:     { wood: hq.costWood,  stone: hq.costStone,  iron: hq.costIron  },
           stock:    { wood: v.wood, stone: v.stone, iron: v.iron },
           incoming: { wood: inc.wood, stone: inc.stone, iron: inc.iron },
-          isLowPts: v.points < (state?.settings?.lowPoints || 0),
+          isLowPts: isLowPtsV,
         });
       }
       wbGroupEnd();
@@ -2984,20 +2985,25 @@
       return result;
     }
 
-    // [{buildingId, targetLevel}, ...] ordered build sequence
+    // { steps: [{buildingId, targetLevel}, ...], farmThreshold: number }
+    // farmThreshold mirrors population_upgrades: free-pop % below which farm is built first
     // templateKey: numeric ID string OR "n:name" (fetch via villageId in that case)
     async function fetchTemplateSequence(templateKey, villageId) {
       let url;
       if (templateKey.startsWith("n:")) {
-        if (!villageId) return [];
+        if (!villageId) return { steps: [], farmThreshold: 20 };
         url = makeAmVillageUrl({ mode: "queue", village: villageId });
       } else {
         url = makeAmVillageUrl({ mode: "queue", template: templateKey });
       }
       const html = await fetchWithRetry(url);
       const $doc = $(html);
+
+      const $popOpt = $doc.find('select[name="population_upgrades"] option[selected]');
+      const farmThreshold = $popOpt.length ? (parseInt($popOpt.attr('value'), 10) || 20) : 20;
+
       const $items = $doc.find("#template_queue li[data-building]");
-      console.log(`[WH Seq] template=${templateKey} items=${$items.length} url=${url}`);
+      console.log(`[WH Seq] template=${templateKey} items=${$items.length} farmThreshold=${farmThreshold} url=${url}`);
       const steps = [];
       $items.each(function () {
         const buildingId = $(this).attr("data-building");
@@ -3008,7 +3014,7 @@
         const targetLevel = parseInt(lm[1], 10);
         if (targetLevel > 0) steps.push({ buildingId, targetLevel });
       });
-      return steps;
+      return { steps, farmThreshold };
     }
 
     // villageId → {levels: {buildingId: number}, queueEndsSec: number}
@@ -3118,8 +3124,9 @@
           const plans = JSON.parse(raw);
           const m = new Map();
           for (const p of plans) {
-            m.set(p.id, p.steps);
-            m.set(`n:${p.name}`, p.steps);
+            const entry = { steps: p.steps, farmThreshold: p.farmThreshold ?? 20 };
+            m.set(p.id, entry);
+            m.set(`n:${p.name}`, entry);
           }
           return m;
         } catch { return new Map(); }
@@ -3129,7 +3136,7 @@
       for (const tkey of uniqueTemplateKeys) {
         if (cachedPlanSeqs.has(tkey)) {
           templateSeqs.set(tkey, cachedPlanSeqs.get(tkey));
-          console.log(`[WH Bulk] template "${tkey}": ${cachedPlanSeqs.get(tkey).length} steps (cached)`);
+          console.log(`[WH Bulk] template "${tkey}": ${cachedPlanSeqs.get(tkey).steps.length} steps farmThreshold=${cachedPlanSeqs.get(tkey).farmThreshold} (cached)`);
         } else {
           keysToFetch.push(tkey);
         }
@@ -3139,10 +3146,10 @@
         const repVid = uniqueTemplates.get(tkey);
         if (onProgress) onProgress(`Fetching template ${i + 1}/${keysToFetch.length}…`);
         try {
-          const seq = await fetchTemplateSequence(tkey, repVid);
-          templateSeqs.set(tkey, seq);
+          const { steps: seq, farmThreshold } = await fetchTemplateSequence(tkey, repVid);
+          templateSeqs.set(tkey, { steps: seq, farmThreshold });
           const preview = seq.slice(0, 4).map(s => `${s.buildingId}->${s.targetLevel}`).join(', ');
-          console.log(`[WH Bulk] template "${tkey}": ${seq.length} steps — ${preview}${seq.length > 4 ? ', ...' : ''}`);
+          console.log(`[WH Bulk] template "${tkey}": ${seq.length} steps farmThreshold=${farmThreshold} — ${preview}${seq.length > 4 ? ', ...' : ''}`);
         } catch (e) {
           console.log(`[WH Bulk] template "${tkey}" fetch failed: ${e && e.status ? 'HTTP ' + e.status : String(e)}`);
         }
@@ -3151,19 +3158,30 @@
 
       // Step 4: next building per village — first sequence step where effective level < target
       // Effective level = completed level + levels already queued (resources already consumed)
+      // Farm is inserted first when free population < farmThreshold% (mirrors population_upgrades select)
       const nextMap = new Map();
       let noTemplate = 0, noOverview = 0, noNextStep = 0;
       for (const v of candidates) {
         const vid = String(v.id);
         const tval = templateMap.get(vid);
         if (!tval) { noTemplate++; continue; }
-        const seq = templateSeqs.get(tval.templateKey);
-        if (!seq || !seq.length) continue;
+        const seqEntry = templateSeqs.get(tval.templateKey);
+        if (!seqEntry || !seqEntry.steps.length) continue;
         const overview = bOverview.get(vid);
         if (!overview) { noOverview++; continue; }
+
+        const farmThreshold = seqEntry.farmThreshold ?? 20;
+        const farmUsed = v.farmSpaceUsed ?? 0;
+        const farmTot  = v.farmSpaceTotal ?? 0;
+        const farmLevel = overview.levels['farm'] || 0;
+        if (farmLevel < 30 && farmTot > 0 && ((farmTot - farmUsed) / farmTot) * 100 < farmThreshold) {
+          nextMap.set(vid, { buildingId: 'farm', targetLevel: farmLevel + 1 });
+          continue;
+        }
+
         const qLevels = overview.queuedLevels || {};
         let found = false;
-        for (const step of seq) {
+        for (const step of seqEntry.steps) {
           const effective = (overview.levels[step.buildingId] || 0) + (qLevels[step.buildingId] || 0);
           if (effective < step.targetLevel) {
             nextMap.set(vid, step); found = true; break;
@@ -3817,8 +3835,8 @@
           for (let i = 0; i < templates.length; i++) {
             const t = templates[i];
             try {
-              const steps = await fetchTemplateSequence(t.id, null);
-              plans.push({ id: t.id, name: t.name, steps });
+              const { steps, farmThreshold } = await fetchTemplateSequence(t.id, null);
+              plans.push({ id: t.id, name: t.name, steps, farmThreshold });
               console.log(`[WH Plans] "${t.name}" (${t.id}): ${steps.length} steps`);
             } catch (err) {
               console.warn(`[WH Plans] failed template ${t.id}:`, err);

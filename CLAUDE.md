@@ -100,6 +100,43 @@ Overlay components (in `src/content/overlay/`) run in Shadow DOM. They:
 4. Optionally add `ModuleConfigSchema` to `src/types/config-schemas.ts`
 5. If the module needs a React panel, add a view component in `src/content/overlay/` and wire it in `Overlay.tsx`
 
+## WH Balancer — HQ Build Priority
+
+The balancer can identify the next building each village should construct and reserve resources for it. The full pipeline:
+
+### Data sources (fetchAllHqDataBulk)
+| Step | URL | Purpose |
+|---|---|---|
+| 1 | `overview_villages&mode=buildings` | Current building levels + active build queue per village |
+| 2 | `am_village` | Which template ID/name is assigned to each village |
+| 3 | `am_village&mode=queue&template=ID` | Build sequence for each unique template (cached in `tm_whbalancer_plans_v1`) |
+
+### Key functions (wh_balancer.user.js)
+- **`TW_BUILD_COST` + `calcBuildingCost(buildingId, level)`** — Hardcoded building cost table (base cost × factor^(level−1)). Replaces per-village `screen=main` HTTP fetches entirely.
+- **`fetchTemplateList()`** — Fetches `screen=am_village&mode=template`, finds all templates by their `template=ID` link href, returns `[{id, name}]`.
+- **`fetchBuildingsOverview()`** — Fetches the buildings overview page. Parses building levels from `td.upgrade_building.b_BUILDINGID`. Finds queue items via `$p.find("#building_order_VID")` (NOT `$tr.find("ul.order_queue")` — the browser HTML parser moves `<ul>` out of table cells, so the page-root ID lookup is required).
+- **`fetchAllHqDataBulk(candidates)`** — Main HQ data fetch. Determines next building from template sequence vs. effective levels (`completed + queued`), computes cost for `completedLevel + 1` (the immediate next single upgrade, not the template target level).
+
+### localStorage keys (wh_balancer.user.js)
+| Key | Content |
+|---|---|
+| `tm_whbalancer_plans_v1` | `[{id, name, steps: [{buildingId, targetLevel}]}]` — all template build sequences. Populated by "Fetch Plans" button. |
+| `tm_whbalancer_hq_data_v1` | Cached HQ result map from last run. |
+| `tm_whbalancer_hq_timestamp_v1` | Timestamp of last HQ fetch (ms). |
+| `tm_whbalancer_settings` | User settings object. |
+
+### React (BalancerView.tsx) — HQ tab
+- **`FetchedPlan`** interface + **`BLDG_LABEL`** map: types/labels for the plan display.
+- **`PlanRow`** component: collapsible row showing plan name, step count, and final target levels per building.
+- **`fetchPlansAction`**: dispatches `xbot:balancer:fetchPlans` → userscript fetches all templates and saves to `tm_whbalancer_plans_v1`.
+- **Events**: `xbot:balancer:fetchPlans` (React→userscript) / `xbot:balancer:plansResult` (userscript→React).
+
+### Template key matching
+`fetchAmVillageTemplateMap` produces name-based keys (`n:XXX`) when the village list page has no numeric template ID in links. `cachedPlanSeqs` (inside `fetchAllHqDataBulk`) indexes by **both** `p.id` and `n:${p.name}` so either form matches the cache.
+
+### Effective level logic
+The "next building" determination uses `effectiveLevel = completedLevel + queuedLevels[buildingId]`. This skips buildings already being built in the queue (resources already consumed). Queue item building IDs are parsed from the `img src` path (`buildings/smith.webp` → `"smith"`), which is reliable and encoding-agnostic.
+
 ## Additional Context
 
 Detailed architecture docs and WH Balancer algorithm specifics are in `AI_Context_Files/` at the repo root — read these before working on WH Balancer or the overlay bridge.

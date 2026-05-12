@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TW Utils
 // @namespace    tw_utils
-// @version      1.1.0
+// @version      1.2.0
 // @description  Utilitários variados para o TribalWars PT.
 // @match        https://*.tribalwars.com.pt/game.php*
 // ==/UserScript==
@@ -21,6 +21,10 @@
 
     function getCurrentScreen() {
         return new URLSearchParams(window.location.search).get('screen') || '';
+    }
+
+    function sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 
     /* ═══════════════════════════════════════════════════════════════════════
@@ -97,6 +101,35 @@
     user-select: none;
 }
 #tw-qb-toggle:hover { background: #f0dca0; border-color: #4a2000; }
+.tw-bc-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    vertical-align: -3px;
+    line-height: 0;
+    padding: 3px 4px;
+    border: 1px solid #603000;
+    border-radius: 3px;
+    background: #e9d0a9;
+    box-shadow: 1px 1px 2px rgba(0,0,0,0.30);
+    margin: 0 4px 0 2px;
+    user-select: none;
+    float: right;
+}
+.tw-bc-btn:hover { background: #f5ddb8; }
+.tw-bc-btn img { width: 18px; height: 18px; display: block; }
+.tw-bc-counter {
+    font-size: 10px;
+    font-family: Verdana, Arial, sans-serif;
+    color: #8b1a00;
+    font-weight: bold;
+    white-space: nowrap;
+    float: right;
+    line-height: 18px;
+    margin-right: 2px;
+}
 `;
 
     function injectStyle() {
@@ -258,6 +291,96 @@
     }
 
     /* ═══════════════════════════════════════════════════════════════════════
+       BULK CANCEL
+       Adds a delete-icon button floated to the right of the last <th> in the
+       outgoing commands table header on screen=place. Clicking fetches every
+       .command-cancel href sequentially (250 ms apart); page reloads when done.
+    ═══════════════════════════════════════════════════════════════════════ */
+
+    const DELETE_FRAGMENT = 'graphic/delete.webp';
+    const BC_DELAY_MS = 250;
+
+    function deleteIconUrl() {
+        const base = (typeof game_data !== 'undefined' && game_data.graphic_path)
+            ? game_data.graphic_path
+            : 'https://dspt.innogamescdn.com/asset/0095440e/';
+        return `${base}${DELETE_FRAGMENT}`;
+    }
+
+    function getCancelLinks() {
+        return [...document.querySelectorAll('a.command-cancel[href]')];
+    }
+
+    async function cancelAll(btn, counter) {
+        const links = getCancelLinks();
+        if (!links.length) return;
+
+        btn.style.pointerEvents = 'none';
+        btn.style.opacity = '0.5';
+        counter.textContent = `0/${links.length}`;
+
+        let done = 0;
+        for (const a of links) {
+            try { await fetch(a.href, { credentials: 'include' }); } catch (_) {}
+            done++;
+            counter.textContent = `${done}/${links.length}`;
+            if (done < links.length) await sleep(BC_DELAY_MS);
+        }
+
+        counter.textContent = '✓';
+        await sleep(800);
+        location.reload();
+    }
+
+    function attachBulkCancelButton(table) {
+        if (table.dataset.twBcAttached) return;
+        table.dataset.twBcAttached = '1';
+
+        const headerRow =
+            table.querySelector('thead tr') ||
+            table.querySelector('tr:first-child');
+        if (!headerRow) return;
+
+        const cells = headerRow.querySelectorAll('th, td');
+        if (!cells.length) return;
+        const lastCell = cells[cells.length - 1];
+
+        const counter = document.createElement('span');
+        counter.className = 'tw-bc-counter';
+
+        const btn = document.createElement('span');
+        btn.className = 'tw-bc-btn';
+        btn.title = 'Cancelar todos os comandos';
+
+        const img = document.createElement('img');
+        img.src = deleteIconUrl();
+        img.alt = 'Cancelar todos';
+        img.dataset.twbc = '1';
+
+        btn.appendChild(img);
+        btn.addEventListener('click', () => cancelAll(btn, counter));
+
+        // float right: insert counter first, then button (button ends up rightmost)
+        lastCell.appendChild(counter);
+        lastCell.appendChild(btn);
+    }
+
+    function processBcTables() {
+        document.querySelectorAll('a.command-cancel[href]').forEach(a => {
+            const table = a.closest('table');
+            if (table) attachBulkCancelButton(table);
+        });
+    }
+
+    function initBulkCancel() {
+        if (getCurrentScreen() !== 'place') return;
+        if (location.href.includes('try=confirm')) return;
+        processBcTables();
+        new MutationObserver(processBcTables)
+            .observe(document.body, { childList: true, subtree: true });
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════════
        BOOT
     ═══════════════════════════════════════════════════════════════════════ */
 
@@ -266,6 +389,7 @@
         if (cfg.villageSwitcher !== false) initVillageSwitcher();
         if (cfg.incomingFilter !== false) initIncomingFilter();
         if (cfg.quickbarCollapse !== false) initQuickbarCollapse();
+        if (cfg.bulkCancel !== false) initBulkCancel();
     }
 
     if (typeof $ !== 'undefined' && typeof TribalWars !== 'undefined') {

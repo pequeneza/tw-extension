@@ -55,6 +55,10 @@ interface HqResult {
   shortWood: number; shortStone: number; shortIron: number;
   hasShortfall: boolean; overQueue?: boolean;
 }
+interface FetchedPlan {
+  id: string; name: string;
+  steps: { buildingId: string; targetLevel: number }[];
+}
 type Tab = "sendlist" | "settings" | "locks" | "hq";
 
 /* ─── Constants ──────────────────────────────────────────────────────────── */
@@ -107,6 +111,13 @@ const RES_ICON_URLS: Record<string, string> = {
   wood:  "https://dspt.innogamescdn.com/asset/b2fb8d33/graphic/holz.png",
   stone: "https://dspt.innogamescdn.com/asset/b2fb8d33/graphic/lehm.png",
   iron:  "https://dspt.innogamescdn.com/asset/b2fb8d33/graphic/eisen.png",
+};
+const BLDG_LABEL: Record<string, string> = {
+  main:"Principal", barracks:"Quartel", stable:"Estábulo", garage:"Oficina",
+  snob:"Academia", smith:"Ferreiro", place:"Praça", market:"Mercado",
+  wood:"Bosque", stone:"Argila", iron:"Ferro", farm:"Fazenda",
+  storage:"Armazém", hide:"Esconderijo", wall:"Muralha",
+  watchtower:"Vigia", statue:"Estátua",
 };
 function ResIcon({ res, dim }: { res: "wood"|"stone"|"iron"; dim?: boolean }): React.ReactElement {
   return (
@@ -920,6 +931,75 @@ function LocksTab() {
   );
 }
 
+/* ─── PlanRow ────────────────────────────────────────────────────────────── */
+function PlanRow({ plan }: { plan: FetchedPlan }) {
+  const [open, setOpen] = useState(false);
+  const finalLevels: Record<string, number> = {};
+  for (const s of plan.steps) finalLevels[s.buildingId] = s.targetLevel;
+  return (
+    <div style={{ borderBottom:"1px solid var(--n700)", padding:"6px 0" }}>
+      <div style={{ display:"flex", alignItems:"center", gap:6, cursor:"pointer" }}
+        onClick={() => setOpen(o => !o)}>
+        <span style={{ flex:1, fontSize:12, fontWeight:600 }}>{plan.name}</span>
+        <span style={{ fontSize:10.5, color:"var(--n400)" }}>{plan.steps.length} steps</span>
+        <span style={{ fontSize:10.5, color:"var(--n400)", width:12, textAlign:"center" }}>{open?"▲":"▼"}</span>
+      </div>
+      {open && (
+        <div style={{ marginTop:4, display:"flex", flexWrap:"wrap", gap:"3px 10px", paddingLeft:4 }}>
+          {Object.entries(finalLevels).map(([bid, lvl]) => (
+            <span key={bid} style={{ fontSize:10.5, color:"var(--n300)" }}>
+              {BLDG_LABEL[bid]??bid} <strong style={{ color:"var(--n100)" }}>{lvl}</strong>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── HqVillageRow ───────────────────────────────────────────────────────── */
+function HqVillageRow({ r, fetchedAtMs }: { r: HqResult; fetchedAtMs: number | null }) {
+  const remaining = useCountdown(r.queueEndsSec > 0 ? r.queueEndsSec : null, fetchedAtMs);
+  const etaDisplay = r.queueEndsSec <= 0 || remaining === 0
+    ? "now"
+    : fmtHMS(remaining ?? r.queueEndsSec);
+  return (
+    <div className={`bal-hq-row${r.hasShortfall?" bal-hq-row--warn":" bal-hq-row--ok"}`}>
+      <div className="bal-hq-top">
+        <a className="bal-hq-name" href={r.villageUrl} target="_self">{r.villageName}</a>
+        <span className="bal-hq-building">{r.buildingName}</span>
+        {!r.hasShortfall && <span className="bal-hq-eta">{etaDisplay}</span>}
+        <span className={`bal-hq-status${r.hasShortfall?" bal-hq-status--warn":""}`}>
+          {r.hasShortfall ? "⚠ Short" : "✓"}
+        </span>
+      </div>
+      {r.hasShortfall && (
+        <div className="bal-hq-shortfall">
+          {r.shortWood  > 0 && <span className="bal-res"><ResIcon res="wood"/>  {fmtNum(r.shortWood)}</span>}
+          {r.shortStone > 0 && <span className="bal-res"><ResIcon res="stone"/> {fmtNum(r.shortStone)}</span>}
+          {r.shortIron  > 0 && <span className="bal-res"><ResIcon res="iron"/>  {fmtNum(r.shortIron)}</span>}
+          <span className="bal-hq-shortfall-eta">⏱ {etaDisplay}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HqLongQueueRow({ r, fetchedAtMs }: { r: HqResult; fetchedAtMs: number | null }) {
+  const remaining = useCountdown(r.queueEndsSec > 0 ? r.queueEndsSec : null, fetchedAtMs);
+  const etaDisplay = remaining === 0 ? "now" : fmtHMS(remaining ?? r.queueEndsSec);
+  return (
+    <div className="bal-hq-row bal-hq-row--ok" style={{ opacity:0.45 }}>
+      <div className="bal-hq-top">
+        <a className="bal-hq-name" href={r.villageUrl} target="_self">{r.villageName}</a>
+        <span className="bal-hq-building">{r.buildingName}</span>
+        <span className="bal-hq-eta">{etaDisplay}</span>
+        <span className="bal-hq-status" style={{ color:"var(--n300)" }}>⏭ Long queue</span>
+      </div>
+    </div>
+  );
+}
+
 /* ─── HQTab ──────────────────────────────────────────────────────────────── */
 function HQTab({ hqEnabled, hqNormalQueueMaxHours }: { hqEnabled: boolean; hqNormalQueueMaxHours: number }) {
   const [results, setResults]   = useState<HqResult[]>([]);
@@ -931,6 +1011,16 @@ function HQTab({ hqEnabled, hqNormalQueueMaxHours }: { hqEnabled: boolean; hqNor
   const [cached, setCached]     = useState(false);
   const [ageMin, setAgeMin]     = useState<number|null>(null);
   const triggeredByTab = useRef(false);
+
+  const [fetchedAtMs, setFetchedAtMs]   = useState<number | null>(null);
+  const [plans, setPlans] = useState<FetchedPlan[]>(() => {
+    try { const r = localStorage.getItem("tm_whbalancer_plans_v1"); return r ? JSON.parse(r) : []; }
+    catch { return []; }
+  });
+  const [plansLoading, setPlansLoading] = useState(false);
+  const [plansProgress, setPlansProgress] = useState(0);
+  const [plansTotal, setPlansTotal]     = useState(0);
+  const [plansError, setPlansError]     = useState<string|null>(null);
 
   useEffect(() => {
     const onR = (e:Event) => {
@@ -952,12 +1042,32 @@ function HQTab({ hqEnabled, hqNormalQueueMaxHours }: { hqEnabled: boolean; hqNor
           return a.queueEndsSec - b.queueEndsSec;
         }));
         setCached(!!d.cached); setAgeMin(d.ageMin??null); setLoading(false); setError(null);
+        setFetchedAtMs((d as any).fetchedAtMs ?? null);
         triggeredByTab.current = false;
       }
     };
     document.addEventListener("xbot:balancer:hqResults", onR);
     return () => document.removeEventListener("xbot:balancer:hqResults", onR);
   }, []);
+
+  useEffect(() => {
+    const onP = (e: Event) => {
+      const d = (e as CustomEvent).detail as {
+        loading?: boolean; progress?: number; total?: number;
+        plans?: FetchedPlan[]; error?: string;
+      };
+      if (d.error) { setPlansError(d.error); setPlansLoading(false); return; }
+      if (d.loading) { setPlansLoading(true); setPlansProgress(d.progress??0); setPlansTotal(d.total??0); return; }
+      if (d.plans) { setPlans(d.plans); setPlansLoading(false); setPlansError(null); }
+    };
+    document.addEventListener("xbot:balancer:plansResult", onP);
+    return () => document.removeEventListener("xbot:balancer:plansResult", onP);
+  }, []);
+
+  const fetchPlansAction = () => {
+    setPlansError(null); setPlansLoading(true); setPlansProgress(0); setPlansTotal(0);
+    dispatch("xbot:balancer:fetchPlans");
+  };
 
   const runCheck = () => { setError(null); setLoading(true); setResults([]); triggeredByTab.current = true; dispatch("xbot:balancer:hqCheck"); };
 
@@ -994,23 +1104,7 @@ function HQTab({ hqEnabled, hqNormalQueueMaxHours }: { hqEnabled: boolean; hqNor
             {shortfalls > 0 ? `${shortfalls} village${shortfalls!==1?"s":""} need resources` : "All villages ready ✓"}
           </div>
           {boosted.map((r,i) => (
-            <div key={i} className={`bal-hq-row${r.hasShortfall?" bal-hq-row--warn":" bal-hq-row--ok"}`}>
-              <div className="bal-hq-top">
-                <a className="bal-hq-name" href={r.villageUrl} target="_self">{r.villageName}</a>
-                <span className="bal-hq-building">{r.buildingName}</span>
-                <span className="bal-hq-eta">{r.queueEndsSec>0 ? fmtHMS(r.queueEndsSec) : "now"}</span>
-                <span className={`bal-hq-status${r.hasShortfall?" bal-hq-status--warn":""}`}>
-                  {r.hasShortfall ? "⚠ Short" : "✓"}
-                </span>
-              </div>
-              {r.hasShortfall && (
-                <div className="bal-hq-shortfall">
-                  {r.shortWood  > 0 && <span className="bal-res"><ResIcon res="wood"/>  {fmtNum(r.shortWood)}</span>}
-                  {r.shortStone > 0 && <span className="bal-res"><ResIcon res="stone"/> {fmtNum(r.shortStone)}</span>}
-                  {r.shortIron  > 0 && <span className="bal-res"><ResIcon res="iron"/>  {fmtNum(r.shortIron)}</span>}
-                </div>
-              )}
-            </div>
+            <HqVillageRow key={i} r={r} fetchedAtMs={fetchedAtMs} />
           ))}
         </div>
       )}
@@ -1020,17 +1114,35 @@ function HQTab({ hqEnabled, hqNormalQueueMaxHours }: { hqEnabled: boolean; hqNor
             {longQueue.length} village{longQueue.length!==1?"s":""} with queue &gt; {hqNormalQueueMaxHours}h — not boosted
           </div>
           {longQueue.map((r,i) => (
-            <div key={i} className="bal-hq-row bal-hq-row--ok" style={{ opacity:0.45 }}>
-              <div className="bal-hq-top">
-                <a className="bal-hq-name" href={r.villageUrl} target="_self">{r.villageName}</a>
-                <span className="bal-hq-building">{r.buildingName}</span>
-                <span className="bal-hq-eta">{fmtHMS(r.queueEndsSec)}</span>
-                <span className="bal-hq-status" style={{ color:"var(--n300)" }}>⏭ Long queue</span>
-              </div>
-            </div>
+            <HqLongQueueRow key={i} r={r} fetchedAtMs={fetchedAtMs} />
           ))}
         </div>
       )}
+      <div className="cfg-section">
+        <div className="bal-section-header">
+          <span className="section-label" style={{ padding:0 }}>
+            Build Plans{plans.length > 0 ? ` (${plans.length})` : ""}
+          </span>
+        </div>
+        <div style={{ padding:"8px 14px", display:"flex", flexDirection:"column", gap:6 }}>
+          <button className={`btn${plansLoading?" btn-ghost":" btn-save btn-save--dirty"}`}
+            onClick={fetchPlansAction} disabled={plansLoading}>
+            {plansLoading
+              ? <><span className="spinner"/> {plansTotal > 0
+                  ? `Fetching… (${plansProgress}/${plansTotal})` : "Fetching…"}</>
+              : plans.length > 0 ? "↺ Refresh plans" : "Fetch Plans"}
+          </button>
+          {plansError && <span style={{ fontSize:11, color:"var(--r500)" }}>{plansError}</span>}
+        </div>
+        {plans.length > 0 && (
+          <div style={{ padding:"0 14px 10px" }}>
+            {plans.map(p => <PlanRow key={p.id} plan={p}/>)}
+          </div>
+        )}
+        {!plansLoading && plans.length === 0 && !plansError && (
+          <div className="state-msg">Press "Fetch Plans" to load available build templates.</div>
+        )}
+      </div>
     </div>
   );
 }

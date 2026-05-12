@@ -1715,7 +1715,8 @@ select.input {
   margin-left: auto;
 }
 
-.trigger--gluer { position: relative; top: unset; }
+.trigger--gluer   { position: relative; top: unset; }
+.trigger--twutils { position: relative; top: unset; }
 
 /* Image icons (module cards, config headers, triggers) */
 .card-icon-img {

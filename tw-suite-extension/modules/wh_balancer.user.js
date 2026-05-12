@@ -2887,29 +2887,31 @@
     // Building cost table — deterministic formulas, same across all TW servers
     // Source: https://help.tribalwars.net/index.php?title=Village_Headquarters
     const TW_BUILD_COST = {
-      main:       { w: 90,    s: 80,    i: 70,    f: 1.26  },
-      barracks:   { w: 200,   s: 170,   i: 90,    f: 1.26  },
-      stable:     { w: 270,   s: 240,   i: 260,   f: 1.26  },
-      garage:     { w: 300,   s: 240,   i: 260,   f: 1.26  },
-      snob:       { w: 15000, s: 25000, i: 10000, f: 1.26  },
-      smith:      { w: 220,   s: 180,   i: 240,   f: 1.26  },
-      place:      { w: 10,    s: 40,    i: 30,    f: 1.26  },
-      statue:     { w: 220,   s: 220,   i: 220,   f: 1.0   },
-      market:     { w: 100,   s: 100,   i: 100,   f: 1.26  },
-      wood:       { w: 50,    s: 60,    i: 40,    f: 1.25  },
-      stone:      { w: 65,    s: 50,    i: 40,    f: 1.275 },
-      iron:       { w: 75,    s: 65,    i: 70,    f: 1.252 },
-      farm:       { w: 45,    s: 40,    i: 30,    f: 1.3   },
-      storage:    { w: 60,    s: 50,    i: 40,    f: 1.265 },
-      hide:       { w: 50,    s: 60,    i: 50,    f: 1.25  },
-      wall:       { w: 50,    s: 100,   i: 20,    f: 1.265 },
-      watchtower: { w: 12050, s: 23750, i: 9250,  f: 1.26  },
+      main:       { w: 90,    s: 80,    fs: 1.275, i: 70,    f: 1.26  },
+      barracks:   { w: 200,   s: 170,   fs: 1.28,  i: 90,    f: 1.26  },
+      stable:     { w: 270,   s: 240,   fs: 1.28,  i: 260,   f: 1.26  },
+      garage:     { w: 300,   s: 240,   fs: 1.28,  i: 260,   f: 1.26  },
+      snob:       { w: 15000, s: 25000, i: 10000,  f: 2     },
+      smith:      { w: 220,   s: 180,   fs: 1.275, i: 240,   f: 1.26  },
+      place:      { w: 10,    s: 40,    fs: 1.275, i: 30,    f: 1.26  },
+      statue:     { w: 220,   s: 220,   i: 220,    f: 1.0   },
+      market:     { w: 100,   s: 100,   fs: 1.275, i: 100,   f: 1.26  },
+      wood:       { w: 50,    s: 60,    fs: 1.275, i: 40,    fi: 1.245, f: 1.25  },
+      stone:      { w: 65,    fw: 1.27, s: 50,     fs: 1.265, i: 40,   fi: 1.24 },
+      iron:       { w: 75,    s: 65,    fs: 1.275, i: 70,    fi: 1.24,  f: 1.252 },
+      farm:       { w: 45,    s: 40,    fs: 1.32,  i: 30,    fi: 1.29,  f: 1.3   },
+      storage:    { w: 60,    s: 50,    fs: 1.27,  i: 40,    fi: 1.245, f: 1.265 },
+      hide:       { w: 50,    s: 60,    i: 50,     f: 1.25  },
+      wall:       { w: 50,    s: 100,   fs: 1.275, i: 20,    f: 1.26  },
+      watchtower: { w: 12000, s: 14000, fi: 1.18,  f: 1.17  },
     };
     function calcBuildingCost(buildingId, level) {
       const c = TW_BUILD_COST[buildingId];
       if (!c) return { wood: 0, stone: 0, iron: 0 };
-      const m = Math.pow(c.f, level - 1);
-      return { wood: Math.floor(c.w * m), stone: Math.floor(c.s * m), iron: Math.floor(c.i * m) };
+      const mw = Math.pow(c.fw ?? c.f, level - 1);
+      const ms = Math.pow(c.fs ?? c.f, level - 1);
+      const mi = Math.pow(c.fi ?? c.f, level - 1);
+      return { wood: Math.round(c.w * mw), stone: Math.round(c.s * ms), iron: Math.round(c.i * mi) };
     }
 
     function makeAmVillageUrl(extra) {

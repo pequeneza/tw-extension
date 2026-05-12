@@ -548,6 +548,13 @@ export const MODULE_CONFIG_SCHEMAS: ModuleConfigSchemas = {
         default: true,
         help: "Adiciona botão –/+ na quickbar para minimizar/expandir. Estado persiste entre páginas.",
       },
+      {
+        key: "bulkCancel",
+        label: "Bulk Cancel",
+        type: "checkbox",
+        default: true,
+        help: "Botão fixo em screen=place para cancelar todos os comandos de uma vez.",
+      },
     ],
   },
 

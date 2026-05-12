@@ -16,6 +16,7 @@ import { GluerView }           from "./GluerView";
 import { ResourceBuyerView }  from "./ResourceBuyerView";
 import { LabelView }         from "./LabelView";
 import { AutoSenderView }   from "./AutoSenderView";
+import { TwUtilsView }     from "./TwUtilsView";
 
 /* ─── Helpers ─────────────────────────────────────────────────────────────── */
 function _p2(n: number) { return String(n).padStart(2, "0"); }
@@ -48,6 +49,7 @@ type View = { type: "list" } |
             { type: "buyer" } |
             { type: "label" } |
             { type: "autosender" } |
+            { type: "twutils" } |
             { type: "license" };
 
 /* ─── useSettings — lives in OverlayRoot, never unmounts ─────────────────── */
@@ -496,6 +498,7 @@ function StatsBar() {
 /* ─── Panel ───────────────────────────────────────────────────────────────── */
 function Panel({
   visible, onClose, s, ready, isOn, toggle, view, setViewP, theme, onToggleTheme,
+  onTwUtilsDrawerChange,
 }: {
   visible: boolean;
   onClose: () => void;
@@ -507,6 +510,7 @@ function Panel({
   setViewP: (v: View) => void;
   theme: "light" | "dark";
   onToggleTheme: () => void;
+  onTwUtilsDrawerChange: (v: boolean) => void;
 }) {
   const [search, setSearch] = useState("");
   const searchRef           = useRef<HTMLInputElement>(null);
@@ -624,6 +628,8 @@ function Panel({
                     setViewP({ type: "buyer" });
                   } else if (mod.id === "auto_sender") {
                     setViewP({ type: "autosender" });
+                  } else if (mod.id === "tw_utils") {
+                    setViewP({ type: "twutils" });
                   } else {
                     setViewP({ type: "config", id: mod.id });
                   }
@@ -694,6 +700,11 @@ function Panel({
         visible={view.type === "autosender"}
         onBack={() => setViewP({ type: "list" })}
       />
+      <TwUtilsView
+        visible={view.type === "twutils"}
+        onBack={() => setViewP({ type: "list" })}
+        onShowDrawerChange={onTwUtilsDrawerChange}
+      />
       <LicenseView
         visible={view.type === "license"}
         onBack={() => setViewP({ type: "list" })}
@@ -737,6 +748,15 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
 
   // Settings live HERE — never unmount, never reset on close
   const { s, ready, isOn, toggle } = useSettings();
+
+  // tw_utils: whether to show the ⚙️ drawer trigger button
+  const [twUtilsShowDrawer, setTwUtilsShowDrawer] = useState(true);
+  useEffect(() => {
+    storageGet(["tw_suite_cfg_tw_utils"]).then((r) => {
+      const cfg = (r["tw_suite_cfg_tw_utils"] as Record<string, unknown>) ?? {};
+      setTwUtilsShowDrawer(cfg["showDrawer"] !== false);
+    });
+  }, []);
 
   // Desviador state — updated by listening to the userscript's state events
   const [desvActive, setDesvActive] = useState(false);
@@ -824,6 +844,7 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
     if (v === "desviador") return { type: "desviador" };
     if (v === "gluer")      return { type: "gluer" };
     if (v === "autosender") return { type: "autosender" };
+    if (v === "twutils")    return { type: "twutils" };
     if (v === "license")    return { type: "license" };
     return { type: "list" };
   });
@@ -922,6 +943,12 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
             onClick={() => { setViewP({ type: "label" }); setOpen(true); }}
             title="Label + Renamer" aria-label="Label + Renamer">🏷️</button>
         )}
+
+        {isOn("tw_utils") && twUtilsShowDrawer && (
+          <button className="trigger trigger--twutils"
+            onClick={() => { setViewP({ type: "twutils" }); setOpen(true); }}
+            title="TW Tweaks" aria-label="TW Tweaks">⚙️</button>
+        )}
       </div>
       {/* Backdrop only shown when open */}
       <div className="backdrop" style={{ display: open ? "block" : "none" }}
@@ -939,6 +966,7 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
           s={s} ready={ready} isOn={isOn} toggle={toggle}
           view={view} setViewP={setViewP}
           theme={theme} onToggleTheme={toggleTheme}
+          onTwUtilsDrawerChange={setTwUtilsShowDrawer}
         />
       </div>
     </>

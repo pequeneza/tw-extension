@@ -130,6 +130,30 @@
     line-height: 18px;
     margin-right: 2px;
 }
+#tw-bc-fixed {
+    position: fixed;
+    bottom: 8px;
+    right: 8px;
+    z-index: 8990;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 3px 7px 3px 5px;
+    background: #e9d0a9;
+    border: 1px solid #603000;
+    border-radius: 3px;
+    box-shadow: 1px 1px 2px rgba(0,0,0,0.25);
+    cursor: pointer;
+    font-family: Verdana, Arial, sans-serif;
+    font-size: 10px;
+    font-weight: bold;
+    color: #8b1a00;
+    user-select: none;
+    transition: opacity 0.15s;
+}
+#tw-bc-fixed:hover { background: #f5ddb8; border-color: #4a2000; }
+#tw-bc-fixed.tw-bc-empty { opacity: 0.4; pointer-events: none; }
+#tw-bc-fixed img { width: 16px; height: 16px; display: block; }
 `;
 
     function injectStyle() {
@@ -292,13 +316,17 @@
 
     /* ═══════════════════════════════════════════════════════════════════════
        BULK CANCEL
-       Adds a delete-icon button floated to the right of the last <th> in the
-       outgoing commands table header on screen=place. Clicking fetches every
-       .command-cancel href sequentially (250 ms apart); page reloads when done.
+       • In-table button: floated right in the last <th> of any command table
+         that contains .command-cancel links (context-aware).
+       • Fixed button (#tw-bc-fixed): always present on screen=place even when
+         there are no commands to cancel; dims when count is 0.
+       Clicking either button fetches every .command-cancel href sequentially
+       (250 ms apart) then reloads the page.
+       Overlay can trigger cancel via CustomEvent xbot:twutils:cancelAll.
     ═══════════════════════════════════════════════════════════════════════ */
 
     const DELETE_FRAGMENT = 'graphic/delete.webp';
-    const BC_DELAY_MS = 250;
+    const BC_DELAY_MS = 200;
 
     function deleteIconUrl() {
         const base = (typeof game_data !== 'undefined' && game_data.graphic_path)
@@ -372,12 +400,58 @@
         });
     }
 
+    /* Always-present fixed button — shown on screen=place regardless of commands */
+    function injectBcFixed() {
+        if (document.getElementById('tw-bc-fixed')) return;
+
+        const wrap = document.createElement('div');
+        wrap.id = 'tw-bc-fixed';
+        wrap.title = 'Cancelar todos os comandos';
+
+        const counter = document.createElement('span');
+        counter.id = 'tw-bc-fixed-counter';
+
+        const img = document.createElement('img');
+        img.src = deleteIconUrl();
+        img.alt = 'Cancelar todos';
+        img.dataset.twbc = '1';
+
+        wrap.appendChild(counter);
+        wrap.appendChild(img);
+        wrap.addEventListener('click', () => cancelAll(wrap, counter));
+
+        document.body.appendChild(wrap);
+        updateBcFixed();
+    }
+
+    function updateBcFixed() {
+        const wrap = document.getElementById('tw-bc-fixed');
+        const counter = document.getElementById('tw-bc-fixed-counter');
+        if (!wrap || !counter) return;
+
+        const count = getCancelLinks().length;
+        counter.textContent = count > 0 ? String(count) : '';
+        if (count > 0) wrap.classList.remove('tw-bc-empty');
+        else wrap.classList.add('tw-bc-empty');
+    }
+
     function initBulkCancel() {
         if (getCurrentScreen() !== 'place') return;
         if (location.href.includes('try=confirm')) return;
+
+        injectBcFixed();
         processBcTables();
-        new MutationObserver(processBcTables)
-            .observe(document.body, { childList: true, subtree: true });
+
+        new MutationObserver(() => {
+            processBcTables();
+            updateBcFixed();
+        }).observe(document.body, { childList: true, subtree: true });
+
+        document.addEventListener('xbot:twutils:cancelAll', () => {
+            const wrap = document.getElementById('tw-bc-fixed');
+            const counter = document.getElementById('tw-bc-fixed-counter');
+            if (wrap && counter) cancelAll(wrap, counter);
+        });
     }
 
     /* ═══════════════════════════════════════════════════════════════════════

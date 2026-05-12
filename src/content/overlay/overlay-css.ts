@@ -1135,7 +1135,8 @@ select.input {
 .bal-hq-eta              { font-size: 11px; color: var(--n300); font-family: var(--mono); white-space: nowrap; }
 .bal-hq-status           { font-size: 11px; font-weight: 600; color: var(--g600); white-space: nowrap; }
 .bal-hq-status--warn     { color: var(--r500); }
-.bal-hq-shortfall        { display: flex; gap: 10px; margin-top: 5px; flex-wrap: wrap; }
+.bal-hq-shortfall        { display: flex; gap: 10px; margin-top: 5px; flex-wrap: wrap; align-items: center; }
+.bal-hq-shortfall-eta   { margin-left: auto; font-size: 10.5px; color: var(--n400); font-family: var(--mono); white-space: nowrap; }
 .bal-hq-row--skipped { background: var(--n50); opacity: 0.75; }
 .bal-hq-status--skipped { font-size: 11px; font-weight: 600; color: var(--n300); white-space: nowrap; }
  

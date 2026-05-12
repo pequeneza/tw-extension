@@ -2803,10 +2803,437 @@
     //      <td class="cost_stone warn" data-cost="126104">...</td>
     //      <td class="cost_iron"      data-cost="101472">...</td>
     //    We read data-cost directly — exact integer, no text parsing needed.
+
+    // -------- BULK HQ DATA FETCH --------
+    // Replaces per-village fetchHqNextBuilding for the main computation pass.
+    //   1. screen=am_village          (1 fetch)  → villageId → templateId
+    //   2. screen=am_village&mode=queue&template=ID  (N unique templates, usually 1-3)
+    //   3. screen=overview_villages&mode=buildings   (1 fetch) → levels + queue times
+    //   4. Walk template sequence per village → find next building step needed
+    //   5. screen=main for ONE village per unique (buildingId, targetLevel) for costs
+
+    function normalizeStr(s) {
+      return (s || "").toLowerCase().trim()
+        .normalize("NFD").replace(/[̀-ͯ]/g, "");
+    }
+
+    const TW_PT_BLDG = (() => {
+      const m = {};
+      [
+        ["edificio principal", "main"], ["quartel", "barracks"],
+        ["estabulo", "stable"], ["oficina", "garage"], ["academia", "snob"],
+        ["ferreiro", "smith"], ["praca de reunioes", "place"], ["mercado", "market"],
+        ["bosque", "wood"], ["poco de argila", "stone"], ["mina de ferro", "iron"],
+        ["fazenda", "farm"], ["armazem", "storage"], ["esconderijo", "hide"],
+        ["muralha", "wall"], ["torre de vigia", "watchtower"], ["estatua", "statue"],
+      ].forEach(([k, v]) => { m[k] = v; });
+      return m;
+    })();
+
+    const TW_PT_BLDG_NAME = {
+      main: "Edifício Principal", barracks: "Quartel", stable: "Estábulo",
+      garage: "Oficina", snob: "Academia", smith: "Ferreiro",
+      place: "Praça de Reuniões", market: "Mercado", wood: "Bosque",
+      stone: "Poço de Argila", iron: "Mina de Ferro", farm: "Fazenda",
+      storage: "Armazém", hide: "Esconderijo", wall: "Muralha",
+      watchtower: "Torre de Vigia", statue: "Estátua",
+    };
+
+    function buildingNameToId(rawName) {
+      const n = normalizeStr(rawName);
+      if (TW_PT_BLDG[n]) return TW_PT_BLDG[n];
+      for (const [key, id] of Object.entries(TW_PT_BLDG)) {
+        if (n.startsWith(key)) return id;
+      }
+      return null;
+    }
+
+    // "Ferreiro - a 13.05. às 06:33" or "05:45:30" → seconds remaining
+    function parseBuildingQueueEndSec(text) {
+      const s = text || "";
+      // "hoje às HH:MM" — today
+      const mHoje = s.match(/hoje\s+às\s+(\d{1,2}):(\d{2})/i);
+      if (mHoje) {
+        const t = new Date();
+        t.setHours(parseInt(mHoje[1], 10), parseInt(mHoje[2], 10), 0, 0);
+        return Math.max(0, Math.floor((t.getTime() - Date.now()) / 1000));
+      }
+      // "amanhã às HH:MM" — tomorrow
+      const mAmanha = s.match(/amanhã\s+às\s+(\d{1,2}):(\d{2})/i);
+      if (mAmanha) {
+        const t = new Date();
+        t.setDate(t.getDate() + 1);
+        t.setHours(parseInt(mAmanha[1], 10), parseInt(mAmanha[2], 10), 0, 0);
+        return Math.max(0, Math.floor((t.getTime() - Date.now()) / 1000));
+      }
+      // "a DD.MM. às HH:MM" — specific date
+      const mDate = s.match(/(\d{1,2})\.(\d{1,2})\.\s*[^\d]*(\d{1,2}):(\d{2})/);
+      if (mDate) {
+        const now = new Date();
+        const target = new Date(now.getFullYear(), parseInt(mDate[2], 10) - 1, parseInt(mDate[1], 10),
+                                 parseInt(mDate[3], 10), parseInt(mDate[4], 10), 0);
+        if (target.getTime() < now.getTime()) target.setFullYear(now.getFullYear() + 1);
+        return Math.max(0, Math.floor((target.getTime() - now.getTime()) / 1000));
+      }
+      // "H:MM:SS" or "HH:MM:SS" — plain remaining duration (overview page format)
+      const mDur = s.match(/\b(\d+):(\d{2}):(\d{2})\b/);
+      if (mDur) {
+        return parseInt(mDur[1], 10) * 3600 + parseInt(mDur[2], 10) * 60 + parseInt(mDur[3], 10);
+      }
+      return 0;
+    }
+
+    // Building cost table — deterministic formulas, same across all TW servers
+    // Source: https://help.tribalwars.net/index.php?title=Village_Headquarters
+    const TW_BUILD_COST = {
+      main:       { w: 90,    s: 80,    i: 70,    f: 1.26  },
+      barracks:   { w: 200,   s: 170,   i: 90,    f: 1.26  },
+      stable:     { w: 270,   s: 240,   i: 260,   f: 1.26  },
+      garage:     { w: 300,   s: 240,   i: 260,   f: 1.26  },
+      snob:       { w: 15000, s: 25000, i: 10000, f: 1.26  },
+      smith:      { w: 220,   s: 180,   i: 240,   f: 1.26  },
+      place:      { w: 10,    s: 40,    i: 30,    f: 1.26  },
+      statue:     { w: 220,   s: 220,   i: 220,   f: 1.0   },
+      market:     { w: 100,   s: 100,   i: 100,   f: 1.26  },
+      wood:       { w: 50,    s: 60,    i: 40,    f: 1.25  },
+      stone:      { w: 65,    s: 50,    i: 40,    f: 1.275 },
+      iron:       { w: 75,    s: 65,    i: 70,    f: 1.252 },
+      farm:       { w: 45,    s: 40,    i: 30,    f: 1.3   },
+      storage:    { w: 60,    s: 50,    i: 40,    f: 1.265 },
+      hide:       { w: 50,    s: 60,    i: 50,    f: 1.25  },
+      wall:       { w: 50,    s: 100,   i: 20,    f: 1.265 },
+      watchtower: { w: 12050, s: 23750, i: 9250,  f: 1.26  },
+    };
+    function calcBuildingCost(buildingId, level) {
+      const c = TW_BUILD_COST[buildingId];
+      if (!c) return { wood: 0, stone: 0, iron: 0 };
+      const m = Math.pow(c.f, level - 1);
+      return { wood: Math.floor(c.w * m), stone: Math.floor(c.s * m), iron: Math.floor(c.i * m) };
+    }
+
+    function makeAmVillageUrl(extra) {
+      const base = { screen: "am_village" };
+      if (game_data.player.sitter > 0) base.t = game_data.player.id;
+      return makeURL(Object.assign(base, extra || {}));
+    }
+
+    // Returns [{id, name}] for all templates visible on the template list page
+    async function fetchTemplateList() {
+      const html = await fetchWithRetry(makeAmVillageUrl({ mode: "template" }));
+      const $doc = $(html);
+      const seen = new Set();
+      const templates = [];
+      $doc.find("a[href*='template=']").each(function () {
+        const m = ($(this).attr("href") || "").match(/[?&]template=(\d+)/);
+        if (!m) return;
+        const id = m[1];
+        if (seen.has(id)) return;
+        seen.add(id);
+        const $row = $(this).closest("tr");
+        const name = $row.find("td").first().text().replace(/\s+/g, " ").trim() || `Plan ${id}`;
+        templates.push({ id, name });
+      });
+      console.log(`[WH Plans] template list: ${templates.length} plans`);
+      return templates;
+    }
+
+    // villageId → { templateKey, templateName }
+    // templateKey is either a numeric template ID string, or "n:TemplateName" (name-based fallback)
+    async function fetchAmVillageTemplateMap() {
+      const html = await fetchWithRetry(makeAmVillageUrl());
+      const $doc = $(html);
+      const result = new Map();
+      const rows = $doc.find("#village_table tr.row_a, #village_table tr.row_b");
+      console.log(`[WH Bulk] am_village: ${rows.length} village rows`);
+
+      let sampleLogged = false;
+      rows.each(function () {
+        const $tr = $(this);
+
+        // Village ID — from checkbox value (most reliable; avoids link href confusion)
+        const vid = $tr.find("input[name='villages[]']").val() ||
+                    $tr.find("span.village_anchor").attr("data-id");
+        if (!vid) return;
+
+        // Log first row for debugging
+        if (!sampleLogged) {
+          sampleLogged = true;
+          console.log(`[WH Bulk] am_village first row HTML: ${$tr.html().replace(/\s+/g, ' ').substring(0, 600)}`);
+        }
+
+        // Template is in td index 1 (layout: 0=checkbox+village, 1=model, 2=orders, 3=status, 4=remove)
+        const $tplTd = $tr.find("td").eq(1);
+
+        // Try link with numeric template ID in href
+        let templateId = null;
+        $tplTd.find("a").each(function () {
+          const m = ($(this).attr("href") || "").match(/[?&]template=(\d+)/);
+          if (m) { templateId = m[1]; return false; }
+        });
+
+        // Template name (nbsp = no template)
+        const templateName = $tplTd.text().replace(/ /g, '').trim();
+        const hasTemplate = templateName.length > 0 && !/sem gest/i.test(templateName);
+
+        if (templateId) {
+          result.set(vid, { templateKey: templateId, templateName });
+        } else if (hasTemplate) {
+          result.set(vid, { templateKey: `n:${templateName}`, templateName });
+        }
+      });
+      return result;
+    }
+
+    // [{buildingId, targetLevel}, ...] ordered build sequence
+    // templateKey: numeric ID string OR "n:name" (fetch via villageId in that case)
+    async function fetchTemplateSequence(templateKey, villageId) {
+      let url;
+      if (templateKey.startsWith("n:")) {
+        if (!villageId) return [];
+        url = makeAmVillageUrl({ mode: "queue", village: villageId });
+      } else {
+        url = makeAmVillageUrl({ mode: "queue", template: templateKey });
+      }
+      const html = await fetchWithRetry(url);
+      const $doc = $(html);
+      const $items = $doc.find("#template_queue li[data-building]");
+      console.log(`[WH Seq] template=${templateKey} items=${$items.length} url=${url}`);
+      const steps = [];
+      $items.each(function () {
+        const buildingId = $(this).attr("data-building");
+        if (!buildingId || !TW_PT_BLDG_NAME[buildingId]) return;
+        const levelText = $(this).find("span.level_absolute").text().trim();
+        const lm = levelText.match(/\(N[ií]vel\s*(\d+)\)/i);
+        if (!lm) return;
+        const targetLevel = parseInt(lm[1], 10);
+        if (targetLevel > 0) steps.push({ buildingId, targetLevel });
+      });
+      return steps;
+    }
+
+    // villageId → {levels: {buildingId: number}, queueEndsSec: number}
+    async function fetchBuildingsOverview() {
+      const base = { screen: "overview_villages", mode: "buildings", page: "-1" };
+      if (game_data.player.sitter > 0) base.t = game_data.player.id;
+      const html = await fetchWithRetry(makeURL(base));
+      const $p = $(html);
+      const result = new Map();
+
+      $p.find("table.vis tbody tr").each(function () {
+        const $tr = $(this);
+        // Village ID is directly on the <tr id="v_XXXXX"> attribute
+        const rowId = $tr.attr("id") || "";
+        const vm = rowId.match(/^v_(\d+)$/);
+        if (!vm) return;
+        const vid = vm[1];
+
+        // Building levels — each td has class "upgrade_building b_BUILDINGID"
+        const levels = {};
+        $tr.find("td[class*='b_']").each(function () {
+          const cm = ($(this).attr("class") || "").match(/\bb_([a-z_]+)\b/);
+          if (!cm || !TW_PT_BLDG_NAME[cm[1]]) return;
+          const v = parseInt($(this).text().trim(), 10);
+          if (!isNaN(v)) levels[cm[1]] = v;
+        });
+
+        // Queue: look up the village-specific ul by ID from the page root.
+        // The HTML parser moves <ul> out of <td>/<tr> (block in table), so
+        // $tr.find("ul.order_queue") returns nothing — use #building_order_VID instead.
+        const $ul = $p.find(`#building_order_${vid}`);
+        // Queue items: <li class="order"> each containing a .queue_icon img.
+        // The img has a `title` attribute (not data-title — that is set by game JS at runtime).
+        // title format: "BuildingName - hoje às HH:MM" / "amanhã às HH:MM" / "a DD.MM. às HH:MM"
+        const $liItems = $ul.find("li.order");
+        const queueLength = $liItems.length;
+        let queueEndsSec = 0;
+        const queuedLevels = {}; // buildingId → number of levels currently in queue
+        if (queueLength > 0) {
+          // Iterate all items: take max parsed time, collect queued building levels
+          $liItems.each(function () {
+            const $img = $(this).find(".queue_icon img");
+            const title = $img.attr("title") || "";
+            const sec = parseBuildingQueueEndSec(title);
+            if (sec > queueEndsSec) queueEndsSec = sec;
+            const src = $img.attr("src") || "";
+            const m = src.match(/buildings\/([a-z_]+)\.webp/i);
+            if (m && TW_PT_BLDG_NAME[m[1]]) queuedLevels[m[1]] = (queuedLevels[m[1]] || 0) + 1;
+          });
+          if (queueEndsSec === 0) {
+            const titles = [];
+            $liItems.each(function () { titles.push(`"${$(this).find(".queue_icon img").attr("title") || ""}"`); });
+            console.log(`[WH Bulk] vid=${vid} queue time parse miss (${queueLength} items) — titles: [${titles.join(", ")}]`);
+          }
+        }
+
+        result.set(vid, { levels, queueLength, queueEndsSec, queuedLevels });
+      });
+      console.log(`[WH Bulk] buildings overview: ${result.size} villages parsed`);
+      if (result.size > 0) {
+        const [firstVid, firstOv] = result.entries().next().value;
+        const lvlStr = Object.entries(firstOv.levels).map(([k, v]) => `${k}=${v}`).join(', ');
+        console.log(`[WH Bulk] first village vid=${firstVid}: levels { ${lvlStr} } | queue=${firstOv.queueLength} ends=${Math.round(firstOv.queueEndsSec / 60)}m`);
+      }
+      return result;
+    }
+
+    // Returns same Map<villageId, hqResult> shape as fetchHqNextBuilding.
+    // Returns null on fetch failure so callers can fall back.
+    async function fetchAllHqDataBulk(candidates, onProgress) {
+      console.log(`[WH Bulk] start — ${candidates.length} candidates`);
+
+      // Step 1: buildings overview — current levels + queue state for all villages
+      let bOverview;
+      try {
+        if (onProgress) onProgress("Fetching buildings overview…");
+        bOverview = await fetchBuildingsOverview();
+      } catch (e) {
+        console.log(`[WH Bulk] buildings overview fetch failed: ${e && e.status ? 'HTTP ' + e.status : String(e)} — falling back to per-village`);
+        return null;
+      }
+
+      // Step 2: template assignments from am_village
+      let templateMap;
+      try {
+        if (onProgress) onProgress("Fetching account manager…");
+        templateMap = await fetchAmVillageTemplateMap();
+      } catch (e) {
+        console.log(`[WH Bulk] am_village fetch failed: ${e && e.status ? 'HTTP ' + e.status : String(e)} — falling back to per-village`);
+        return null;
+      }
+      const withTemplate = [...templateMap.keys()];
+      const uniqueTemplates = new Map(); // templateKey → representative villageId
+      for (const [vid, val] of templateMap) {
+        if (!uniqueTemplates.has(val.templateKey)) uniqueTemplates.set(val.templateKey, vid);
+      }
+      const uniqueTemplateKeys = [...uniqueTemplates.keys()];
+      console.log(`[WH Bulk] am_village: ${withTemplate.length}/${candidates.length} villages have templates — keys: ${uniqueTemplateKeys.join(', ')}`);
+      if (!templateMap.size) { console.log('[WH Bulk] no templates assigned — returning empty'); return new Map(); }
+
+      // Step 3: build sequence per unique template — use cached plans when available
+      // Index by both numeric ID ("1746") and name-based key ("n:XXX") to match either form
+      const cachedPlanSeqs = (() => {
+        try {
+          const raw = localStorage.getItem('tm_whbalancer_plans_v1');
+          if (!raw) return new Map();
+          const plans = JSON.parse(raw);
+          const m = new Map();
+          for (const p of plans) {
+            m.set(p.id, p.steps);
+            m.set(`n:${p.name}`, p.steps);
+          }
+          return m;
+        } catch { return new Map(); }
+      })();
+      const templateSeqs = new Map();
+      const keysToFetch = [];
+      for (const tkey of uniqueTemplateKeys) {
+        if (cachedPlanSeqs.has(tkey)) {
+          templateSeqs.set(tkey, cachedPlanSeqs.get(tkey));
+          console.log(`[WH Bulk] template "${tkey}": ${cachedPlanSeqs.get(tkey).length} steps (cached)`);
+        } else {
+          keysToFetch.push(tkey);
+        }
+      }
+      for (let i = 0; i < keysToFetch.length; i++) {
+        const tkey = keysToFetch[i];
+        const repVid = uniqueTemplates.get(tkey);
+        if (onProgress) onProgress(`Fetching template ${i + 1}/${keysToFetch.length}…`);
+        try {
+          const seq = await fetchTemplateSequence(tkey, repVid);
+          templateSeqs.set(tkey, seq);
+          const preview = seq.slice(0, 4).map(s => `${s.buildingId}->${s.targetLevel}`).join(', ');
+          console.log(`[WH Bulk] template "${tkey}": ${seq.length} steps — ${preview}${seq.length > 4 ? ', ...' : ''}`);
+        } catch (e) {
+          console.log(`[WH Bulk] template "${tkey}" fetch failed: ${e && e.status ? 'HTTP ' + e.status : String(e)}`);
+        }
+        if (i < keysToFetch.length - 1) await new Promise(r => setTimeout(r, 300));
+      }
+
+      // Step 4: next building per village — first sequence step where effective level < target
+      // Effective level = completed level + levels already queued (resources already consumed)
+      const nextMap = new Map();
+      let noTemplate = 0, noOverview = 0, noNextStep = 0;
+      for (const v of candidates) {
+        const vid = String(v.id);
+        const tval = templateMap.get(vid);
+        if (!tval) { noTemplate++; continue; }
+        const seq = templateSeqs.get(tval.templateKey);
+        if (!seq || !seq.length) continue;
+        const overview = bOverview.get(vid);
+        if (!overview) { noOverview++; continue; }
+        const qLevels = overview.queuedLevels || {};
+        let found = false;
+        for (const step of seq) {
+          const effective = (overview.levels[step.buildingId] || 0) + (qLevels[step.buildingId] || 0);
+          if (effective < step.targetLevel) {
+            nextMap.set(vid, step); found = true; break;
+          }
+        }
+        if (!found) noNextStep++;
+      }
+      console.log(`[WH Bulk] next buildings: ${nextMap.size} found | no-template=${noTemplate} no-overview=${noOverview} sequence-complete=${noNextStep}`);
+      for (const [vid, next] of nextMap) {
+        const ov = bOverview.get(vid);
+        const completed = ov?.levels[next.buildingId] || 0;
+        const inQueue   = ov?.queuedLevels?.[next.buildingId] || 0;
+        const qSec = ov?.queueEndsSec || 0;
+        const qLen = ov?.queueLength || 0;
+        const qStr = qSec > 0 ? ` queue=${qLen}x ends=${Math.round(qSec / 60)}m` : ' queue=idle';
+        console.log(`[WH Bulk]   vid=${vid}: ${next.buildingId} ${completed}+${inQueue}q->${next.targetLevel}${qStr}`);
+      }
+
+      // Step 5: assemble result — costs computed from TW_BUILD_COST formula (no HTTP)
+      const result = new Map();
+      for (const v of candidates) {
+        const vid = String(v.id);
+        const overview = bOverview.get(vid);
+        if (!overview) continue;
+        const next = nextMap.get(vid);
+        const queueEndsSec = overview.queueEndsSec || 0;
+        if (!next) {
+          if (queueEndsSec > 0) result.set(vid, {
+            villageId: vid, buildingName: null, buildingId: null,
+            queueEndsSec, costWood: 0, costStone: 0, costIron: 0,
+            prodWoodPerHr: 0, prodStonePerHr: 0, prodIronPerHr: 0,
+          });
+          continue;
+        }
+        // Cost for the immediate next single upgrade (currentLevel+1), not the template target.
+        // A template step "market→20" with current level 17 means the next upgrade is 17→18.
+        const completedLevel = overview.levels[next.buildingId] || 0;
+        const nextSingleLevel = completedLevel + 1;
+        const cost = calcBuildingCost(next.buildingId, nextSingleLevel);
+        result.set(vid, {
+          villageId: vid,
+          buildingId: next.buildingId,
+          buildingName: TW_PT_BLDG_NAME[next.buildingId] || next.buildingId,
+          queueEndsSec,
+          costWood: cost.wood, costStone: cost.stone, costIron: cost.iron,
+          prodWoodPerHr: 0, prodStonePerHr: 0, prodIronPerHr: 0,
+        });
+      }
+      console.log(`[WH Bulk] done — ${result.size} villages in HQ map`);
+      return result;
+    }
+
+    async function fetchWithRetry(url, maxRetries = 3) {
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+          return await $.get(url);
+        } catch (e) {
+          if (attempt < maxRetries && e && e.status === 429) {
+            await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+            continue;
+          }
+          throw e;
+        }
+      }
+    }
+
     async function fetchHqNextBuilding(villageId) {
       // Step 1: get the next building name + id from accountmanager page
       const amUrl  = makeURL({ village: villageId, screen: "main", mode: "accountmanager" });
-      const amHtml = await $.get(amUrl);
+      const amHtml = await fetchWithRetry(amUrl);
       const $am    = $(amHtml);
 
       let buildingName   = null;
@@ -2840,8 +3267,8 @@
       //   These rows do NOT appear on mode=build.
 
       const [buildRes, mainRes] = await Promise.all([
-        $.get(makeURL({ village: villageId, screen: "main", mode: "build" })),
-        $.get(makeURL({ village: villageId, screen: "main" })),
+        fetchWithRetry(makeURL({ village: villageId, screen: "main", mode: "build" })),
+        fetchWithRetry(makeURL({ village: villageId, screen: "main" })),
       ]);
       const $b    = $(buildRes);
       const $main = $(mainRes);
@@ -3255,7 +3682,8 @@
       }
     }
 
-    // Headless HQ check — sends results back via 'xbot:balancer:hqResults' event
+    // Headless HQ check — always fetches fresh data so queue times are accurate.
+    // Uses the fast bulk approach first; falls back to per-village if bulk fails.
     async function runHqCheckHeadless() {
       if (!state || !state.villagesData || !state.villagesData.length) {
         document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
@@ -3263,57 +3691,59 @@
         }));
         return;
       }
-      const hqLowPts  = state?.settings?.lowPoints     || 0;
-      const hqMaxPts  = state?.settings?.maxedOutPoints || 10471;
-      const hqTotal   = state.villagesData ? state.villagesData.filter(v => v.points >= hqLowPts && v.points < hqMaxPts).length : 0;
-      const hqSkippedCount = state.villagesData ? state.villagesData.length - hqTotal : 0;
+      const maxPts    = state.settings.maxedOutPoints || 10471;
+      const lowPts    = state.settings.lowPoints      || 0;
+      const hqCandidates   = state.villagesData.filter(v => v.points >= lowPts && v.points < maxPts);
+      const hqTotal        = hqCandidates.length;
+      const hqSkippedCount = state.villagesData.length - hqTotal;
       document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
         detail: { loading: true, progress: 0, total: hqTotal, skipped: hqSkippedCount },
       }));
       try {
-        const cachedHqData = state.hqData;
-        const results = [];
-        const maxPts = state.settings.maxedOutPoints || 10471;
-        const lowPts = state.settings.lowPoints || 0;
+        // Step 1: try fast bulk fetch (overview + am_village, 3-4 HTTP requests total)
+        let freshHqData = await fetchAllHqDataBulk(hqCandidates, (label) => {
+          document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
+            detail: { loading: true, progress: 0, total: hqTotal, skipped: hqSkippedCount },
+          }));
+        });
 
-        if (cachedHqData && cachedHqData.size > 0) {
-          const ageMin = state.hqLastFetchMs ? Math.floor((getNowMs() - state.hqLastFetchMs) / 60000) : null;
-          for (const v of state.villagesData) {
-            if (v.points >= maxPts || v.points < lowPts) continue;
-            const hq = cachedHqData.get(String(v.id));
-            if (!hq) continue;
-            const check = computeHqReadiness(v, hq);
-            const normalQueueMaxSec = ((state.settings.hqNormalQueueMaxHours ?? 6)) * 3600;
-            const isLowPtsV = v.points < (state.settings.lowPoints || 0);
-            const overQueue = !isLowPtsV && normalQueueMaxSec > 0 && (hq.queueEndsSec || 0) > normalQueueMaxSec;
-            if (check) results.push({ villageName: v.name, villageUrl: v.url, villagePoints: v.points, overQueue, ...check });
-          }
-          document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
-            detail: { results, cached: true, ageMin },
-          }));
-        } else {
-          const toCheck = state.villagesData.filter(v => v.points >= lowPts && v.points < maxPts);
-          const skipped = (state.villagesData?.length ?? 0) - toCheck.length;
-          const freshMap = await fetchAllHqData(toCheck, (done, total) => {
+        // Step 2: fallback to per-village fetch if bulk failed
+        if (!freshHqData) {
+          freshHqData = new Map();
+          for (let i = 0; i < hqCandidates.length; i++) {
+            const v = hqCandidates[i];
             document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
-              detail: { loading: true, progress: done + 1, total, skipped },
+              detail: { loading: true, progress: i + 1, total: hqTotal, skipped: hqSkippedCount },
             }));
-          });
-          state.hqData = freshMap;
-          state.hqLastFetchMs = getNowMs();
-          const normalQueueMaxSec = ((state.settings.hqNormalQueueMaxHours ?? 6)) * 3600;
-          for (const v of toCheck) {
-            const hq = freshMap.get(String(v.id));
-            if (!hq) continue;
-            const check = computeHqReadiness(v, hq);
-            const isLowPtsV = v.points < (state.settings.lowPoints || 0);
-            const overQueue = !isLowPtsV && normalQueueMaxSec > 0 && (hq.queueEndsSec || 0) > normalQueueMaxSec;
-            if (check) results.push({ villageName: v.name, villageUrl: v.url, villagePoints: v.points, overQueue, ...check });
+            try {
+              const hq = await fetchHqNextBuilding(v.id);
+              if (hq) freshHqData.set(String(v.id), hq);
+            } catch (_) { /* skip individual failures */ }
+            if (i < hqCandidates.length - 1) await new Promise(res => setTimeout(res, 300));
           }
-          document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
-            detail: { results, cached: false, ageMin: 0 },
-          }));
         }
+
+        // Build results array and classify villages
+        const results = [];
+        const normalQueueMaxSec = (state.settings.hqNormalQueueMaxHours ?? 6) * 3600;
+        for (const v of hqCandidates) {
+          const hq = freshHqData.get(String(v.id));
+          if (!hq) continue;
+          const check = computeHqReadiness(v, hq);
+          if (!check) continue;
+          const isLowPtsV = v.points < lowPts;
+          const overQueue = !isLowPtsV && normalQueueMaxSec > 0 && (hq.queueEndsSec || 0) > normalQueueMaxSec;
+          results.push({ villageName: v.name, villageUrl: v.url, villagePoints: v.points, overQueue, ...check });
+        }
+
+        // Update cache so the next balancer Run can reuse this fresh data
+        state.hqData = freshHqData;
+        state.hqLastFetchMs = getNowMs();
+        saveHqData(freshHqData, state.hqLastFetchMs);
+
+        document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
+          detail: { results, cached: false, ageMin: 0, fetchedAtMs: state.hqLastFetchMs },
+        }));
       } catch (e) {
         document.dispatchEvent(new CustomEvent('xbot:balancer:hqResults', {
           detail: { error: String(e) },
@@ -3371,6 +3801,42 @@
         console.error('[WH] acceptTrade failed', err);
         if (typeof UI !== 'undefined') UI.ErrorMessage('Trade failed: ' + (err.message || err));
       }
+    });
+    document.addEventListener('xbot:balancer:fetchPlans', () => {
+      (async () => {
+        try {
+          document.dispatchEvent(new CustomEvent('xbot:balancer:plansResult',
+            { detail: { loading: true, progress: 0, total: 0 } }));
+
+          const templates = await fetchTemplateList();
+
+          document.dispatchEvent(new CustomEvent('xbot:balancer:plansResult',
+            { detail: { loading: true, progress: 0, total: templates.length } }));
+
+          const plans = [];
+          for (let i = 0; i < templates.length; i++) {
+            const t = templates[i];
+            try {
+              const steps = await fetchTemplateSequence(t.id, null);
+              plans.push({ id: t.id, name: t.name, steps });
+              console.log(`[WH Plans] "${t.name}" (${t.id}): ${steps.length} steps`);
+            } catch (err) {
+              console.warn(`[WH Plans] failed template ${t.id}:`, err);
+            }
+            document.dispatchEvent(new CustomEvent('xbot:balancer:plansResult',
+              { detail: { loading: true, progress: i + 1, total: templates.length } }));
+            if (i < templates.length - 1) await new Promise(r => setTimeout(r, 300));
+          }
+
+          localStorage.setItem('tm_whbalancer_plans_v1', JSON.stringify(plans));
+          document.dispatchEvent(new CustomEvent('xbot:balancer:plansResult',
+            { detail: { plans } }));
+        } catch (err) {
+          console.error('[WH Plans] fetchAllPlans error:', err);
+          document.dispatchEvent(new CustomEvent('xbot:balancer:plansResult',
+            { detail: { error: String(err) } }));
+        }
+      })();
     });
     // Content script polls locks/state via request/response events
     document.addEventListener('xbot:balancer:getLocks', () => {
@@ -3569,11 +4035,32 @@
         const hqCandidates = villagesData.filter(v => v.points >= lowPts && v.points < maxPts);
         const hqSkipped    = villagesData.length - hqCandidates.length;
 
-        hqData = await fetchAllHqData(hqCandidates, (done, total) => {
-          const label = `${done + 1}–${Math.min(done + 3, total)}/${total}${hqSkipped > 0 ? `, ${hqSkipped} skipped` : ""}`;
-          $("#tmwh_summary").text(`Checking HQ build queues… (${label})`);
-          updateReactState({ running: true, statusText: `Checking HQ… (${label})` });
-        });
+        const onHqProgress = (msg) => {
+          const label = hqSkipped > 0 ? `${msg} (${hqSkipped} maxed skipped)` : msg;
+          $("#tmwh_summary").text(`HQ: ${label}`);
+          updateReactState({ running: true, statusText: `HQ: ${label}` });
+        };
+
+        // Try the fast bulk approach first (3 bulk fetches + N_unique_cost fetches)
+        const bulkResult = await fetchAllHqDataBulk(hqCandidates, onHqProgress);
+
+        if (bulkResult !== null) {
+          hqData = bulkResult;
+        } else {
+          // Fallback: sequential per-village (old approach)
+          hqData = new Map();
+          for (let i = 0; i < hqCandidates.length; i++) {
+            const v = hqCandidates[i];
+            onHqProgress(`${i + 1}/${hqCandidates.length}`);
+            try {
+              const hq = await fetchHqNextBuilding(v.id);
+              if (hq?.villageId) hqData.set(hq.villageId, hq);
+            } catch (e) {
+              console.warn(`HQ fetch failed for village ${v.id}`, e);
+            }
+            if (i < hqCandidates.length - 1) await new Promise(r => setTimeout(r, 300));
+          }
+        }
 
         state.hqData = hqData;
         state.hqLastFetchMs = nowMs;

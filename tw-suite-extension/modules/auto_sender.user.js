@@ -684,7 +684,7 @@
 
       var q   = readQueue();
       var now = getEffectiveServerNowMs();
-      var changed = false;
+      var emitNeeded = false;
 
       for (var i = 0; i < q.length; i++) {
         var e     = q[i];
@@ -692,7 +692,12 @@
         var effectiveLaunch = e.randomOffsetTime || e.launch;
         var until = effectiveLaunch - now;
         if (until > _settings._openTabDelaySec * 1000) continue;
-        if (effectiveLaunch < now - 10000) { e.status = 'failed'; changed = true; continue; }
+        if (effectiveLaunch < now - 10000) {
+          // Re-read queue before writing so a concurrent clear/remove isn't overwritten.
+          updateStatus(e.id, 'failed');
+          emitNeeded = true;
+          continue;
+        }
 
         var active = { id: e.id, src: e.src, tgt: e.tgt,
                        srcVillageId: e.srcVillageId, tgtVillageId: e.tgtVillageId,
@@ -704,8 +709,11 @@
                        randomOffsetTime: e.randomOffsetTime != null ? e.randomOffsetTime : null,
                        writtenAt: Date.now() };
         try { localStorage.setItem(LS_ACTIVE, JSON.stringify(active)); } catch (err) {}
-        e.status = 'launching';
-        changed  = true;
+
+        // Re-read queue before writing launching status so a concurrent clear isn't overwritten.
+        var q2 = readQueue();
+        for (var j = 0; j < q2.length; j++) { if (q2[j].id === e.id) { q2[j].status = 'launching'; writeQueue(q2); break; } }
+        emitNeeded = true;
 
         var url = location.origin + '/game.php?village=' + e.srcVillageId + '&screen=place';
         if (e.tgtVillageId) url += '&target=' + e.tgtVillageId;
@@ -713,7 +721,7 @@
         break; // one at a time
       }
 
-      if (changed) { writeQueue(q); emitState(); }
+      if (emitNeeded) emitState();
     }
 
     setInterval(tick, 1000);

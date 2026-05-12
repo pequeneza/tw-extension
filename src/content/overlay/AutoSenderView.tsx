@@ -207,14 +207,25 @@ function QueueTab({ queue, paused, active, now, onSend, onRemove, onPauseToggle,
                     style={{ flexDirection: "column", alignItems: "stretch", gap: 0,
                       opacity: isFinal ? 0.6 : 1 }}>
 
-                    {/* Row 1: src → tgt + status + delete */}
+                    {/* Row 1: src → tgt + type badge + note + delete */}
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       <span className="gluer-queue-src">{entry.src}</span>
                       <span style={{ color: "var(--n300)", fontSize: 11 }}>→</span>
                       <span className="gluer-queue-tgt">{entry.tgt}</span>
+                      <span style={{
+                        fontSize: 9, fontWeight: 700, padding: "1px 4px",
+                        borderRadius: 3, flexShrink: 0, whiteSpace: "nowrap",
+                        color: entry.type === "support" ? "var(--b500)" : "var(--r500)",
+                        background: entry.type === "support"
+                          ? "rgba(59,130,246,.10)" : "rgba(220,38,38,.10)",
+                        border: `1px solid ${entry.type === "support"
+                          ? "rgba(59,130,246,.25)" : "rgba(220,38,38,.20)"}`,
+                      }}>
+                        {entry.type === "support" ? "🛡 apoio" : "⚔ ataque"}
+                      </span>
                       {entry.note && (
-                        <span style={{ fontSize: 10, color: "var(--n400)", marginLeft: 4,
-                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 90 }}>
+                        <span style={{ fontSize: 10, color: "var(--n400)",
+                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 80 }}>
                           {entry.note}
                         </span>
                       )}

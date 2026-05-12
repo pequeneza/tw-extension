@@ -243,7 +243,24 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
 
 .trigger--balancer   { position: relative; top: unset; }
 .trigger--buyer      { position: relative; top: unset; }
-.trigger--autosender { position: relative; top: unset; }
+.trigger--autosender {
+  position: relative;
+  top: unset;
+  height: auto;
+  min-height: 28px;
+  flex-direction: column;
+  gap: 1px;
+  padding: 3px 0;
+}
+.trigger-timer {
+  font-size: 8px;
+  font-family: 'DM Mono', 'Courier New', monospace;
+  font-variant-numeric: tabular-nums;
+  color: var(--a500);
+  line-height: 1;
+  letter-spacing: 0.03em;
+  pointer-events: none;
+}
 
 /* ── Backdrop ────────────────────────────────────────────────────────────── */
 .backdrop {

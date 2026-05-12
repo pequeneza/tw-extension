@@ -618,6 +618,7 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
         tgt: e.target,
         srcVillageId: e.srcVillageId ?? null,
         tgtVillageId: null,
+        type: e.commandType.toLowerCase() as "attack" | "support",
         launch: e.sendMs,
         arrival: e.arrivalMs,
         units: e.units,

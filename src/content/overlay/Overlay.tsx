@@ -17,6 +17,16 @@ import { ResourceBuyerView }  from "./ResourceBuyerView";
 import { LabelView }         from "./LabelView";
 import { AutoSenderView }   from "./AutoSenderView";
 
+/* ─── Helpers ─────────────────────────────────────────────────────────────── */
+function _p2(n: number) { return String(n).padStart(2, "0"); }
+function fmtTriggerTimer(diffMs: number): string {
+  const h = Math.floor(diffMs / 3_600_000);
+  const m = Math.floor((diffMs % 3_600_000) / 60_000);
+  const s = Math.floor((diffMs % 60_000) / 1_000);
+  if (h > 0) return `${_p2(h)}:${_p2(m)}`;
+  return `${_p2(m)}:${_p2(s)}`;
+}
+
 /* ─── Storage ─────────────────────────────────────────────────────────────── */
 function storageGet(keys: string[]): Promise<Record<string, unknown>> {
   return new Promise((res) =>
@@ -741,21 +751,37 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
     return () => document.removeEventListener("xbot:desviador:state", handler);
   }, []);
 
-  // Auto Sender queue count — poll localStorage
-  const [asQueueCount, setAsQueueCount] = useState(0);
+  // Auto Sender queue count + next launch time — poll localStorage
+  const [asQueueCount,  setAsQueueCount]  = useState(0);
+  const [asNextLaunch,  setAsNextLaunch]  = useState<number | null>(null);
+  const [asNow,         setAsNow]         = useState(() => Date.now());
   useEffect(() => {
-    const count = () => {
+    const update = () => {
       try {
-        const q = JSON.parse(localStorage.getItem("xbot_autosender_queue") ?? "[]");
-        setAsQueueCount(Array.isArray(q)
-          ? q.filter((e: { status?: string }) => e.status === "pending" || !e.status).length
-          : 0);
-      } catch { setAsQueueCount(0); }
+        const q = JSON.parse(localStorage.getItem("xbot_autosender_queue") ?? "[]") as
+          Array<{ status?: string; launch?: number }>;
+        if (Array.isArray(q)) {
+          const pending = q.filter(e => e.status === "pending");
+          setAsQueueCount(pending.length);
+          const ts = pending.map(e => e.launch ?? 0).filter(t => t > 0);
+          setAsNextLaunch(ts.length > 0 ? Math.min(...ts) : null);
+        } else {
+          setAsQueueCount(0);
+          setAsNextLaunch(null);
+        }
+      } catch { setAsQueueCount(0); setAsNextLaunch(null); }
     };
-    count();
-    const id = setInterval(count, 3000);
+    update();
+    const id = setInterval(update, 3000);
     return () => clearInterval(id);
   }, []);
+
+  // Countdown ticker — runs while there's a pending launch
+  useEffect(() => {
+    if (asNextLaunch === null) return;
+    const id = setInterval(() => setAsNow(Date.now()), 500);
+    return () => clearInterval(id);
+  }, [asNextLaunch]);
 
   const isIncomingsPage = /screen=overview_villages.*mode=incomings.*subtype=attacks/.test(
     window.location.href
@@ -877,6 +903,11 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
             aria-label="Auto Sender">
             🚀
             {asQueueCount > 0 && <span className="trigger-badge-count">{asQueueCount}</span>}
+            {asNextLaunch !== null && (
+              <span className="trigger-timer">
+                {fmtTriggerTimer(Math.max(0, asNextLaunch - asNow))}
+              </span>
+            )}
           </button>
         )}
 

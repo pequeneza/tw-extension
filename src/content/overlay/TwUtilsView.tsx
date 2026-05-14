@@ -150,11 +150,28 @@ export function TwUtilsView({
           ))}
         </div>
 
+        <div className="cfg-section">
+          <div className="section-label">Ferramentas</div>
+          <div style={{ padding: "8px 14px" }}>
+            <button
+              className="btn btn-save"
+              style={{ width: "100%", justifyContent: "center" }}
+              onClick={() => {
+                const vid = new URLSearchParams(window.location.search).get("village") ?? "";
+                window.location.href = `/game.php?village=${vid}&screen=place&mode=sim`;
+              }}
+            >
+              Simulador
+            </button>
+          </div>
+        </div>
+
         {isPlacePage && (
           <div className="cfg-section">
             <div className="section-label">Bulk Cancel</div>
             <div style={{ display: "flex", alignItems: "center",
-                          justifyContent: "space-between", gap: "8px" }}>
+                          justifyContent: "space-between", gap: "8px",
+                          padding: "8px 14px" }}>
               <span style={{ fontSize: "12px", color: "var(--n400)" }}>
                 {cancelCount > 0
                   ? `${cancelCount} command${cancelCount !== 1 ? "s" : ""} queued`
@@ -173,9 +190,10 @@ export function TwUtilsView({
         )}
       </div>
 
-      <div className="cfg-footer" style={{ fontSize: "11px", color: "var(--n300)",
-                                            justifyContent: "center", padding: "8px 16px" }}>
-        Feature toggles take effect on next page load
+      <div className="cfg-footer" style={{ justifyContent: "center" }}>
+        <span style={{ fontSize: "11px", color: "var(--n300)" }}>
+          Feature toggles take effect on next page load
+        </span>
       </div>
     </div>
   );

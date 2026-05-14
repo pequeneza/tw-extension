@@ -9,6 +9,16 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
+/* ─── useMountAnim ───────────────────────────────────────────────────────── */
+function useMountAnim(trigger: boolean) {
+  const [anim, setAnim] = useState(false);
+  useEffect(() => {
+    if (trigger) requestAnimationFrame(() => setAnim(true));
+    else setAnim(false);
+  }, [trigger]);
+  return anim;
+}
+
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 interface BuyerConfig {
   ENABLED: boolean;
@@ -136,31 +146,35 @@ function PriorityList({
     onChange(next);
   };
 
+  const RES_LABEL: Record<string, string> = { wood: "Madeira", stone: "Barro", iron: "Ferro" };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       {priority.map((res, i) => (
         <div
           key={res}
           style={{
-            display: "flex", alignItems: "center", gap: 6,
-            background: "var(--n800)", borderRadius: 4, padding: "4px 8px",
+            display: "flex", alignItems: "center", gap: 8,
+            background: "var(--n50)", border: "1px solid var(--n150)",
+            borderRadius: 6, padding: "5px 8px",
           }}
         >
-          <span style={{ width: 16, fontSize: 11, color: "var(--n400)" }}>
-            {i + 1}.
+          <span style={{ width: 14, fontSize: 10, color: "var(--n300)", fontFamily: "var(--mono)", flexShrink: 0 }}>
+            {i + 1}
           </span>
-          <span style={{ flex: 1, fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}>
-            <ResIcon res={res} />
+          <ResIcon res={res} />
+          <span style={{ flex: 1, fontSize: 12, color: "var(--n700)" }}>
+            {RES_LABEL[res] ?? res}
           </span>
           <button
             className="btn btn-ghost"
-            style={{ padding: "1px 7px", fontSize: 11 }}
+            style={{ padding: "1px 7px", fontSize: 11, flex: "none" }}
             disabled={i === 0}
             onClick={() => move(i, -1)}
           >↑</button>
           <button
             className="btn btn-ghost"
-            style={{ padding: "1px 7px", fontSize: 11 }}
+            style={{ padding: "1px 7px", fontSize: 11, flex: "none" }}
             disabled={i === priority.length - 1}
             onClick={() => move(i, 1)}
           >↓</button>
@@ -183,6 +197,7 @@ export function ResourceBuyerView({
   const [dirty, setDirty] = useState(false);
   const [saved, setSaved] = useState(false);
   const syncedRef = useRef(false);
+  const anim = useMountAnim(visible);
 
   // Reset sync guard when panel closes so it re-syncs fresh on next open
   useEffect(() => {
@@ -218,9 +233,15 @@ export function ResourceBuyerView({
     window.location.href
   );
 
+  const subtitleText = !detected
+    ? "a aguardar userscript…"
+    : state.running
+      ? "A comprar recursos"
+      : "Parado";
+
   return (
     <div
-      className={`cfg-view${visible ? " in" : ""}`}
+      className={`cfg-view${anim ? " in" : ""}`}
       style={{ display: visible ? "flex" : "none" }}
     >
       {/* Header */}
@@ -234,120 +255,116 @@ export function ResourceBuyerView({
         <span className="cfg-icon">🛒</span>
         <div className="cfg-header-text">
           <span className="cfg-title">Resource Buyer</span>
-          <span className="cfg-subtitle">
-            {!detected
-              ? "waiting for userscript…"
-              : state.running
-                ? "🟢 Running"
-                : "⏹ Stopped"}
-          </span>
+          <span className="cfg-subtitle">{subtitleText}</span>
         </div>
         {state.running && (
           <span className="live-pip" style={{ marginLeft: "auto", marginRight: 4 }} />
         )}
       </div>
 
-      {/* Start / Stop */}
-      <div className="cfg-section">
+      {/* Start / Stop — always visible, not in scroll area */}
+      <div className="cfg-section" style={{ flexShrink: 0 }}>
         {!isOnExchangePage && (
-          <div className="field-help" style={{ color: "var(--a500)", padding: "8px 14px 0" }}>
-            ⚠ Navigate to the Premium Exchange market to use this module.
+          <div className="desv-page-warn" style={{ margin: "8px 14px 0" }}>
+            Navega para o mercado (Troca Premium) para usar este modulo.
           </div>
         )}
         <div style={{ display: "flex", gap: 6, padding: "10px 14px" }}>
           <button
-            className="btn btn-save btn-save--dirty"
-            style={{
-              flex: 1,
-              background: state.running ? "var(--n700)" : "var(--g600)",
-              borderColor: state.running ? "var(--n600)" : "var(--g600)",
-              opacity: (!detected || state.running) ? 0.5 : 1,
-            }}
+            className={`btn btn-save${!state.running && detected && isOnExchangePage ? " btn-save--dirty" : ""}`}
+            style={{ flex: 1 }}
             disabled={!detected || state.running || !isOnExchangePage}
             onClick={handleStart}
           >
-            ▶ Start
+            Start
           </button>
           <button
             className="btn btn-ghost"
-            style={{ flex: 1, opacity: (!detected || !state.running) ? 0.5 : 1 }}
+            style={{ flex: 1 }}
             disabled={!detected || !state.running}
             onClick={handleStop}
           >
-            ■ Stop
+            Stop
           </button>
         </div>
         {!detected && (
-          <div className="state-msg">
-            Userscript not detected — ensure resource_buyer is enabled and you are on the exchange page.
+          <div className="state-msg" style={{ flexDirection: "column", gap: 6, paddingTop: 4, paddingBottom: 12 }}>
+            <span className="spinner" />
+            <span style={{ textAlign: "center" }}>
+              Userscript nao detetado. Ativa o modulo e vai para a pagina de troca.
+            </span>
           </div>
         )}
       </div>
 
-      {/* Resources to buy */}
-      <div className="cfg-section">
-        <div className="section-label">Resources</div>
-        {(["buy_wood", "buy_stone", "buy_iron"] as const).map((key) => {
-          const res = key.replace("buy_", "") as "wood" | "stone" | "iron";
-          return (
-            <label key={key} className="field-check">
-              <span className="field-check-text">
-                <span className="field-label" style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  <ResIcon res={res} />
+      {/* Scrollable config area */}
+      <div className="cfg-body">
+        {/* Resources to buy */}
+        <div className="cfg-section cfg-section-checks">
+          <div className="section-label">Recursos</div>
+          {(["buy_wood", "buy_stone", "buy_iron"] as const).map((key) => {
+            const res = key.replace("buy_", "") as "wood" | "stone" | "iron";
+            const RES_LABEL: Record<string, string> = { wood: "Madeira", stone: "Barro", iron: "Ferro" };
+            return (
+              <label key={key} className="field-check">
+                <span className="field-check-text">
+                  <span className="field-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <ResIcon res={res} />
+                    <span>{RES_LABEL[res]}</span>
+                  </span>
                 </span>
-              </span>
-              <span className="toggle" onClick={(e) => e.stopPropagation()}>
-                <input
-                  type="checkbox"
-                  checked={Boolean(cfg[key])}
-                  onChange={(e) => set(key, e.target.checked)}
-                />
-                <span className="toggle-thumb" />
-              </span>
-            </label>
-          );
-        })}
-      </div>
-
-      {/* Priority order */}
-      <div className="cfg-section">
-        <div className="section-label">Buy priority</div>
-        <div style={{ padding: "4px 14px 10px" }}>
-          <PriorityList
-            priority={cfg.priority}
-            onChange={(p) => set("priority", p)}
-          />
+                <span className="toggle" onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(cfg[key])}
+                    onChange={(e) => set(key, e.target.checked)}
+                  />
+                  <span className="toggle-thumb" />
+                </span>
+              </label>
+            );
+          })}
         </div>
-      </div>
 
-      {/* Numeric settings */}
-      <div className="cfg-section">
-        <div className="section-label">Settings</div>
-
-        {([
-          { key: "MAX_PREMIUM_POINTS",     label: "Max PP to spend",    step: 100,   tip: "Pause buying when PP exceeds this value" },
-          { key: "PURCHASE_PERCENTAGE",    label: "Fill target (0–1)",  step: 0.05,  tip: "Buy until village reaches this fraction of storage. E.g. 0.7 = 70%" },
-          { key: "MIN_STOCK_THRESHOLD",    label: "Min market stock",   step: 10,    tip: "Skip a resource if the exchange has less than this amount available" },
-          { key: "PREMIUM_POINTS_TIMEOUT", label: "PP cooldown (ms)",   step: 60000, tip: "How long to wait before retrying when PP is above max" },
-          { key: "PAGE_RELOAD_INTERVAL",   label: "Safety reload (ms)", step: 1000,  tip: "Reloads the page periodically while running to prevent stale state" },
-        ] as { key: keyof BuyerConfig; label: string; step: number; tip: string }[]).map(({ key, label, step, tip }) => (
-          <div className="field" key={key}>
-            <div className="field-top">
-              <span className="field-label">{label}<Tip text={tip} /></span>
-            </div>
-            <input
-              className="input"
-              type="number"
-              step={step}
-              value={cfg[key] as number}
-              onChange={(e) => {
-                const n = parseFloat(e.target.value);
-                if (Number.isFinite(n)) set(key, n as BuyerConfig[typeof key]);
-              }}
+        {/* Priority order */}
+        <div className="cfg-section">
+          <div className="section-label">Prioridade de compra</div>
+          <div style={{ padding: "4px 14px 10px" }}>
+            <PriorityList
+              priority={cfg.priority}
+              onChange={(p) => set("priority", p)}
             />
           </div>
-        ))}
-      </div>
+        </div>
+
+        {/* Numeric settings */}
+        <div className="cfg-section">
+          <div className="section-label">Configuracao</div>
+          {([
+            { key: "MAX_PREMIUM_POINTS",     label: "Max PP a gastar",        step: 100,   tip: "Pausa a compra quando os PP excedem este valor." },
+            { key: "PURCHASE_PERCENTAGE",    label: "Objetivo de enchimento",  step: 0.05,  tip: "Compra ate a aldeia atingir esta fracao do armazem. Ex: 0.7 = 70%." },
+            { key: "MIN_STOCK_THRESHOLD",    label: "Stock minimo no mercado", step: 10,    tip: "Ignora um recurso se o mercado tiver menos do que este valor disponivel." },
+            { key: "PREMIUM_POINTS_TIMEOUT", label: "Cooldown PP (ms)",        step: 60000, tip: "Tempo de espera antes de voltar a tentar quando os PP estao acima do maximo." },
+            { key: "PAGE_RELOAD_INTERVAL",   label: "Recarregar pagina (ms)",  step: 1000,  tip: "Recarrega a pagina periodicamente enquanto corre para evitar estado obsoleto." },
+          ] as { key: keyof BuyerConfig; label: string; step: number; tip: string }[]).map(({ key, label, step, tip }) => (
+            <div className="field" key={key}>
+              <div className="field-top">
+                <span className="field-label">{label}<Tip text={tip} /></span>
+              </div>
+              <input
+                className="input"
+                type="number"
+                step={step}
+                value={cfg[key] as number}
+                onChange={(e) => {
+                  const n = parseFloat(e.target.value);
+                  if (Number.isFinite(n)) set(key, n as BuyerConfig[typeof key]);
+                }}
+              />
+            </div>
+          ))}
+        </div>
+      </div>{/* end cfg-body */}
 
       {/* Footer */}
       <div className="cfg-footer">
@@ -356,7 +373,7 @@ export function ResourceBuyerView({
           onClick={handleSave}
           disabled={!dirty && !saved}
         >
-          {saved ? "✓ Saved" : dirty ? "Save settings" : "No changes"}
+          {saved ? "✓ Guardado" : dirty ? "Guardar" : "Sem alteracoes"}
         </button>
       </div>
     </div>

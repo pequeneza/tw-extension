@@ -25,8 +25,10 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
   --n300: #9ca3af;
   --n400: #6b7280;
   --n500: #4b5563;
+  --n600: #374151;
   --n700: #1f2937;
-  --n900: #111827;
+  --n800: #111827;
+  --n900: #0d1117;
 
   /* Semantic green — enabled / live / success */
   --g400: #22c55e;
@@ -75,8 +77,10 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
 :host([data-theme="dark"]) {
   color-scheme: dark;
   --bg:   #0f1117;
-  --n900: #e8eaf0;
+  --n900: #f0f2f7;
+  --n800: #e8eaf0;
   --n700: #c4c8d4;
+  --n600: #a8adb8;
   --n500: #9ca3af;
   --n400: #6b7280;
   --n300: #4b5563;
@@ -219,7 +223,7 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
   background: var(--b-bg);
   border-color: var(--b-br);
   color: var(--b500);
-  box-shadow: 0 0 0 2px rgba(34,197,94,0.35), var(--shadow-md);
+  box-shadow: 0 0 0 2px rgba(59,130,246,0.30), var(--shadow-md);
 }
 
 .trigger--snipe  { 
@@ -243,6 +247,7 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
 
 .trigger--balancer   { position: relative; top: unset; }
 .trigger--buyer      { position: relative; top: unset; }
+.trigger--desviador  { position: relative; top: unset; }
 .trigger--autosender {
   position: relative;
   top: unset;
@@ -914,13 +919,13 @@ select.input {
 /* ── Snipe Scheduler ─────────────────────────────────────────────────────── */
 /* Light blue body background for the snipe panel */
 .snipe-body {
-  background: #f0f7ff;
+  background: var(--b-bg);
 }
 .snipe-body .cfg-section {
-  border-bottom-color: #d0e8ff;
+  border-bottom-color: var(--b-br);
 }
 .snipe-body .section-label {
-  color: #2563eb;
+  color: var(--b500);
 }
 .snipe-speed-row {
   display: flex;
@@ -972,8 +977,8 @@ select.input {
   gap: 8px;
   padding: 7px 10px;
   border-radius: 8px;
-  border: 1px solid #c3daf9;
-  background: #ffffff;
+  border: 1px solid var(--b-br);
+  background: var(--n0);
   cursor: pointer;
   text-align: left;
   font-size: 12px;
@@ -1010,11 +1015,11 @@ select.input {
 }
 
 .snipe-card {
-  border: 1px solid #c3daf9;
+  border: 1px solid var(--b-br);
   border-radius: 10px;
   padding: 10px 12px;
   margin-bottom: 8px;
-  background: #ffffff;
+  background: var(--n0);
 }
 .snipe-card-header {
   display: flex;
@@ -1144,7 +1149,7 @@ select.input {
 /* HQ rows */
 .bal-hq-row              { padding: 8px 14px; border-bottom: 1px solid var(--n100); }
 .bal-hq-row:last-child   { border-bottom: none; }
-.bal-hq-row--warn        { background: #fffbe6; }
+.bal-hq-row--warn        { background: var(--a-bg); }
 .bal-hq-top              { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .bal-hq-name             { font-size: 12px; font-weight: 600; color: var(--b500); text-decoration: none; white-space: nowrap; }
 .bal-hq-name:hover       { text-decoration: underline; }
@@ -1292,7 +1297,7 @@ select.input {
 }
 /* PP thead — distinct from normal thead */
 .bal-thead-tr--pp {
-  background: #dbeafe;
+  background: var(--b-br);
 }
 .bal-thead-tr--pp .bal-th {
   color: var(--b500);
@@ -1300,7 +1305,7 @@ select.input {
  
 /* ── PP Plans ────────────────────────────────────────────────────────────── */
 .bal-pp-plan {
-  background: #f0f7ff;
+  background: var(--b-bg);
   border-left: 3px solid var(--b400);
 }
 .bal-pp-header {
@@ -1385,14 +1390,15 @@ select.input {
 }
 /* PP shipment rows — subtle blue tint */
 .bal-tr--pp {
-  background: #f5f9ff;
+  background: color-mix(in srgb, var(--b500) 4%, var(--n0));
 }
 .bal-tr--pp:hover {
-  background: #e8f2ff;
+  background: color-mix(in srgb, var(--b500) 8%, var(--n0));
 }
 
 /* ── Desviador ───────────────────────────────────────────────────────────── */
 .desv-view {
+  display: flex;
   flex-direction: column;
   height: 100%;
   background: var(--n0);
@@ -1539,7 +1545,7 @@ select.input {
 }
 
 .gluer-attack-section {
-  background: #f0f7ff;
+  background: var(--b-bg);
 }
 .gluer-attack-row {
   display: flex;

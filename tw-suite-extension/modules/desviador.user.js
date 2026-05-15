@@ -224,23 +224,35 @@
                 if (!arrivalTd) { console.warn(`[Desviador] ${cmdId}: 6ª coluna não encontrada`); return; }
                 const msVal = parseInt(arrivalTd.querySelector('span.grey.small')?.textContent.trim() || '0', 10);
                 const cellText = arrivalTd.textContent;
-                // Try to match "DD.MM. [às] HH:MM:SS" first — present when arrival is not today
-                const dateTimeMatch = cellText.match(/(\d{1,2})\.(\d{1,2})\.\s*(?:às\s*)?(\d{2}):(\d{2}):(\d{2})/);
-                const timeOnlyMatch = !dateTimeMatch && cellText.match(/(\d{2}):(\d{2}):(\d{2})/);
-                if (!dateTimeMatch && !timeOnlyMatch) { console.warn(`[Desviador] ${cmdId}: hora não reconhecida`); return; }
+                // "amanhã às HH:MM:SS[:mmm]" — always tomorrow
+                const amanhaMatch = cellText.match(/amanhã\s+(?:às\s*)?(\d{2}):(\d{2}):(\d{2})(?::(\d{1,3}))?/i);
+                // "DD.MM. [às] HH:MM:SS[:mmm]" — explicit date
+                const dateTimeMatch = !amanhaMatch && cellText.match(/(\d{1,2})\.(\d{1,2})\.\s*(?:às\s*)?(\d{2}):(\d{2}):(\d{2})(?::(\d{1,3}))?/);
+                // "HH:MM:SS[:mmm]" — same day or next day (hoje / no prefix)
+                const timeOnlyMatch = !amanhaMatch && !dateTimeMatch && cellText.match(/(\d{2}):(\d{2}):(\d{2})(?::(\d{1,3}))?/);
+                if (!amanhaMatch && !dateTimeMatch && !timeOnlyMatch) { console.warn(`[Desviador] ${cmdId}: hora não reconhecida`); return; }
 
                 let arrivalMs;
-                if (dateTimeMatch) {
+                if (amanhaMatch) {
+                    const serverNow = new Date(serverNowMs);
+                    const h = +amanhaMatch[1], m = +amanhaMatch[2], s = +amanhaMatch[3];
+                    const ms = amanhaMatch[4] ? parseInt(amanhaMatch[4], 10) : msVal;
+                    const tomorrow = new Date(serverNow.getFullYear(), serverNow.getMonth(), serverNow.getDate() + 1, h, m, s, ms);
+                    arrivalMs = tomorrow.getTime();
+                } else if (dateTimeMatch) {
                     const serverNow = new Date(serverNowMs);
                     const day = +dateTimeMatch[1], month = +dateTimeMatch[2] - 1;
                     const h = +dateTimeMatch[3], m = +dateTimeMatch[4], s = +dateTimeMatch[5];
-                    const candidate = new Date(serverNow.getFullYear(), month, day, h, m, s, msVal);
+                    const ms = dateTimeMatch[6] ? parseInt(dateTimeMatch[6], 10) : msVal;
+                    const candidate = new Date(serverNow.getFullYear(), month, day, h, m, s, ms);
                     // Guard against year rollover (e.g. attack in Jan when today is Dec)
                     if (candidate.getTime() <= serverNowMs) candidate.setFullYear(candidate.getFullYear() + 1);
                     arrivalMs = candidate.getTime();
                 } else {
-                    const arrival = new Date(serverNowMs);
-                    arrival.setHours(+timeOnlyMatch[1], +timeOnlyMatch[2], +timeOnlyMatch[3], msVal);
+                    const serverNow = new Date(serverNowMs);
+                    const h = +timeOnlyMatch[1], m = +timeOnlyMatch[2], s = +timeOnlyMatch[3];
+                    const ms = timeOnlyMatch[4] ? parseInt(timeOnlyMatch[4], 10) : msVal;
+                    const arrival = new Date(serverNow.getFullYear(), serverNow.getMonth(), serverNow.getDate(), h, m, s, ms);
                     if (arrival.getTime() <= serverNowMs) arrival.setDate(arrival.getDate() + 1);
                     arrivalMs = arrival.getTime();
                 }

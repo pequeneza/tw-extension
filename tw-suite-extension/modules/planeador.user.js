@@ -408,7 +408,7 @@
 .sim-zero { color:#bbb; }
 .sim-departure { font-weight:bold; color:#3b2a1a; }
 .sim-travel { color:#7d5c2e; }
-.btn-enviar { background:#5a3a1a; color:#f4e4bc; border:1px solid #3b2a1a; border-radius:3px;
+.btn-enviar { background:#5a3a1a; color:#f4e4bc; border:1px sol d #3b2a1a; border-radius:3px;
               padding:3px 10px; font-size:11px; font-weight:bold; cursor:pointer; white-space:nowrap; }
 .btn-enviar:hover { background:#7d5c2e; }
 .btn-kumin { background:#1a4a3a; color:#f4e4bc; border:1px solid #0d3a2a; border-radius:3px;

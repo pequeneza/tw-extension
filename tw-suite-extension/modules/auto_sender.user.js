@@ -18,8 +18,9 @@
   var LS_SETTINGS = 'xbot_autosender_settings';
   var SS_CONF     = 'xbot_autosender_confirming';
   var SS_PAUSE    = 'xbot_autosender_paused';
-  var CMD_TTL     = 90000;
-  var UNIT_IDS    = ['spear','sword','axe','archer','spy','light','marcher','heavy','ram','catapult','snob','knight'];
+  var CMD_TTL        = 90000;
+  var FILL_TIMEOUT_MS = 6000; // max wait for unit_input_* to appear after coord input triggers AJAX re-render
+  var UNIT_IDS       = ['spear','sword','axe','archer','spy','light','marcher','heavy','ram','catapult','snob','knight'];
 
   /* ─── Settings (live-reloadable) ─────────────────────────────────────────── */
   var SETTING_DEFAULTS = {
@@ -544,11 +545,11 @@
     // Wait for unit inputs to appear before filling — the troop form may not be rendered
     // yet when game_data becomes available, and setting the coord input can trigger a TW
     // AJAX re-render that briefly removes unit_input_* elements from the DOM.
-    var _fillDeadline = Date.now() + 6000;
+    var _fillDeadline = Date.now() + FILL_TIMEOUT_MS;
     function _fillUnitsAndProceed() {
       var spearEl = document.getElementById('unit_input_spear');
       if (!spearEl && Date.now() < _fillDeadline) {
-        setTimeout(_fillUnitsAndProceed, 100);
+        setTimeout(_fillUnitsAndProceed, 100); // 100ms: tighter than whenReady to catch brief AJAX re-renders
         return;
       }
 

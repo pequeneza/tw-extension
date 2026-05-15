@@ -1,2 +1,4 @@
 - [User Profile](user_role.md) — developer of xBot Chrome extension for TribalWars PT, works in TypeScript + vanilla JS
 - [WH Balancer Two-Entry Architecture](project_wh_balancer.md) — old xBalancer button path vs new React overlay path, what is dead code
+- [Userscript whenReady Variants](feedback_whenready_variants.md) — four different whenReady implementations across userscripts; IIFE isolation makes sharing impossible at runtime
+- [6000ms Popup/Poll Timeout Convention](feedback_6000ms_timeout.md) — 6000ms is the established cross-module wait-for-DOM timeout; new polls should match it

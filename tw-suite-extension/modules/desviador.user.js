@@ -12,13 +12,15 @@
     if (window.__twDesviadorRunning) return;
     window.__twDesviadorRunning = true;
 
-    const PENDING_PREFIX  = 'twDesviador_pending_';  /* per-cmdId pending state   */
-    const SCHED_PREFIX    = 'twDesviador_sched_';    /* per-cmdId fire schedule   */
-    const ACTIVE_KEY      = 'twDesviador_active';
-    const CANCEL_SEC_KEY  = 'twDesviador_cancelSec';
-    const ALERT_SEC_KEY   = 'twDesviador_alertSec';
-    const TAB_CMD_KEY     = 'twDesviador_tabCmdId';  /* sessionStorage — per tab  */
-    const LAST_CANCEL_KEY = 'twDesviador_lastCancel';/* cross-tab cancel signal   */
+    const PENDING_PREFIX       = 'twDesviador_pending_';  /* per-cmdId pending state   */
+    const SCHED_PREFIX         = 'twDesviador_sched_';    /* per-cmdId fire schedule   */
+    const ACTIVE_KEY           = 'twDesviador_active';
+    const CANCEL_SEC_KEY       = 'twDesviador_cancelSec';
+    const ALERT_SEC_KEY        = 'twDesviador_alertSec';
+    const TAB_CMD_KEY          = 'twDesviador_tabCmdId';  /* sessionStorage — per tab  */
+    const LAST_CANCEL_KEY      = 'twDesviador_lastCancel';/* cross-tab cancel signal   */
+    const RECOVERY_STAGGER_MS  = 3_000;  /* inter-tab delay during missed-fire recovery  */
+    const POPUP_TIMEOUT_MS     = 6_000;  /* max wait for popup rows / support btn        */
 
     const params    = new URLSearchParams(window.location.search);
     const screenId  = params.get('screen');
@@ -37,8 +39,13 @@
     /* ── helpers ─────────────────────────────────────────────────────────────*/
 
     function whenReady(cb) {
-        if (typeof $ !== 'undefined' && typeof TribalWars !== 'undefined') cb();
-        else setTimeout(() => whenReady(cb), 150);
+        let tries = 0;
+        const poll = () => {
+            if (typeof $ !== 'undefined' && typeof TribalWars !== 'undefined') { cb(); return; }
+            if (++tries > 60) { console.error('[Desviador] whenReady: timeout após 9s'); return; }
+            setTimeout(poll, 150);
+        };
+        poll();
     }
 
     /* Per-cmdId pending entries — each open tab only reads/writes its own key */
@@ -69,6 +76,7 @@
 
     function recoverMissedFires() {
         const now = Date.now();
+        const toRecover = [];
         for (let i = localStorage.length - 1; i >= 0; i--) {
             const key = localStorage.key(i);
             if (!key || !key.startsWith(SCHED_PREFIX)) continue;
@@ -78,14 +86,24 @@
                 if (now > d.arrivalMs) { localStorage.removeItem(key); continue; }
                 if (now >= d.fireAt) {
                     localStorage.removeItem(key); /* claim — prevents duplicate tabs */
-                    setPending({ phase: 'send', village: d.village, cancelMs: d.cancelMs, cmdId: d.cmdId });
-                    window.open(`/game.php?village=${d.village}&screen=place&__desv=${d.cmdId}`, '_blank');
+                    toRecover.push(d);
                 }
             } catch { localStorage.removeItem(key); }
         }
+        /* Stagger tab opens 3 s apart — prevents Chrome popup blocker from firing
+         * when multiple past-due entries are recovered simultaneously. */
+        toRecover.forEach((d, i) => {
+            setTimeout(() => {
+                setPending({ phase: 'send', village: d.village, cancelMs: d.cancelMs, cmdId: d.cmdId });
+                window.open(`/game.php?village=${d.village}&screen=place&__desv=${d.cmdId}`, '_blank');
+            }, i * RECOVERY_STAGGER_MS);
+        });
     }
 
-    recoverMissedFires();
+    /* Only run recovery on pages that are NOT already a desviador place/confirm tab.
+     * Place tabs are themselves the product of recovery; re-running here is redundant
+     * and would attempt to open additional tabs from the same stale schedule entries. */
+    if (!isPlace && !isConfirm) recoverMissedFires();
 
     /* =========================================================
        INCOMINGS PAGE
@@ -392,9 +410,13 @@
         if (p.phase === 'cancel') doScheduleCancel(p);
     }
 
-    function doSendSupport(p) {
-        const template = Array.from(document.querySelectorAll('a.troop_template_selector'))
+    function findDesviarTemplate() {
+        return Array.from(document.querySelectorAll('a.troop_template_selector'))
             .find(a => a.textContent.trim() === 'Desviar');
+    }
+
+    function doSendSupport(p) {
+        const template = findDesviarTemplate();
         if (!template) {
             console.error('[Desviador] Template "Desviar" não encontrado. A abortar.');
             clearPending(p.cmdId);
@@ -408,20 +430,11 @@
     }
 
     function tryOwnVillage(p, tried) {
-        const popupLink = document.querySelector('a[onclick*="ajax=own"]');
-        if (!popupLink) {
-            console.error('[Desviador] Link "As suas aldeias" não encontrado. A abortar.');
-            clearPending(p.cmdId);
-            return;
-        }
-        popupLink.click();
-
         const myX = parseInt((typeof game_data !== 'undefined' && game_data.village?.x) ?? '-1', 10);
         const myY = parseInt((typeof game_data !== 'undefined' && game_data.village?.y) ?? '-1', 10);
 
-        const start = Date.now();
-        const waitRows = () => {
-            const rows = Array.from(document.querySelectorAll(
+        function getAvailableRows() {
+            return Array.from(document.querySelectorAll(
                 '.popup_helper a[href^="javascript:selectTarget"]'
             )).filter(a => {
                 const m = (a.getAttribute('href') || '').match(/selectTarget\((\d+),\s*(\d+)/);
@@ -431,9 +444,30 @@
                 if (tried.has(`${x},${y}`))  return false;   /* already tried */
                 return true;
             });
+        }
 
+        /* Reuse already-loaded popup rows if the popup is still open — avoids an
+         * extra AJAX request on every "Alvo inválido" retry. Only re-click the link
+         * if the popup is empty or closed. */
+        const existingRows = getAvailableRows();
+        if (existingRows.length > 0) {
+            proceedWithTarget(existingRows[0], p, tried);
+            return;
+        }
+
+        const popupLink = document.querySelector('a[onclick*="ajax=own"]');
+        if (!popupLink) {
+            console.error('[Desviador] Link "As suas aldeias" não encontrado. A abortar.');
+            clearPending(p.cmdId);
+            return;
+        }
+        popupLink.click();
+
+        const start = Date.now();
+        const waitRows = () => {
+            const rows = getAvailableRows();
             if (rows.length === 0) {
-                if (Date.now() - start > 6000) {
+                if (Date.now() - start > POPUP_TIMEOUT_MS) {
                     console.error('[Desviador] Nenhum alvo disponível. A abortar.');
                     clearPending(p.cmdId);
                     return;
@@ -441,48 +475,49 @@
                 setTimeout(waitRows, 200);
                 return;
             }
-
-            const pick = rows[0];
-            const m    = (pick.getAttribute('href') || '').match(/selectTarget\((\d+),\s*(\d+)/);
-            const coord = m ? `${parseInt(m[1], 10)},${parseInt(m[2], 10)}` : null;
-            pick.click();
-
-            setTimeout(() => {
-                /* Re-apply template after target change so troop fields stay populated */
-                const tmpl = Array.from(document.querySelectorAll('a.troop_template_selector'))
-                    .find(a => a.textContent.trim() === 'Desviar');
-                if (tmpl) tmpl.click();
-
-                /* Poll for the support button.
-                 * Only check "Alvo inválido" after a 500 ms grace period — the stale
-                 * error from any previous attempt would still be on the page otherwise. */
-                const pollStart = Date.now();
-                const poll = () => {
-                    const btn = document.querySelector('#target_support');
-                    if (btn && btn.offsetParent !== null && !btn.disabled) {
-                        setPending({ ...p, phase: 'confirm' });
-                        btn.click();
-                        return;
-                    }
-                    const elapsed = Date.now() - pollStart;
-                    if (elapsed > 500 && /alvo inv[aá]lido/i.test(document.body?.innerText || '')) {
-                        console.warn(`[Desviador] ${coord} inválido — a tentar próximo.`);
-                        const next = new Set(tried);
-                        if (coord) next.add(coord);
-                        tryOwnVillage(p, next);
-                        return;
-                    }
-                    if (elapsed > 6000) {
-                        console.error('[Desviador] Timeout a aguardar botão de apoio. A abortar.');
-                        clearPending(p.cmdId);
-                        return;
-                    }
-                    setTimeout(poll, 200);
-                };
-                setTimeout(poll, 200);
-            }, 400);
+            proceedWithTarget(rows[0], p, tried);
         };
         setTimeout(waitRows, 300);
+    }
+
+    function proceedWithTarget(pick, p, tried) {
+        const m     = (pick.getAttribute('href') || '').match(/selectTarget\((\d+),\s*(\d+)/);
+        const coord = m ? `${parseInt(m[1], 10)},${parseInt(m[2], 10)}` : null;
+        pick.click();
+
+        setTimeout(() => {
+            /* Re-apply template after target change so troop fields stay populated */
+            const tmpl = findDesviarTemplate();
+            if (tmpl) tmpl.click();
+
+            /* Poll for the support button.
+             * Only check "Alvo inválido" after a 500 ms grace period — the stale
+             * error from any previous attempt would still be on the page otherwise. */
+            const pollStart = Date.now();
+            const poll = () => {
+                const btn = document.querySelector('#target_support');
+                if (btn && btn.offsetParent !== null && !btn.disabled) {
+                    setPending({ ...p, phase: 'confirm' });
+                    btn.click();
+                    return;
+                }
+                const elapsed = Date.now() - pollStart;
+                if (elapsed > 500 && /alvo inv[aá]lido/i.test(document.body?.innerText || '')) {
+                    console.warn(`[Desviador] ${coord} inválido — a tentar próximo.`);
+                    const next = new Set(tried);
+                    if (coord) next.add(coord);
+                    tryOwnVillage(p, next);
+                    return;
+                }
+                if (elapsed > POPUP_TIMEOUT_MS) {
+                    console.error('[Desviador] Timeout a aguardar botão de apoio. A abortar.');
+                    clearPending(p.cmdId);
+                    return;
+                }
+                setTimeout(poll, 200);
+            };
+            setTimeout(poll, 200);
+        }, 400);
     }
 
     function doScheduleCancel(p) {
@@ -510,7 +545,7 @@
                 village: p.village, ts: Date.now(),
             }));
 
-            setTimeout(() => window.close(), 3000);
+            setTimeout(() => { try { window.close(); } catch {} }, 3000);
         }, remaining);
     }
 

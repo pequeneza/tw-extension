@@ -1,12 +1,34 @@
 {
   "permissions": {
     "allow": [
-      "Bash(node -e ' *)",
       "Bash(npm run *)",
       "WebSearch",
-      "Bash(scp *)",
-      "Bash(npm test *)",
-      "Bash(npm install *)"
+      "WebFetch(domain:forum.tribalwars.net)",
+      "WebFetch(domain:www.tribalwars.net)",
+      "WebFetch(domain:www.twstats.com)",
+      "WebFetch(domain:en.tribalwars.net)",
+      "WebFetch(domain:web.archive.org)",
+      "WebFetch(domain:en185.tribalwars.net)",
+      "WebFetch(domain:tribalwars.com.pt)",
+      "WebFetch(domain:pt65.tribalwars.com.pt)",
+      "WebFetch(domain:www.tribalwars.com.pt)",
+      "WebFetch(domain:en115.tribalwars.net)",
+      "WebFetch(domain:pt114.tribalwars.com.pt)",
+      "WebFetch(domain:en155.tribalwars.net)",
+      "WebFetch(domain:www.tribalwars.co.uk)",
+      "WebFetch(domain:www.twscanner.eu)",
+      "PowerShell(npx @claude-flow/cli@latest swarm status 2>&1)",
+      "WebFetch(domain:gistcdn.githack.com)",
+      "Bash(dir \"tw-extension\\\\kumin_script\")",
+      "Bash(dir \"C:\\\\Users\\\\peque\\\\OneDrive\\\\Ambiente de Trabalho\\\\TWScripts\\\\tw-extension\\\\kumin_script\")",
+      "Bash(Get-ChildItem \"C:\\\\Users\\\\peque\\\\OneDrive\\\\Ambiente de Trabalho\\\\TWScripts\\\\tw-extension\\\\kumin_script\" -Recurse)",
+      "Bash(Select-Object FullName)",
+      "Bash(node *)"
     ]
+  },
+  "enabledPlugins": {
+    "ruflo-core@ruflo": true,
+    "ruflo-autopilot@ruflo": true,
+    "ruflo-federation@ruflo": true
   }
 }

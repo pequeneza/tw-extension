@@ -191,6 +191,24 @@
 }
 #tw-umax-sim-btn:hover { background: #c5cae9; }
 #tw-umax-sim-btn.loading { opacity: 0.6; pointer-events: none; }
+#tw-umax-sim-panel {
+    margin: 4px 0 2px;
+    padding: 5px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-family: Verdana, Arial, sans-serif;
+    line-height: 1.6;
+}
+#tw-umax-sim-panel.tw-umax-sim-ok {
+    background: #e8f0fe;
+    border: 1px solid #3f51b5;
+    color: #1a237e;
+}
+#tw-umax-sim-panel.tw-umax-sim-warn {
+    background: #fff8e1;
+    border: 1px solid #ffc107;
+    color: #6d4c00;
+}
 #tw-umax-panel {
     margin: 4px 0 2px;
     padding: 5px 7px;
@@ -497,12 +515,16 @@
         updateBcFixed();
     }
 
+    let _bcLastCount = -1;
     function updateBcFixed() {
         const wrap = document.getElementById('tw-bc-fixed');
         const counter = document.getElementById('tw-bc-fixed-counter');
         if (!wrap || !counter) return;
 
         const count = getCancelLinks().length;
+        if (count === _bcLastCount) return; // skip DOM write — would re-trigger the observer
+        _bcLastCount = count;
+
         counter.textContent = count > 0 ? String(count) : '';
         if (count > 0) wrap.classList.remove('tw-bc-empty');
         else wrap.classList.add('tw-bc-empty');
@@ -515,9 +537,10 @@
         injectBcFixed();
         processBcTables();
 
+        let _bcTimer = null;
         new MutationObserver(() => {
-            processBcTables();
-            updateBcFixed();
+            if (_bcTimer) return;
+            _bcTimer = setTimeout(() => { _bcTimer = null; processBcTables(); updateBcFixed(); }, 250);
         }).observe(document.body, { childList: true, subtree: true });
 
         document.addEventListener('xbot:twutils:cancelAll', () => {
@@ -536,10 +559,25 @@
          fetch is skipped when the user happens to visit that page first.
     ═══════════════════════════════════════════════════════════════════════ */
 
-    const UMAX_SUPPORT_KEY = 'tw_umax_support_v1';
-    const UMAX_SUPPORT_TTL = 10 * 60 * 1000; // 10 min
-    const UMAX_SIM_KEY     = 'tw_umax_sim_v1';
-    const UMAX_SIM_UNITS   = ['spear','sword','axe','spy','light','heavy','ram','catapult','snob'];
+    const UMAX_SUPPORT_KEY  = 'tw_umax_support_v1';
+    const UMAX_SUPPORT_TTL  = 10 * 60 * 1000; // 10 min
+    const UMAX_SIM_KEY      = 'tw_umax_sim_v1';
+    const UMAX_TEMPLATE_KEY = 'tw_umax_template_v1';
+    const UMAX_SIM_UNITS    = ['spear','sword','axe','spy','light','heavy','ram','catapult','snob'];
+
+    /* Baseline TW PT unit combat stats (used when VillageOverview is unavailable). */
+    const UMAX_UNIT_STATS = {
+        spear:    { attack: 10,  defense: 15,  defense_cavalry: 45 },
+        sword:    { attack: 25,  defense: 50,  defense_cavalry: 25 },
+        axe:      { attack: 40,  defense: 10,  defense_cavalry: 5  },
+        spy:      { attack: 0,   defense: 2,   defense_cavalry: 1  },
+        light:    { attack: 130, defense: 30,  defense_cavalry: 40 },
+        heavy:    { attack: 150, defense: 200, defense_cavalry: 80 },
+        ram:      { attack: 2,   defense: 20,  defense_cavalry: 50 },
+        catapult: { attack: 100, defense: 100, defense_cavalry: 50 },
+        snob:     { attack: 30,  defense: 100, defense_cavalry: 50 },
+        militia:  { attack: 0,   defense: 15,  defense_cavalry: 45 },
+    };
 
     function umaxParseCounts(rowClass) {
         const counts = {};
@@ -555,7 +593,8 @@
         if (!table) return;
         const counts = {};
         table.querySelectorAll('tbody td[data-unit]').forEach(td => {
-            counts[td.dataset.unit] = parseInt(td.textContent.trim().replace(/[^\d]/g, ''), 10) || 0;
+            const n = parseInt(td.textContent.trim().replace(/[^\d]/g, ''), 10) || 0;
+            counts[td.dataset.unit] = (counts[td.dataset.unit] || 0) + n;
         });
         try {
             sessionStorage.setItem(UMAX_SUPPORT_KEY, JSON.stringify({ counts, ts: Date.now() }));
@@ -574,28 +613,53 @@
         }
     }
 
-    /* Fetches screen=place&mode=call, parses #support_sum, caches result. */
+    /* Fetches screen=overview_villages&mode=incomings, parses support rows for
+       the current village. Falls back to empty if none found.
+       Only caches results that contain actual troop counts (avoids poisoning
+       the cache with empty objects on failure). */
     async function umaxFetchSupportSum() {
         const cached = umaxLoadCachedSupport();
-        if (cached) return cached;
+        if (cached && Object.values(cached).some(n => n > 0)) return cached;
 
         const vid = typeof game_data !== 'undefined' ? game_data.village.id : null;
+        const coord = typeof game_data !== 'undefined' && game_data.village ? game_data.village.coord : null;
         if (!vid) return {};
 
         try {
             const resp = await fetch(
-                `/game.php?village=${vid}&screen=place&mode=call`,
+                `/game.php?village=${vid}&screen=overview_villages&mode=incomings`,
                 { credentials: 'include' }
             );
             const html = await resp.text();
             const doc = new DOMParser().parseFromString(html, 'text/html');
             const counts = {};
-            doc.querySelectorAll('#support_sum tbody td[data-unit]').forEach(td => {
-                counts[td.dataset.unit] = parseInt(td.textContent.trim().replace(/[^\d]/g, ''), 10) || 0;
+
+            doc.querySelectorAll('table tbody tr').forEach(tr => {
+                if (!isSupportRow(tr)) return;
+                // Verify this row targets the current village
+                const links = [...tr.querySelectorAll('a[href]')];
+                const isOurVillage = links.some(a =>
+                    a.href.includes(`village=${vid}`) ||
+                    (coord && a.textContent.includes(coord))
+                );
+                if (!isOurVillage) return;
+
+                // Parse unit counts: img src encodes unit id, adjacent text node is count
+                tr.querySelectorAll('img').forEach(img => {
+                    const m = img.src.match(/unit_(\w+)\./);
+                    if (!m || !UMAX_SIM_UNITS.includes(m[1])) return;
+                    const sib = img.nextSibling;
+                    if (!sib || sib.nodeType !== 3) return;
+                    const n = parseInt(sib.textContent.replace(/[^\d]/g, ''), 10) || 0;
+                    if (n > 0) counts[m[1]] = (counts[m[1]] || 0) + n;
+                });
             });
-            try {
-                sessionStorage.setItem(UMAX_SUPPORT_KEY, JSON.stringify({ counts, ts: Date.now() }));
-            } catch (_) {}
+
+            if (Object.values(counts).some(n => n > 0)) {
+                try {
+                    sessionStorage.setItem(UMAX_SUPPORT_KEY, JSON.stringify({ counts, ts: Date.now() }));
+                } catch (_) {}
+            }
             return counts;
         } catch (_) {
             return {};
@@ -612,7 +676,7 @@
 
         const supportCounts = await umaxFetchSupportSum();
 
-        btn.textContent = 'MAX';
+        btn.textContent = 'Total';
         btn.style.pointerEvents = '';
 
         const allCounts  = umaxParseCounts('all_unit');
@@ -639,35 +703,397 @@
             if (away > 0)    parts.push(`<span class="tw-umax-support">apoio: ${away.toLocaleString('pt-PT')}</span>`);
             if (support > 0) parts.push(`<span class="tw-umax-away">a caminho: ${support.toLocaleString('pt-PT')}</span>`);
 
-            let html = '';
-            if (support > 0 || away > 0) {
-                const grandStr = support > 0 ? `→ <strong>${grand.toLocaleString('pt-PT')}</strong> ` : '';
-                html = `${grandStr}<span class="tw-umax-away">(${parts.join('; ')})</span>`;
-            }
-
-            if (html) {
-                span.innerHTML = html;
-                strong.insertAdjacentElement('afterend', span);
-            }
+            // Always show the breakdown — grand total shown only when incoming support raises it above own
+            const grandStr = support > 0 ? `→ <strong>${grand.toLocaleString('pt-PT')}</strong> ` : '';
+            span.innerHTML = `${grandStr}<span class="tw-umax-away">(${parts.join('; ')})</span>`;
+            strong.insertAdjacentElement('afterend', span);
         });
     }
 
-    /* Fetches support, saves prefill to sessionStorage, navigates to sim. */
-    async function umaxOpenSim() {
-        const homeCounts    = umaxParseCounts('home_unit');
-        const supportCounts = await umaxFetchSupportSum();
+    /* Parses incoming SUPPORT commands from the incomings tables already in the DOM.
+       These are ally troops still en route — not yet counted in all_unit. */
+    function umaxParseIncomingSupportFromDOM() {
+        const counts = {};
+        document.querySelectorAll('#show_incoming_units, #commands_incomings').forEach(container => {
+            const table = container.matches('table') ? container : container.querySelector('table');
+            if (!table) return;
+            table.querySelectorAll('tbody tr').forEach(tr => {
+                if (!isSupportRow(tr)) return;
+                // Method A: strong[data-count] (used in the unit widget)
+                tr.querySelectorAll('strong[data-count]').forEach(el => {
+                    const unit = el.dataset.count;
+                    const n = parseInt(el.textContent.replace(/[^\d]/g, ''), 10) || 0;
+                    if (unit && n > 0) counts[unit] = (counts[unit] || 0) + n;
+                });
+                // Method B: img src encodes unit id, adjacent text node is the count
+                tr.querySelectorAll('img').forEach(img => {
+                    if (img.dataset.twincf) return;
+                    const m = img.src.match(/unit_(\w+)\./);
+                    if (!m || !UMAX_SIM_UNITS.includes(m[1])) return;
+                    const sib = img.nextSibling;
+                    if (!sib || sib.nodeType !== 3) return;
+                    const n = parseInt(sib.textContent.replace(/[^\d]/g, ''), 10) || 0;
+                    if (n > 0) counts[m[1]] = (counts[m[1]] || 0) + n;
+                });
+            });
+        });
+        return counts;
+    }
 
-        const prefill = {};
-        UMAX_SIM_UNITS.forEach(unit => {
-            const total = (homeCounts[unit] || 0) + (supportCounts[unit] || 0);
-            if (total > 0) prefill[unit] = total;
+    /* Reads attack template saved by TwUtilsView from sessionStorage. */
+    function umaxGetTemplate() {
+        try {
+            const raw = sessionStorage.getItem(UMAX_TEMPLATE_KEY);
+            if (!raw) return null;
+            return JSON.parse(raw);
+        } catch (_) { return null; }
+    }
+
+    /* Gets unit combat stats from VillageOverview if available, else hardcoded. */
+    function umaxGetUnitStats() {
+        try {
+            const groups = typeof VillageOverview !== 'undefined' && VillageOverview.units;
+            if (groups) {
+                for (const group of groups) {
+                    if (!group) continue;
+                    const stats = {};
+                    let count = 0;
+                    for (const [id, unit] of Object.entries(group)) {
+                        if (unit && typeof unit === 'object' && unit.attack !== undefined) {
+                            stats[id] = {
+                                attack:           unit.attack || 0,
+                                defense:          unit.defense || 0,
+                                defense_cavalry:  unit.defense_cavalry || 0,
+                            };
+                            count++;
+                        }
+                    }
+                    if (count > 0) return Object.assign({}, UMAX_UNIT_STATS, stats);
+                }
+            }
+        } catch (_) {}
+        return UMAX_UNIT_STATS;
+    }
+
+    const UMAX_WALL_KEY = '__wall__';
+
+    /* Wall damage per wave from rams: floor(rams × 0.02 × (1 − level/25)), min 1 if rams > 0. */
+    function umaxCalcWallDamage(rams, wallLevel) {
+        if (!rams || wallLevel <= 0) return 0;
+        return Math.max(1, Math.floor(rams * 0.02 * (1 - wallLevel / 25)));
+    }
+
+    /* Pure combat simulation: how many identical attack waves to wipe defenders.
+       Wall level decreases each wave from ram damage — wallFactor is recomputed per wave. */
+    function umaxRunSimulation(template, defenders, unitStats, wallLevel) {
+        let def = {};
+        for (const [u, n] of Object.entries(defenders)) { if (n > 0) def[u] = n; }
+        if (!Object.keys(def).length) return { waves: 0 };
+
+        const cavalryIds = new Set(['light', 'heavy']);
+        let infantryA = 0, cavalryA = 0;
+        for (const [u, n] of Object.entries(template)) {
+            if (u === UMAX_WALL_KEY) continue;
+            const s = unitStats[u]; if (!s || !n) continue;
+            (cavalryIds.has(u) ? (cavalryA += s.attack * n) : (infantryA += s.attack * n));
+        }
+        const defKey = cavalryA > infantryA ? 'defense_cavalry' : 'defense';
+
+        let A = 0;
+        for (const [u, n] of Object.entries(template)) {
+            if (u === UMAX_WALL_KEY) continue;
+            const s = unitStats[u]; if (!s || !n) continue;
+            A += s.attack * n;
+        }
+        if (A === 0) return { impossible: true, reason: 'Modelo sem valor ofensivo' };
+
+        const rams = Number(template['ram']) || 0;
+        let currentWall = wallLevel || 0;
+
+        let waves = 0;
+        const MAX_WAVES = 5000;
+        while (waves < MAX_WAVES) {
+            // Recompute wall factor each wave (rams reduce wall after each hit)
+            const wallFactor = Math.pow(1.037, currentWall);
+
+            let D = 0;
+            for (const [u, n] of Object.entries(def)) {
+                const s = unitStats[u]; if (!s || !n) continue;
+                D += (s[defKey] || 0) * n;
+            }
+            if (D === 0) break;
+            D *= wallFactor;
+            waves++;
+
+            // Rams destroy wall levels after each attack
+            currentWall = Math.max(0, currentWall - umaxCalcWallDamage(rams, currentWall));
+
+            if (A >= D) { def = {}; break; }
+
+            // TW exact formula: defenders LOSE (A/D)^1.5 fraction each wave
+            // survival = 1 - (A/D)^1.5 = 1 - (A/D) × sqrt(A/D)
+            const ratio = Math.max(0, 1 - Math.pow(A / D, 1.5));
+            const next = {};
+            for (const [u, n] of Object.entries(def)) {
+                const survivors = Math.floor(n * ratio);
+                if (survivors > 0) next[u] = survivors;
+            }
+            if (!Object.keys(next).length) break;
+            if (Object.entries(next).every(([u, n]) => n === def[u])) {
+                return { impossible: true, reason: 'Ataque demasiado fraco para reduzir a defesa' };
+            }
+            def = next;
+        }
+        return {
+            waves,
+            impossible: waves >= MAX_WAVES,
+            defenseType: cavalryA > infantryA ? 'cavalaria' : 'infantaria',
+            finalWall: currentWall,
+        };
+    }
+
+    /* Uses TW's own simulator endpoint to compute the exact attack count.
+       Returns { waves, fromServer: true } or null on any failure. */
+    async function umaxSimulateViaServer(template, defenders, wallLevel) {
+        const vid = typeof game_data !== 'undefined' ? game_data.village.id : null;
+        if (!vid) { console.debug('[umax-sim] no village id'); return null; }
+
+        try {
+            const simUrl = `/game.php?village=${vid}&screen=place&mode=sim`;
+
+            // Step 1: GET the simulator page to harvest form fields + CSRF token
+            const getResp = await fetch(simUrl, { credentials: 'include' });
+            if (!getResp.ok) return null;
+            const getHtml = await getResp.text();
+            const doc = new DOMParser().parseFromString(getHtml, 'text/html');
+
+            const form = doc.querySelector('form[action*="screen=place"]') ||
+                         doc.querySelector('form[action*="mode=sim"]') ||
+                         doc.querySelector('form');
+            if (!form) { console.debug('[umax-sim] no form found in GET response'); return null; }
+            console.debug('[umax-sim] form action:', form.getAttribute('action'));
+
+            // Dump ALL form fields first — captures hidden CSRF token regardless of field name
+            const params = new URLSearchParams();
+            form.querySelectorAll('input, select, textarea').forEach(el => {
+                if (!el.name) return;
+                if (el.type === 'submit' || el.type === 'button' || el.type === 'image') return;
+                if (el.type === 'checkbox') { if (el.checked) params.set(el.name, el.value || '1'); }
+                else if (el.type === 'radio') { if (el.checked) params.set(el.name, el.value); }
+                else params.set(el.name, el.value || '');
+            });
+
+            // Locate per-unit input fields (primary: name contains unit + att/def)
+            const attFieldMap = {}, defFieldMap = {};
+            let wallFieldName = null;
+
+            form.querySelectorAll('input[name], select[name]').forEach(el => {
+                const lname = el.name.toLowerCase();
+                const lid = (el.id || '').toLowerCase();
+                if (!wallFieldName && (lname.includes('wall') || lid.includes('wall'))) {
+                    wallFieldName = el.name;
+                }
+                for (const unit of UMAX_SIM_UNITS) {
+                    if (!attFieldMap[unit] && lname.includes(unit) && lname.includes('att')) attFieldMap[unit] = el.name;
+                    if (!defFieldMap[unit] && lname.includes(unit) && lname.includes('def')) defFieldMap[unit] = el.name;
+                }
+            });
+
+            console.debug('[umax-sim] attFieldMap:', attFieldMap, 'defFieldMap:', defFieldMap, 'wallField:', wallFieldName);
+
+            // Fallback: find inputs by proximity to unit images in the same table row
+            if (!Object.keys(attFieldMap).length || !Object.keys(defFieldMap).length) {
+                form.querySelectorAll('tr').forEach(tr => {
+                    const imgs = [...tr.querySelectorAll('img[src*="unit_"]')];
+                    if (!imgs.length) return;
+                    const unit = (imgs[0].src.match(/unit_(\w+)\./) || [])[1];
+                    if (!unit || !UMAX_SIM_UNITS.includes(unit)) return;
+                    const inputs = [...tr.querySelectorAll(
+                        'input[name][type="text"], input[name][type="number"], input[name]:not([type])'
+                    )];
+                    if (!attFieldMap[unit] && inputs[0]) attFieldMap[unit] = inputs[0].name;
+                    if (!defFieldMap[unit] && inputs[1]) defFieldMap[unit] = inputs[1].name;
+                });
+            }
+
+            // Override with our values (after dump so they overwrite form defaults)
+            for (const [unit, count] of Object.entries(template)) {
+                if (unit === UMAX_WALL_KEY) continue;
+                if (attFieldMap[unit]) params.set(attFieldMap[unit], String(Number(count) || 0));
+            }
+            for (const unit of UMAX_SIM_UNITS) {
+                if (defFieldMap[unit]) params.set(defFieldMap[unit], String(defenders[unit] || 0));
+            }
+            if (wallFieldName) params.set(wallFieldName, String(wallLevel || 0));
+
+            // Include the submit button value so TW processes the simulation
+            const submitBtn = form.querySelector('input[type="submit"][name], button[type="submit"][name]');
+            if (submitBtn) params.set(submitBtn.name, submitBtn.value || 'simulate');
+            else params.set('simulate', 'simulate');
+
+            // Step 2: POST back to the same URL
+            const formAction = form.getAttribute('action');
+            const postUrl = (formAction && formAction.startsWith('/')) ? formAction : simUrl;
+
+            const postResp = await fetch(postUrl, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: params.toString(),
+            });
+            if (!postResp.ok) return null;
+            const postHtml = await postResp.text();
+
+            console.debug('[umax-sim] POST params:', params.toString());
+            console.debug('[umax-sim] POST status:', postResp.status);
+
+            // Step 3: Parse "X attacks needed" from Portuguese TW response
+            const patterns = [
+                /necessário[s]?\s+(?:mais\s+)?(\d+)\s+ataque[s]?/i,
+                /(\d+)\s+ataque[s]?\s+completo[s]?\s+para\s+eliminar/i,
+                /(\d+)\s+ataque[s]?\s+para\s+(?:eliminar|destruir)/i,
+            ];
+            for (const pat of patterns) {
+                const m = postHtml.match(pat);
+                if (m) return { waves: parseInt(m[1], 10), fromServer: true };
+            }
+
+            // Log a snippet around known keywords to help tune the regex
+            const snippet = postHtml.match(/.{0,120}ataque.{0,120}/i);
+            console.debug('[umax-sim] no pattern matched. snippet:', snippet ? snippet[0] : '(no "ataque" in response)');
+            return null;
+        } catch (err) {
+            console.debug('[umax-sim] exception:', err);
+            return null;
+        }
+    }
+
+    /* Renders simulation result panel inside the widget. */
+    function umaxRenderSimResult(widget, result, template, wallLevel, homeCounts, supportCounts) {
+        const old = document.getElementById('tw-umax-sim-panel');
+        if (old) old.remove();
+
+        const panel = document.createElement('div');
+        panel.id = 'tw-umax-sim-panel';
+
+        const SHORT = { axe:'Machado', light:'CavL', heavy:'CavP', spy:'Btd', ram:'Aríete', catapult:'Cata', snob:'Nobre', spear:'Lança', sword:'Espada' };
+
+        // Debug line showing what defenders were detected
+        const defDbg = homeCounts && Object.keys(homeCounts).length
+            ? 'presentes: ' + UMAX_SIM_UNITS.filter(u => (homeCounts[u]||0) > 0)
+                .map(u => `${(homeCounts[u]||0).toLocaleString('pt-PT')} ${SHORT[u]||u}`).join(', ')
+            : 'presentes: (vazio)';
+        const supDbg = supportCounts && Object.values(supportCounts).some(v => v > 0)
+            ? ' · a caminho: ' + UMAX_SIM_UNITS.filter(u => (supportCounts[u]||0) > 0)
+                .map(u => `${(supportCounts[u]||0).toLocaleString('pt-PT')} ${SHORT[u]||u}`).join(', ')
+            : '';
+
+        if (result.noTemplate) {
+            panel.className = 'tw-umax-sim-warn';
+            panel.innerHTML = 'Define o modelo de ataque no painel <strong>⚙️ TW Tweaks</strong>';
+        } else if (result.impossible) {
+            panel.className = 'tw-umax-sim-warn';
+            panel.innerHTML = (result.reason || 'Simulação impossível') +
+                `<br><span style="font-size:10px;opacity:0.8">${defDbg}${supDbg}</span>`;
+        } else if (result.waves === 0) {
+            panel.className = 'tw-umax-sim-warn';
+            panel.innerHTML = 'Sem defensores detectados' +
+                `<br><span style="font-size:10px;opacity:0.8">${defDbg}${supDbg}</span>`;
+        } else {
+            const tplStr = Object.entries(template)
+                .filter(([k]) => k !== UMAX_WALL_KEY)
+                .filter(([,n]) => n > 0)
+                .map(([u, n]) => `${Number(n).toLocaleString('pt-PT')} ${SHORT[u] || u}`).join(' + ');
+            const wallStr = wallLevel > 0
+                ? (result.fromServer
+                    ? ` · Muralha ${wallLevel}`
+                    : ` · Muralha ${wallLevel}→${result.finalWall ?? wallLevel}`)
+                : '';
+            const srcLabel = result.fromServer
+                ? `<span style="font-size:10px;color:#388e3c">(simulador TW)</span>`
+                : `<span style="font-size:10px;color:#999">(estimativa local)</span>`;
+            panel.className = 'tw-umax-sim-ok';
+            panel.innerHTML =
+                `<strong>${result.waves}</strong> ataque${result.waves !== 1 ? 's' : ''} completo${result.waves !== 1 ? 's' : ''} para eliminar a defesa` +
+                ` <span class="tw-umax-away">(${result.defenseType}${wallStr} · ${tplStr})</span>` +
+                ` ${srcLabel}` +
+                `<br><span style="font-size:10px;opacity:0.7">${defDbg}${supDbg}</span>`;
+        }
+
+        const content = widget.querySelector('.widget_content');
+        if (content) content.insertBefore(panel, content.firstChild);
+    }
+
+    /* Runs inline simulation and renders result — no navigation. */
+    async function umaxRunAndShow(widget, simBtn) {
+        simBtn.textContent = '…';
+        simBtn.classList.add('loading');
+
+        const template = umaxGetTemplate();
+        const hasTemplate = template && Object.entries(template)
+            .filter(([k]) => k !== UMAX_WALL_KEY)
+            .some(([, v]) => v > 0);
+
+        if (!hasTemplate) {
+            umaxRenderSimResult(widget, { noTemplate: true }, {}, 0, {}, {});
+            simBtn.textContent = 'Simular';
+            simBtn.classList.remove('loading');
+            return;
+        }
+
+        // Defenders = all troops currently in village (own + allied support already here)
+        //             + incoming support still en route.
+        // all_unit covers troops already defending; incoming adds support still en route.
+        // Two sources for en-route support (take max per unit to avoid double-counting):
+        //   • incomings DOM: support rows in #show_incoming_units / #commands_incomings
+        //   • support_sum fetch from mode=call: called support (subset of incomings)
+        const [supportCounts, incomingDOM] = await Promise.all([
+            umaxFetchSupportSum(),
+            Promise.resolve(umaxParseIncomingSupportFromDOM()),
+        ]);
+        const allCounts = umaxParseCounts('all_unit');
+        const defenders = {};
+        UMAX_SIM_UNITS.forEach(u => {
+            const enRoute = Math.max(supportCounts[u] || 0, incomingDOM[u] || 0);
+            const total = (allCounts[u] || 0) + enRoute;
+            if (total > 0) defenders[u] = total;
         });
 
-        try { sessionStorage.setItem(UMAX_SIM_KEY, JSON.stringify(prefill)); } catch (_) {}
+        const wallLevel = (() => {
+            try {
+                const v = template[UMAX_WALL_KEY];
+                if (v !== undefined && v !== null) return Math.max(0, Math.min(25, Number(v) || 0));
+            } catch (_) {}
+            try { return Number(game_data.village.buildings.wall) || 0; } catch (_) {}
+            return 0;
+        })();
 
-        const vid = (typeof game_data !== 'undefined' ? game_data.village.id : null)
-            || new URLSearchParams(location.search).get('village') || '';
-        location.href = `/game.php?village=${vid}&screen=place&mode=sim`;
+        // Try TW's own simulator endpoint first; fall back to local formula
+        let result = await umaxSimulateViaServer(template, defenders, wallLevel);
+        if (result) {
+            // Compute offense type from template for display purposes
+            const cavalryIds = new Set(['light', 'heavy']);
+            const unitStats = umaxGetUnitStats();
+            let infantryA = 0, cavalryA = 0;
+            for (const [u, n] of Object.entries(template)) {
+                if (u === UMAX_WALL_KEY) continue;
+                const s = unitStats[u]; if (!s || !n) continue;
+                cavalryIds.has(u) ? (cavalryA += s.attack * n) : (infantryA += s.attack * n);
+            }
+            result.defenseType = cavalryA > infantryA ? 'cavalaria' : 'infantaria';
+        } else {
+            result = umaxRunSimulation(template, defenders, umaxGetUnitStats(), wallLevel);
+        }
+        // For debug, build merged en-route counts
+        const mergedEnRoute = {};
+        UMAX_SIM_UNITS.forEach(u => {
+            const v = Math.max(supportCounts[u] || 0, incomingDOM[u] || 0);
+            if (v > 0) mergedEnRoute[u] = v;
+        });
+        umaxRenderSimResult(widget, result, template, wallLevel, allCounts, mergedEnRoute);
+
+        simBtn.textContent = 'Simular';
+        simBtn.classList.remove('loading');
     }
 
     /* On screen=place&mode=sim, reads prefill key and fills defender inputs. */
@@ -724,8 +1150,8 @@
 
             const btn = document.createElement('span');
             btn.id = 'tw-umax-btn';
-            btn.textContent = 'MAX';
-            btn.title = 'Máximo disponível (casa + em viagem + apoio recebido)';
+            btn.textContent = 'Total';
+            btn.title = 'Total disponível (própria + apoio + a caminho)';
 
             let active = false;
             btn.addEventListener('click', async () => {
@@ -738,12 +1164,10 @@
 
             const simBtn = document.createElement('span');
             simBtn.id = 'tw-umax-sim-btn';
-            simBtn.textContent = 'Sim';
-            simBtn.title = 'Simular defesa com tropas presentes (abre o simulador pré-preenchido)';
+            simBtn.textContent = 'Simular';
+            simBtn.title = 'Calcular ataques necessários para eliminar a defesa presente';
             simBtn.addEventListener('click', async () => {
-                simBtn.textContent = '…';
-                simBtn.classList.add('loading');
-                await umaxOpenSim();
+                await umaxRunAndShow(widget, simBtn);
             });
             header.appendChild(simBtn);
         }

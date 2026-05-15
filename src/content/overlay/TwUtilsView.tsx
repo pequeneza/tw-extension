@@ -9,7 +9,25 @@ interface TwUtilsCfg {
   showDrawer: boolean;
 }
 
-const STORAGE_KEY = "tw_suite_cfg_tw_utils";
+const STORAGE_KEY    = "tw_suite_cfg_tw_utils";
+const TEMPLATE_KEY   = "tw_umax_template_v1"; // shared with userscript via sessionStorage
+
+const TEMPLATE_UNITS: Array<{ id: string; label: string }> = [
+  { id: "axe",      label: "Viking"     },
+  { id: "light",    label: "Cav. Leve"  },
+  { id: "heavy",    label: "Cav. Pesada"},
+  { id: "spy",      label: "Batedor"    },
+  { id: "ram",      label: "Aríete"     },
+  { id: "catapult", label: "Catapulta"  },
+  { id: "snob",     label: "Nobre"      },
+  { id: "spear",    label: "Lanceiro"   },
+  { id: "sword",    label: "Espadachim" },
+];
+// Special key stored alongside unit counts
+const WALL_KEY = "__wall__";
+
+type AttackTemplate = Record<string, number>;
+
 const DEFAULTS: TwUtilsCfg = {
   villageSwitcher: true,
   incomingFilter:  true,
@@ -55,6 +73,8 @@ export function TwUtilsView({
   const [cfg, setCfg] = useState<TwUtilsCfg>(DEFAULTS);
   const [cancelCount, setCancelCount] = useState(0);
   const [cancelling, setCancelling] = useState(false);
+  const [template, setTemplate] = useState<AttackTemplate>({});
+  const [templateSaved, setTemplateSaved] = useState(false);
   const anim = useMountAnim(visible);
 
   const isPlacePage = /screen=place/.test(window.location.href) &&
@@ -62,11 +82,23 @@ export function TwUtilsView({
 
   useEffect(() => {
     if (!visible) return;
-    storageGet([STORAGE_KEY]).then((r) => {
+    storageGet([STORAGE_KEY, TEMPLATE_KEY]).then((r) => {
       const saved = (r[STORAGE_KEY] as Partial<TwUtilsCfg>) ?? {};
       setCfg({ ...DEFAULTS, ...saved });
+      const tpl = (r[TEMPLATE_KEY] as AttackTemplate) ?? {};
+      setTemplate(tpl);
+      // Sync to sessionStorage so the userscript can read it
+      try { sessionStorage.setItem(TEMPLATE_KEY, JSON.stringify(tpl)); } catch (_) {}
     });
   }, [visible]);
+
+  const saveTemplate = useCallback(async (tpl: AttackTemplate) => {
+    setTemplate(tpl);
+    await storageSet({ [TEMPLATE_KEY]: tpl });
+    try { sessionStorage.setItem(TEMPLATE_KEY, JSON.stringify(tpl)); } catch (_) {}
+    setTemplateSaved(true);
+    setTimeout(() => setTemplateSaved(false), 1500);
+  }, []);
 
   // Poll cancel-link count so the button reflects live state
   useEffect(() => {
@@ -84,7 +116,12 @@ export function TwUtilsView({
     await storageSet({ [STORAGE_KEY]: next });
     if (key === "bulkCancel") {
       const fixed = document.getElementById("tw-bc-fixed");
-      if (fixed) fixed.style.display = next.bulkCancel ? "" : "none";
+      if (next.bulkCancel) {
+        if (fixed) fixed.style.display = "";
+      } else {
+        if (fixed) fixed.style.display = "none";
+        document.querySelectorAll(".tw-bc-btn, .tw-bc-counter").forEach(el => el.remove());
+      }
     }
     if (key === "showDrawer") {
       onShowDrawerChange(next.showDrawer);
@@ -148,6 +185,63 @@ export function TwUtilsView({
               </span>
             </label>
           ))}
+        </div>
+
+        <div className="cfg-section">
+          <div className="section-label">Modelo de Ataque (Simular)</div>
+          <div style={{ padding: "8px 14px 4px", display: "grid",
+                        gridTemplateColumns: "1fr 1fr", gap: "4px 12px" }}>
+            {TEMPLATE_UNITS.map(({ id, label }) => (
+              <label key={id} style={{ display: "flex", alignItems: "center",
+                                       gap: "6px", fontSize: "11px" }}>
+                <span style={{ flex: 1, color: "var(--n500)" }}>{label}</span>
+                <input
+                  type="number" min="0" step="1"
+                  value={template[id] ?? ""}
+                  placeholder="0"
+                  onChange={(e) => {
+                    const v = Math.max(0, parseInt(e.target.value, 10) || 0);
+                    setTemplate(prev => ({ ...prev, [id]: v }));
+                  }}
+                  style={{ width: "60px", padding: "2px 4px", fontSize: "11px",
+                           border: "1px solid var(--n200)", borderRadius: "3px",
+                           background: "var(--n0)", color: "var(--n700)",
+                           textAlign: "right" }}
+                />
+              </label>
+            ))}
+            <label style={{ display: "flex", alignItems: "center", gap: "6px",
+                            fontSize: "11px", gridColumn: "1 / -1",
+                            borderTop: "1px solid var(--n150)", paddingTop: "4px", marginTop: "2px" }}>
+              <span style={{ flex: 1, color: "var(--n500)" }}>Muralha (nível)</span>
+              <input
+                type="number" min="0" max="25" step="1"
+                value={template[WALL_KEY] ?? ""}
+                placeholder="0"
+                onChange={(e) => {
+                  const v = Math.max(0, Math.min(25, parseInt(e.target.value, 10) || 0));
+                  setTemplate(prev => ({ ...prev, [WALL_KEY]: v }));
+                }}
+                style={{ width: "60px", padding: "2px 4px", fontSize: "11px",
+                         border: "1px solid var(--n200)", borderRadius: "3px",
+                         background: "var(--n0)", color: "var(--n700)",
+                         textAlign: "right" }}
+              />
+            </label>
+          </div>
+          <div style={{ padding: "4px 14px 8px", display: "flex",
+                        justifyContent: "flex-end", gap: "8px", alignItems: "center" }}>
+            {templateSaved && (
+              <span style={{ fontSize: "10px", color: "var(--g600)" }}>Guardado</span>
+            )}
+            <button
+              className="btn btn-save btn-save--dirty"
+              style={{ minWidth: 0, padding: "3px 10px" }}
+              onClick={() => saveTemplate(template)}
+            >
+              Guardar modelo
+            </button>
+          </div>
         </div>
 
         <div className="cfg-section">

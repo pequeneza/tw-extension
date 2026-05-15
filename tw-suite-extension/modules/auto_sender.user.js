@@ -541,40 +541,52 @@
     );
     if (coordInput && cmd.tgt) { coordInput.focus(); nativeSet(coordInput, cmd.tgt); }
 
-    // Fill unit inputs
-    UNIT_IDS.forEach(function(unit) {
-      var count = (cmd.units && cmd.units[unit]) || 0;
-      if (count <= 0) return;
-      var el = document.getElementById('unit_input_' + unit);
-      if (el) nativeSet(el, String(count));
-    });
-
-    updateStatus(cmd.id, 'place_filled');
-
-    // Store full cmd for confirm handler — timing happens there
-    try { sessionStorage.setItem(SS_CONF, JSON.stringify(cmd)); } catch (e) {}
-
-    // Click attack or support button based on cmd.type (like Kumin)
-    var isSupport = (cmd.type || '').toLowerCase() === 'support';
-    setTimeout(function() {
-      var btn = isSupport
-        ? (document.getElementById('target_support')
-            || document.querySelector('input[name="support"]')
-            || document.querySelector('input[type="submit"][value*="Apoiar"]')
-            || document.querySelector('input[type="submit"][value*="Support"]'))
-        : (document.getElementById('target_attack')
-            || document.querySelector('input[name="attack"]')
-            || document.querySelector('input[type="submit"][value*="Atac"]')
-            || document.querySelector('input[type="submit"][value*="Attack"]'));
-      if (btn) {
-        showStatus('AutoSender: a navegar para confirmação...', '#1d4ed8');
-        btn.click();
-      } else {
-        showStatus('AutoSender: erro — botão ' + (isSupport ? 'apoio' : 'atacar') + ' não encontrado!', '#b91c1c');
-        updateStatus(cmd.id, 'failed');
-        try { sessionStorage.removeItem(SS_CONF); } catch (e) {}
+    // Wait for unit inputs to appear before filling — the troop form may not be rendered
+    // yet when game_data becomes available, and setting the coord input can trigger a TW
+    // AJAX re-render that briefly removes unit_input_* elements from the DOM.
+    var _fillDeadline = Date.now() + 6000;
+    function _fillUnitsAndProceed() {
+      var spearEl = document.getElementById('unit_input_spear');
+      if (!spearEl && Date.now() < _fillDeadline) {
+        setTimeout(_fillUnitsAndProceed, 100);
+        return;
       }
-    }, 400);
+
+      UNIT_IDS.forEach(function(unit) {
+        var count = (cmd.units && cmd.units[unit]) || 0;
+        if (count <= 0) return;
+        var el = document.getElementById('unit_input_' + unit);
+        if (el) nativeSet(el, String(count));
+      });
+
+      updateStatus(cmd.id, 'place_filled');
+
+      // Store full cmd for confirm handler — timing happens there
+      try { sessionStorage.setItem(SS_CONF, JSON.stringify(cmd)); } catch (e) {}
+
+      // Click attack or support button based on cmd.type (like Kumin)
+      var isSupport = (cmd.type || '').toLowerCase() === 'support';
+      setTimeout(function() {
+        var btn = isSupport
+          ? (document.getElementById('target_support')
+              || document.querySelector('input[name="support"]')
+              || document.querySelector('input[type="submit"][value*="Apoiar"]')
+              || document.querySelector('input[type="submit"][value*="Support"]'))
+          : (document.getElementById('target_attack')
+              || document.querySelector('input[name="attack"]')
+              || document.querySelector('input[type="submit"][value*="Atac"]')
+              || document.querySelector('input[type="submit"][value*="Attack"]'));
+        if (btn) {
+          showStatus('AutoSender: a navegar para confirmação...', '#1d4ed8');
+          btn.click();
+        } else {
+          showStatus('AutoSender: erro — botão ' + (isSupport ? 'apoio' : 'atacar') + ' não encontrado!', '#b91c1c');
+          updateStatus(cmd.id, 'failed');
+          try { sessionStorage.removeItem(SS_CONF); } catch (e) {}
+        }
+      }, 400);
+    }
+    _fillUnitsAndProceed();
   }
 
   /* ─── Noble-train expander (mirrors Kumin's startNT) ────────────────────── */

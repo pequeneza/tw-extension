@@ -16,8 +16,19 @@ travelSec(troops, distance, gameSpeed, unitSpeed)
   → max over all units with count > 0 of:
       distance × BASE_SEC[unit] / (gameSpeed × unitSpeed)
 
-departureMs = arrivalMs - travelSec × 1000
+// Support with sigil: speed × (1 + sigilPct/100), so time = baseSec / (1 + sigilPct/100)
+// e.g. 14% sigil: time = baseSec / 1.14  (NOT baseSec × 0.86 — that would be wrong)
+// Attacks: unaffected by sigil
+sec = (_cmdType === 'Support' && sigilPct > 0)
+    ? baseSec / (1 + sigilPct / 100)
+    : baseSec
+
+departureMs = arrivalMs - Math.round(sec * 1000)  // ms precision
 ```
+
+> **Precision note:** `Math.round(sec * 1000)` is used — NOT `Math.round(sec) * 1000`. The latter loses up to 999 ms of precision by rounding to the nearest second before scaling.
+
+> **Sigil formula note:** `baseSec × (1 - pct/100)` is WRONG. It reduces time by applying the percentage directly to the duration. The correct formula is `baseSec / (1 + pct/100)` because sigil increases speed: if speed is 14% faster, travel time = base / 1.14 ≈ 0.877 × base, not 0.86 × base. Verified against Kumin's output.
 
 ## BASE_SEC constants (seconds per tile at gameSpeed=1, unitSpeed=1)
 
@@ -57,6 +68,24 @@ departureMs = arrivalMs - travelSec × 1000
 2. `fetch(/page/settings)` → parse embedded `"speed":` / `"unit_speed":` from script blocks
 3. Fallback: table rows labelled "Velocidade do jogo" / "Velocidade das unidades"
 
+## Sigil support
+
+Sigil is a game mechanic that makes **support commands arrive faster**. Attacks are unaffected.
+
+- The `[name=sigilia]` input in the overlay panel holds the sigil percentage (0–100).
+- `runCalc()` reads this value and stores it in `_lastCalc.sigilPct`.
+- `renderTable()` receives `sigilPct` and applies it when computing `sec` for Support commands.
+- `kuminEntry` and `autosendEntry` both carry `sigilPct` so downstream tools (kumin_gluer, auto_sender) can apply the same adjustment.
+
+**Pipeline:**
+```
+overlay [name=sigilia] input
+  → runCalc() reads sigilPct, stores in _lastCalc
+  → reRenderTable() passes sigilPct to renderTable()
+  → renderTable() applies baseSec * (1 - sigilPct/100) for Support rows
+  → kuminEntry.sigilPct / autosendEntry.sigilPct written to queue
+```
+
 ## UI
 
 Panel injected into the right sidebar (TW-themed `<table class="vis">`):
@@ -68,6 +97,7 @@ Panel injected into the right sidebar (TW-themed `<table class="vis">`):
 | Group selector | Filter source villages by group. |
 | Refresh button | Re-fetches villages from the overview. |
 | Unit toggles | Pick which unit type sets the departure speed. |
+| Sigilia input | Sigil percentage (0–100). Applied only to Support command timing. |
 | Village table | Name, coords, troops, distance, computed departure time, attack link. |
 
 ## localStorage keys

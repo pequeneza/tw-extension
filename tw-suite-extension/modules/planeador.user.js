@@ -545,7 +545,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
         return Object.keys(sel).length ? sel : null;
     }
 
-    function renderTable(villages, usedUnits, targetX, targetY, targetVillageId, arrivalMs, cfg, selUnits) {
+    function renderTable(villages, usedUnits, targetX, targetY, targetVillageId, arrivalMs, cfg, selUnits, sigilPct) {
         const active = selUnits && selUnits.size ? selUnits : new Set(UNIT_ORDER);
         const now    = serverNowMs();
 
@@ -554,9 +554,14 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
         for (const r of villages) {
             const sel = activeTroops(r.troops, active);
             if (!sel) continue;                                       // no selected units in this village
-            const d      = dist(r.x, r.y, targetX, targetY);
-            const sec    = travelSec(sel, d, cfg.gameSpeed, cfg.unitSpeed);
-            const depMs  = arrivalMs - Math.round(sec) * 1000;
+            const d       = dist(r.x, r.y, targetX, targetY);
+            const baseSec = travelSec(sel, d, cfg.gameSpeed, cfg.unitSpeed);
+            /* Sigil boosts support speed by sigilPct%, so travel time = baseSec / (1 + sigilPct/100).
+             * sigilPct comes from the UI input [name=sigilia]. Attacks are unaffected. */
+            const sec     = (_cmdType === 'Support' && sigilPct > 0)
+                ? baseSec / (1 + sigilPct / 100)
+                : baseSec;
+            const depMs  = arrivalMs - Math.round(sec * 1000);
             if (depMs < now) continue;                                // departure already past — skip
             rows.push({ r, d, sec, depMs });
         }
@@ -598,13 +603,14 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
             const kuminDate = `${arrDate.getFullYear()}-${pad2(arrDate.getMonth()+1)}-${pad2(arrDate.getDate())}`
                             + `T${pad2(arrDate.getHours())}:${pad2(arrDate.getMinutes())}:${pad2(arrDate.getSeconds())}`
                             + `.${String(arrivalMs % 1000).padStart(3,'0')}`;
-            const kuminEntry = { name: r.name, source: `${r.x}|${r.y}`, target: `${targetX}|${targetY}`, date: kuminDate, commandType: _cmdType, units: troopsForUrl, sendMs: depMs };
+            const kuminEntry = { name: r.name, source: `${r.x}|${r.y}`, target: `${targetX}|${targetY}`, date: kuminDate, commandType: _cmdType, units: troopsForUrl, sendMs: depMs, sigilPct: sigilPct || 0 };
 
             /* AutoSender entry */
             const autosendEntry = { src: `${r.x}|${r.y}`, tgt: `${targetX}|${targetY}`,
                                     srcVillageId: r.villageId, tgtVillageId: targetVillageId || null,
                                     type: _cmdType.toLowerCase(),
-                                    launch: depMs, arrival: arrivalMs, units: troopsForUrl, note: r.name };
+                                    launch: depMs, arrival: arrivalMs, units: troopsForUrl, note: r.name,
+                                    sigilPct: sigilPct || 0 };
 
             return `<tr data-vid="${r.villageId}">
   <td class="sim-village-cell" title="${r.name}">${i + 1}. ${r.name}</td>
@@ -640,10 +646,10 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
 
     function reRenderTable() {
         if (!_lastCalc) return;
-        const { villages, usedUnits, tx, ty, targetVillageId, arrivalMs, cfg } = _lastCalc;
+        const { villages, usedUnits, tx, ty, targetVillageId, arrivalMs, cfg, sigilPct } = _lastCalc;
         const bodyEl = document.getElementById('sim-body');
         const pageEl = document.getElementById('sim-pagination');
-        bodyEl.innerHTML = renderTable(villages, usedUnits, tx, ty, targetVillageId, arrivalMs, cfg, _selUnits);
+        bodyEl.innerHTML = renderTable(villages, usedUnits, tx, ty, targetVillageId, arrivalMs, cfg, _selUnits, sigilPct || 0);
         const shown = bodyEl.querySelectorAll('#sim-table tbody tr').length;
         pageEl.textContent = `${shown} aldeias com partida futura · Chegada: ${fmtDatetime(arrivalMs)}`;
         startCountdown();
@@ -789,7 +795,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
 
         /* Command row click → fill arrival time */
         function attachCommandRowHandlers() {
-            document.querySelectorAll('#commands_outgoings tr.command-row').forEach(tr => {
+            document.querySelectorAll('tr.command-row').forEach(tr => {
                 if (tr.__simBound) return;
                 tr.__simBound = true;
                 tr.addEventListener('click', (e) => {
@@ -802,8 +808,14 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
                     const d    = new Date(endSec * 1000);
                     overlay.querySelector('[name=date]').value = `${pad2(d.getDate())}/${pad2(d.getMonth()+1)}/${d.getFullYear()}`;
                     overlay.querySelector('[name=time]').value = `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}.${String(ms).padStart(3,'0')}`;
+                    if (_screen === 'info_village') {
+                        const pageCoords = readPageCoords();
+                        if (pageCoords) {
+                            overlay.querySelector('[name=target]').value = `${pageCoords.x}|${pageCoords.y}`;
+                        }
+                    }
                     saveInputs(overlay);
-                    document.querySelectorAll('#commands_outgoings tr.command-row').forEach(r => {
+                    document.querySelectorAll('tr.command-row').forEach(r => {
                         r.style.outline = '';
                         r.style.backgroundColor = '';
                     });
@@ -926,6 +938,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
         const rawDate   = overlay.querySelector('[name=date]').value.trim();
         const rawTime   = overlay.querySelector('[name=time]').value.trim();
         const groupId   = overlay.querySelector('[name=group]').value;
+        const sigilPct  = Math.max(0, Math.min(100, parseInt(overlay.querySelector('[name=sigilia]').value || '0', 10)));
 
         /* Validate target coords */
         const coordM = rawTarget.match(/(\d+)[|,\s]+(\d+)/);
@@ -970,7 +983,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
         _selUnits = new Set(usedUnits);
 
         /* Store for re-render on unit toggle */
-        _lastCalc = { villages, usedUnits, tx, ty, targetVillageId, arrivalMs: arrivalMsFull, cfg };
+        _lastCalc = { villages, usedUnits, tx, ty, targetVillageId, arrivalMs: arrivalMsFull, cfg, sigilPct };
 
         reRenderTable();
         statusEl.textContent = `✓ ${villages.length} aldeias · gameSpeed=${cfg.gameSpeed} · unitSpeed=${cfg.unitSpeed} · clica nos ícones para filtrar unidades`;
@@ -1164,6 +1177,8 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
                 if (!input) return;
                 nativeSet(input, (amount && amount > 0) ? String(amount) : '');
             });
+            const sigilEl = document.getElementById('popupSigil');
+            if (sigilEl && entry.sigilPct != null) nativeSet(sigilEl, String(entry.sigilPct));
         }
 
         fillNext();

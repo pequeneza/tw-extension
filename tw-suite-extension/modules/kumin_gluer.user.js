@@ -608,6 +608,12 @@
                 if (amount && amount > 0)
                     console.log('[KuminGluer] Set', unit, '=', amount);
             });
+
+            const sigilEl = document.getElementById('popupSigil');
+            if (sigilEl && entry.sigilPct != null) {
+                nativeSet(sigilEl, String(entry.sigilPct));
+                console.log('[KuminGluer] Set sigil =', entry.sigilPct);
+            }
         }
 
         function findUnitInput(unit) {

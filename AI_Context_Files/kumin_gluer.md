@@ -51,6 +51,24 @@ Maps template name → number of nobles in the train:
 | `initVillage()` | Attaches click handlers to incoming rows on info_village. |
 | `readPageCoords()` | Parses village coordinates from the "Coordenadas:" table row. |
 | `loadSettings()` / `saveSettings()` | Read/write user preferences from localStorage. |
+| `setUnitsInEditor(entry)` | Fills the Kumin editor form with unit counts AND sets `#popupSigil`. |
+
+## Sigil support
+
+`setUnitsInEditor()` now fills the `#popupSigil` input in the Kumin editor:
+
+```js
+const sigilEl = document.getElementById('popupSigil');
+if (sigilEl && entry.sigilPct != null) {
+    nativeSet(sigilEl, String(entry.sigilPct));
+}
+```
+
+`sigilPct` is passed in via `kuminEntry` from planeador. If planeador did not supply it, the field is left unchanged (Kumin's own default applies).
+
+**Sigil semantics (applies to Kumin too):**
+- Support commands: sigil reduces travel time by `sigilPct%` — same arrival, earlier departure stored in Kumin queue.
+- Attacks: sigil has no effect — departure time is unchanged.
 
 ## localStorage keys
 

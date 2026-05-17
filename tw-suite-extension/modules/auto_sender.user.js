@@ -210,6 +210,7 @@
              units:   entry.units  || {}, note: entry.note || '',
              catapultTarget:   entry.catapultTarget   || null,
              ntTemplate:       entry.ntTemplate       || null,
+             sigilPct:         entry.sigilPct         != null ? entry.sigilPct         : 0,
              randomOffset:     entry.randomOffset     != null ? entry.randomOffset     : null,
              randomOffsetTime: entry.randomOffsetTime != null ? entry.randomOffsetTime : null,
              status:  'pending', createdAt: Date.now() });
@@ -718,6 +719,7 @@
                        launch: e.launch, arrival: e.arrival, units: e.units, note: e.note || '',
                        catapultTarget:   e.catapultTarget   || null,
                        ntTemplate:       e.ntTemplate       || null,
+                       sigilPct:         e.sigilPct         != null ? e.sigilPct         : 0,
                        randomOffset:     e.randomOffset     != null ? e.randomOffset     : null,
                        randomOffsetTime: e.randomOffsetTime != null ? e.randomOffsetTime : null,
                        writtenAt: Date.now() };

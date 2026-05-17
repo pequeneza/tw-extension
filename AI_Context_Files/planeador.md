@@ -61,6 +61,18 @@ departureMs = arrivalMs - Math.round(sec * 1000)  // ms precision
 | `readPageCoords()` | Reads village coordinates from the page's "Coordenadas:" table row. |
 | `parseDatetime(dateStr, timeStr)` | Parses "DD/MM/YYYY" + "HH:MM:SS" into a JS timestamp. |
 | `parseGroups(html)` | Multi-strategy group parser (link hrefs → named select → any select with group URLs). |
+| `attachCommandRowHandlers()` | Binds click handlers to ALL `tr.command-row` on the page (not scoped to a container). Fills arrival time from the row; on `info_village` also fills the target field from `readPageCoords()`. Re-run every 2 s while overlay is open. |
+
+## Command row selection (info_village)
+
+On `screen=info_village` (viewing an enemy village), planeador binds to all `tr.command-row` elements — the same rows kumin_gluer uses. Clicking one:
+
+1. Reads `span[data-endtime]` → arrival seconds, plus `td span.grey.small` → millisecond offset.
+2. Fills the overlay's **date** and **time** inputs with the exact arrival timestamp.
+3. Calls `readPageCoords()` and fills the **target** input with the enemy village's coordinates.
+4. Highlights the selected row (brown outline `#5a3a1a`, background `#f0dfa8`) and clears all others.
+
+This mirrors kumin_gluer's `selectRow()` behaviour so you can click any incoming attack to instantly populate both the arrival time and target in planeador without manual entry.
 
 ## Server config resolution
 

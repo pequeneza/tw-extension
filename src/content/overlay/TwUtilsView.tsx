@@ -75,10 +75,14 @@ export function TwUtilsView({
   const [cancelling, setCancelling] = useState(false);
   const [template, setTemplate] = useState<AttackTemplate>({});
   const [templateSaved, setTemplateSaved] = useState(false);
+  const [mapSelActive, setMapSelActive] = useState(false);
+  const [mapSelCount,  setMapSelCount]  = useState(0);
+  const [mapSelOutput, setMapSelOutput] = useState("");
   const anim = useMountAnim(visible);
 
   const isPlacePage = /screen=place/.test(window.location.href) &&
                       !window.location.href.includes("try=confirm");
+  const isMapPage   = /screen=map/.test(window.location.href);
 
   useEffect(() => {
     if (!visible) return;
@@ -98,6 +102,26 @@ export function TwUtilsView({
     try { sessionStorage.setItem(TEMPLATE_KEY, JSON.stringify(tpl)); } catch (_) {}
     setTemplateSaved(true);
     setTimeout(() => setTemplateSaved(false), 1500);
+  }, []);
+
+  // Sync map-draw-select state from userscript
+  useEffect(() => {
+    const h = (e: Event) => {
+      const d = (e as CustomEvent).detail as { active: boolean; count: number; output: string };
+      setMapSelActive(d.active);
+      setMapSelCount(d.count);
+      setMapSelOutput(d.output);
+    };
+    document.addEventListener("xbot:mapsel:state", h);
+    return () => document.removeEventListener("xbot:mapsel:state", h);
+  }, []);
+
+  const toggleMapSel = useCallback(() => {
+    document.dispatchEvent(new CustomEvent(mapSelActive ? "xbot:mapsel:disable" : "xbot:mapsel:enable"));
+  }, [mapSelActive]);
+
+  const clearMapSel = useCallback(() => {
+    document.dispatchEvent(new CustomEvent("xbot:mapsel:clear"));
   }, []);
 
   // Poll cancel-link count so the button reflects live state
@@ -186,6 +210,52 @@ export function TwUtilsView({
             </label>
           ))}
         </div>
+
+        {isMapPage && (
+          <div className="cfg-section">
+            <div className="section-label">Map Draw Select</div>
+            <div style={{ padding: "8px 14px", display: "flex", flexDirection: "column", gap: "6px" }}>
+              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <button
+                  className={`btn btn-save${mapSelActive ? "" : " btn-save--dirty"}`}
+                  style={{ flex: 1, justifyContent: "center" }}
+                  onClick={toggleMapSel}
+                >
+                  {mapSelActive ? "Desactivar" : "Activar"}
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  style={{ minWidth: 0, padding: "4px 10px" }}
+                  disabled={mapSelCount === 0}
+                  onClick={clearMapSel}
+                >
+                  Limpar
+                </button>
+              </div>
+              {mapSelActive && (
+                <>
+                  <span style={{ fontSize: "10px", color: "var(--n400)" }}>
+                    {mapSelCount} aldeia(s) · Shift+arrasta ou clica individualmente
+                  </span>
+                  {mapSelCount > 0 && (
+                    <textarea
+                      readOnly
+                      rows={4}
+                      value={mapSelOutput}
+                      style={{
+                        width: "100%", fontSize: "11px", resize: "vertical",
+                        background: "var(--n50)", border: "1px solid var(--n200)",
+                        borderRadius: "3px", padding: "4px",
+                        color: "var(--n700)", fontFamily: "'DM Mono', monospace",
+                      }}
+                      onClick={(e) => (e.target as HTMLTextAreaElement).select()}
+                    />
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="cfg-section">
           <div className="section-label">Modelo de Ataque (Simular)</div>

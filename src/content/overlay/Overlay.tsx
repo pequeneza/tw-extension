@@ -806,6 +806,7 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
   const isIncomingsPage = /screen=overview_villages.*mode=incomings.*subtype=attacks/.test(
     window.location.href
   );
+  const isMapPage = /screen=map/.test(window.location.href);
 
   // Count gaps from live DOM — poll every 2 s so the button appears/disappears
   // as the user navigates or the incomings table updates.
@@ -948,6 +949,12 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
           <button className="trigger trigger--twutils"
             onClick={() => { setViewP({ type: "twutils" }); setOpen(true); }}
             title="TW Tweaks" aria-label="TW Tweaks">⚙️</button>
+        )}
+
+        {isMapPage && isOn("tw_utils") && twUtilsShowDrawer && (
+          <button className="trigger trigger--mapsel"
+            onClick={() => { setViewP({ type: "twutils" }); setOpen(true); }}
+            title="Map Draw Select" aria-label="Map Draw Select">⚙️</button>
         )}
       </div>
       {/* Backdrop only shown when open */}

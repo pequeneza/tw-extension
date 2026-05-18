@@ -191,6 +191,17 @@
 }
 #tw-umax-sim-btn:hover { background: #c5cae9; }
 #tw-umax-sim-btn.loading { opacity: 0.6; pointer-events: none; }
+/* Map Draw Select */
+#tw-mds-rubber {
+    position: fixed; z-index: 99999; pointer-events: none; display: none;
+    border: 2px dashed rgba(51,255,0,0.9);
+    background: rgba(155,252,10,0.12);
+}
+.DSMDrawOverlay {
+    position: absolute; z-index: 50;
+    width: 53px; height: 38px;
+    pointer-events: none;
+}
 #tw-umax-sim-panel {
     margin: 4px 0 2px;
     padding: 5px 8px;
@@ -1177,6 +1188,427 @@
     }
 
     /* ═══════════════════════════════════════════════════════════════════════
+       MAP DRAW SELECT
+       Shift+drag on the map canvas to bulk-select villages by rectangle.
+       Toggled from the TwUtilsView overlay panel via CustomEvents.
+    ═══════════════════════════════════════════════════════════════════════ */
+
+    function initMapDrawSelect() {
+        console.log('[mds] initMapDrawSelect called, screen:', getCurrentScreen());
+        if (getCurrentScreen() !== 'map') return;
+        console.log('[mds] screen=map confirmed, setting up');
+
+        var TILE_W = 53, TILE_H = 38;
+        /* Coord map built from spawnSector intercepts — guaranteed fallback */
+        var _villageCoordMap = {};
+
+        var sel = {
+            villages: [],
+            villageIds: [],
+            showCoords: true,
+            showCounter: false,
+            showNewLine: true,
+            _active: false,
+            _origSpawn: null,
+            _origClick: null,
+            _drag: null,
+            _justDragged: false,
+            _rubber: null
+        };
+
+        /* ── Map bounds detection ───────────────────────────────────── */
+
+        function detectMapBounds() {
+            var mapEl = document.getElementById('map');
+            if (mapEl) return mapEl.getBoundingClientRect();
+            var cfg_el = document.getElementById('map_config');
+            var leftOff = cfg_el ? cfg_el.getBoundingClientRect().right : 0;
+            return { left: leftOff, top: 0, width: window.innerWidth - leftOff, height: window.innerHeight };
+        }
+
+        function getTileSize() {
+            var td = window.TWMap && window.TWMap.tileDimensions;
+            if (td && typeof td === 'object') {
+                var tw = parseFloat(td.x || td.w || td.width);
+                var th = parseFloat(td.y || td.h || td.height);
+                if (!isNaN(tw) && tw > 0) return { w: tw, h: th };
+            }
+            var ts = window.TWMap && window.TWMap.tileSize;
+            if (ts && typeof ts === 'object') {
+                var tw2 = parseFloat(ts.x || ts.w || ts.width);
+                var th2 = parseFloat(ts.y || ts.h || ts.height);
+                if (!isNaN(tw2) && tw2 > 0) return { w: tw2, h: th2 };
+            }
+            return { w: TILE_W, h: TILE_H };
+        }
+
+        function getMapCenter() {
+            if (!window.TWMap) return null;
+            // Try TWMap.pos with string OR number values
+            var p = window.TWMap.pos;
+            if (p && typeof p === 'object') {
+                var px = parseFloat(p.x), py = parseFloat(p.y);
+                if (!isNaN(px)) return { x: px, y: py };
+                var pcx = parseFloat(p.cx), pcy = parseFloat(p.cy);
+                if (!isNaN(pcx)) return { x: pcx, y: pcy };
+            }
+            // TWMap.map_el_coordx/y — tile coordinates of map center
+            var mcx = parseFloat(window.TWMap.map_el_coordx);
+            var mcy = parseFloat(window.TWMap.map_el_coordy);
+            if (!isNaN(mcx)) return { x: mcx, y: mcy };
+            return null;
+        }
+
+        function pixelToMapCoord(clientX, clientY) {
+            var b = detectMapBounds();
+            var relX = clientX - b.left;
+            var relY = clientY - b.top;
+            // Use TW's own converter when available
+            if (typeof window.TWMap.CoordByXY === 'function') {
+                try {
+                    var r = window.TWMap.CoordByXY(relX, relY);
+                    if (r && typeof r.x !== 'undefined') {
+                        return { x: Math.floor(parseFloat(r.x)), y: Math.floor(parseFloat(r.y)) };
+                    }
+                } catch (_) {}
+            }
+            var center = getMapCenter();
+            if (!center) {
+                console.log('[mds] pixelToMapCoord: no center. pos:', JSON.stringify(window.TWMap && window.TWMap.pos), 'map_el_coordx:', window.TWMap && window.TWMap.map_el_coordx);
+                return null;
+            }
+            var ts = getTileSize();
+            return {
+                x: Math.floor(center.x + (relX - b.width  / 2) / ts.w),
+                y: Math.floor(center.y + (relY - b.height / 2) / ts.h)
+            };
+        }
+
+        function isOverMapArea(e) {
+            var mapEl = document.getElementById('map');
+            return mapEl ? mapEl.contains(e.target) : false;
+        }
+
+        /* ── Village lookup — tries every known key format ──────────── */
+
+        function findVillage(x, y) {
+            if (window.TWMap && window.TWMap.villages) {
+                var vils = window.TWMap.villages;
+                // Use TW's own key generator if available
+                if (typeof window.TWMap.villageKey === 'function') {
+                    var key = window.TWMap.villageKey(x, y);
+                    if (vils[key]) return vils[key];
+                }
+                var v = vils[x * 1000 + y] ||   // format A
+                        vils[y * 1000 + x] ||   // format B (y-major)
+                        vils[x + '|' + y];       // format C (string key)
+                if (v) return v;
+            }
+            return _villageCoordMap[x + '|' + y] || null;
+        }
+
+        /* ── Selection helpers ──────────────────────────────────────── */
+
+        function markSelected(id) {
+            $('#DSMDraw_overlay_' + id)
+                .css('outline', 'rgba(51, 255, 0, 0.7) solid 2px')
+                .css('background-color', 'rgba(155, 252, 10, 0.14)');
+        }
+
+        function demarkSelected(id) {
+            $('#DSMDraw_overlay_' + id).css('outline', '').css('background-color', '');
+        }
+
+        function emitState() {
+            var count = 0, output = '';
+            for (var i = 0; i < sel.villages.length; i++) {
+                if (sel.villages[i] === null) continue;
+                count++;
+                if (sel.showCounter) output += count + '. ';
+                if (sel.showCoords) output += '[coord]';
+                output += sel.villages[i];
+                if (sel.showCoords) output += '[/coord]';
+                output += sel.showNewLine ? '\n' : ' ';
+            }
+            var ta = document.getElementById('tw-mds-output');
+            if (ta) ta.value = output;
+            var badge = document.getElementById('tw-mds-count');
+            if (badge) badge.textContent = count + ' aldeia(s)';
+            document.dispatchEvent(new CustomEvent('xbot:mapsel:state', {
+                detail: { active: sel._active, count: count, output: output }
+            }));
+        }
+
+        function handleVillage(x, y) {
+            var coord = x + '|' + y;
+            var village = findVillage(x, y);
+            console.log('[mds] handleVillage', x, y, '→', village ? village.id : 'NOT FOUND', '_coordMap size:', Object.keys(_villageCoordMap).length);
+            if (!village) return;
+            var idx = sel.villages.indexOf(coord);
+            if (idx === -1) {
+                sel.villages.push(coord);
+                sel.villageIds.push(village.id);
+                markSelected(village.id);
+            } else {
+                sel.villages[idx] = null;
+                var idIdx = sel.villageIds.indexOf(village.id);
+                if (idIdx !== -1) sel.villageIds[idIdx] = null;
+                demarkSelected(village.id);
+            }
+            emitState();
+        }
+
+        function selectRect(x1, y1, x2, y2) {
+            var minX = Math.min(x1, x2), maxX = Math.max(x1, x2);
+            var minY = Math.min(y1, y2), maxY = Math.max(y1, y2);
+            if ((maxX - minX + 1) * (maxY - minY + 1) > 10000) return;
+            var added = false;
+            for (var x = minX; x <= maxX; x++) {
+                for (var y = minY; y <= maxY; y++) {
+                    var coord = x + '|' + y;
+                    if (sel.villages.indexOf(coord) !== -1) continue;
+                    var village = findVillage(x, y);
+                    if (!village) continue;
+                    sel.villages.push(coord);
+                    sel.villageIds.push(village.id);
+                    added = true;
+                }
+            }
+            console.log('[mds] selectRect', x1, y1, '->', x2, y2, 'added:', added, '_coordMap size:', Object.keys(_villageCoordMap).length);
+            if (added) window.TWMap.reload();
+            emitState();
+        }
+
+        function clearAll() {
+            sel.villages = [];
+            sel.villageIds = [];
+            $('.DSMDrawOverlay').remove();
+            if (sel._active) window.TWMap.reload();
+            emitState();
+        }
+
+        /* ── Map hooks ──────────────────────────────────────────────── */
+
+        function extractVillagesFromSectorData(data) {
+            try {
+                if (!data) return;
+                // Format A: array of village objects with .x .y .id
+                if (Array.isArray(data)) {
+                    data.forEach(function(v) {
+                        if (v && typeof v.x === 'number' && v.id) _villageCoordMap[v.x + '|' + v.y] = v;
+                    });
+                    return;
+                }
+                if (typeof data !== 'object') return;
+                // Format B: { villages: [...] } or { villages: {...} }
+                if (data.villages) {
+                    var vils = data.villages;
+                    if (Array.isArray(vils)) {
+                        vils.forEach(function(v) {
+                            if (v && typeof v.x === 'number' && v.id) _villageCoordMap[v.x + '|' + v.y] = v;
+                        });
+                    } else {
+                        Object.keys(vils).forEach(function(k) {
+                            var v = vils[k];
+                            if (!v || !v.id) return;
+                            if (typeof v.x === 'number') _villageCoordMap[v.x + '|' + v.y] = v;
+                            else if (k.indexOf('|') !== -1) _villageCoordMap[k] = v;
+                        });
+                    }
+                    return;
+                }
+                // Format C: data is directly an object of villages keyed by "x|y" or integer
+                Object.keys(data).forEach(function(k) {
+                    var v = data[k];
+                    if (!v || !v.id) return;
+                    if (typeof v.x === 'number') _villageCoordMap[v.x + '|' + v.y] = v;
+                    else if (k.indexOf('|') !== -1) _villageCoordMap[k] = v;
+                });
+            } catch (_) {}
+        }
+
+        function hookedSpawnSector(data, sector) {
+            extractVillagesFromSectorData(data);
+            window.TWMap.mapHandler._mdsOrigSpawn(data, sector);
+            for (var i = 0; i < sel.villageIds.length; i++) {
+                var vid = sel.villageIds[i];
+                if (vid === null) continue;
+                var v = $('#map_village_' + vid);
+                if (!v.length) continue;
+                var oid = 'DSMDraw_overlay_' + vid;
+                if (document.getElementById(oid)) continue;
+                $('<div class="DSMDrawOverlay" id="' + oid + '" style="width:53px;height:38px;position:absolute;z-index:50;left:' + v.css('left') + ';top:' + v.css('top') + ';pointer-events:none;"></div>').appendTo(v.parent());
+                markSelected(vid);
+            }
+        }
+
+        function hookedClick(x, y, event) {
+            if (sel._justDragged) { sel._justDragged = false; return false; }
+            if (event && event.shiftKey) return false;
+            console.log('[mds] hookedClick', x, y);
+            handleVillage(x, y);
+            return false;
+        }
+
+        /* ── Rubber-band drag ───────────────────────────────────────── */
+
+        function getRubber() {
+            if (!sel._rubber) {
+                sel._rubber = document.createElement('div');
+                sel._rubber.id = 'tw-mds-rubber';
+                document.body.appendChild(sel._rubber);
+            }
+            return sel._rubber;
+        }
+
+        function onMouseDown(e) {
+            if (!sel._active || !e.shiftKey || e.button !== 0) return;
+            if (!isOverMapArea(e)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            sel._drag = { clientX: e.clientX, clientY: e.clientY };
+            var r = getRubber();
+            r.style.left = e.clientX + 'px';
+            r.style.top  = e.clientY + 'px';
+            r.style.width = r.style.height = '0';
+            r.style.display = 'block';
+        }
+
+        function onMouseMove(e) {
+            if (!sel._drag) return;
+            var dx = e.clientX - sel._drag.clientX;
+            var dy = e.clientY - sel._drag.clientY;
+            var r = getRubber();
+            r.style.left   = (dx < 0 ? e.clientX : sel._drag.clientX) + 'px';
+            r.style.top    = (dy < 0 ? e.clientY : sel._drag.clientY) + 'px';
+            r.style.width  = Math.abs(dx) + 'px';
+            r.style.height = Math.abs(dy) + 'px';
+        }
+
+        function onMouseUp(e) {
+            if (!sel._drag) return;
+            var drag = sel._drag;
+            sel._drag = null;
+            getRubber().style.display = 'none';
+            var dx = e.clientX - drag.clientX;
+            var dy = e.clientY - drag.clientY;
+            var c1 = pixelToMapCoord(drag.clientX, drag.clientY);
+            var c2 = pixelToMapCoord(e.clientX, e.clientY);
+            console.log('[mds] mouseup dx:', dx, 'dy:', dy, 'c1:', c1, 'c2:', c2, 'center:', getMapCenter(), 'bounds:', detectMapBounds());
+            if (Math.abs(dx) < 4 && Math.abs(dy) < 4) {
+                if (c1) handleVillage(c1.x, c1.y);
+                return;
+            }
+            sel._justDragged = true;
+            if (c1 && c2) selectRect(c1.x, c1.y, c2.x, c2.y);
+        }
+
+        function bindDrag() {
+            document.addEventListener('mousedown', onMouseDown, true);
+            document.addEventListener('mousemove', onMouseMove, false);
+            document.addEventListener('mouseup',   onMouseUp,   false);
+        }
+
+        function unbindDrag() {
+            document.removeEventListener('mousedown', onMouseDown, true);
+            document.removeEventListener('mousemove', onMouseMove, false);
+            document.removeEventListener('mouseup',   onMouseUp,   false);
+            if (sel._rubber) sel._rubber.style.display = 'none';
+        }
+
+        /* ── Sidebar UI ─────────────────────────────────────────────── */
+
+        function showUi() {
+            if (document.getElementById('tw-mds-panel')) return;
+            $('#map_config').prepend(
+                '<table id="tw-mds-panel" class="vis" style="border-spacing:0;border-collapse:collapse;margin-top:10px;" width="100%"><tbody>' +
+                '<tr><th colspan="2">Map Draw Select</th></tr>' +
+                '<tr><td colspan="2" style="padding:2px 4px;font-size:10px;color:#666;font-style:italic;">Shift+arrasta → rectângulo | Clique → alterna</td></tr>' +
+                '<tr><td><input type="checkbox" id="tw-mds-chk-coords" checked></td><td><label for="tw-mds-chk-coords">BBCode</label></td></tr>' +
+                '<tr><td><input type="checkbox" id="tw-mds-chk-counter"></td><td><label for="tw-mds-chk-counter">Contador</label></td></tr>' +
+                '<tr><td><input type="checkbox" id="tw-mds-chk-newline" checked></td><td><label for="tw-mds-chk-newline">Nova linha</label></td></tr>' +
+                '<tr><td colspan="2" id="tw-mds-count" style="padding:2px 4px;font-size:10px;color:#555;">0 aldeia(s)</td></tr>' +
+                '<tr><td colspan="2" style="padding:2px 4px;"><textarea id="tw-mds-output" rows="5" style="width:95%;font-size:11px;" readonly></textarea></td></tr>' +
+                '<tr><td colspan="2" style="padding:4px;">' +
+                '<button id="tw-mds-copy" style="margin-right:6px;">Copiar</button>' +
+                '<button id="tw-mds-clear">Limpar tudo</button>' +
+                '</td></tr>' +
+                '</tbody></table>'
+            );
+            $('#tw-mds-chk-coords').on('change', function() { sel.showCoords   = this.checked; emitState(); });
+            $('#tw-mds-chk-counter').on('change', function() { sel.showCounter = this.checked; emitState(); });
+            $('#tw-mds-chk-newline').on('change', function() { sel.showNewLine = this.checked; emitState(); });
+            $('#tw-mds-copy').on('click', function() {
+                var ta = document.getElementById('tw-mds-output');
+                if (ta) { ta.select(); document.execCommand('copy'); }
+            });
+            $('#tw-mds-clear').on('click', clearAll);
+        }
+
+        /* ── Enable / Disable ───────────────────────────────────────── */
+
+        function enable() {
+            if (sel._active) return;
+            sel._active = true;
+            // Diagnostic dump — check browser console after enabling
+            try {
+                console.log('[mds] TWMap.pos:', JSON.stringify(window.TWMap.pos));
+                console.log('[mds] map_el_coordx:', window.TWMap.map_el_coordx, 'map_el_coordy:', window.TWMap.map_el_coordy);
+                console.log('[mds] tileSize:', JSON.stringify(window.TWMap.tileSize), 'tileDimensions:', JSON.stringify(window.TWMap.tileDimensions));
+                console.log('[mds] CoordByXY is function:', typeof window.TWMap.CoordByXY === 'function');
+                console.log('[mds] villageKey type:', typeof window.TWMap.villageKey, '| sample call(500,500):', typeof window.TWMap.villageKey === 'function' ? window.TWMap.villageKey(500, 500) : 'n/a');
+                console.log('[mds] CoordByXY(0,0):', typeof window.TWMap.CoordByXY === 'function' ? JSON.stringify(window.TWMap.CoordByXY(0, 0)) : 'n/a');
+                if (window.TWMap.villages) {
+                    var sampleKeys = Object.keys(window.TWMap.villages).slice(0, 3);
+                    console.log('[mds] villages sample keys:', sampleKeys);
+                    console.log('[mds] villages sample values:', JSON.stringify(sampleKeys.map(function(k) { return window.TWMap.villages[k]; })));
+                }
+            } catch (_) {}
+            window.TWMap.mapHandler._mdsOrigSpawn = window.TWMap.mapHandler.spawnSector;
+            window.TWMap.mapHandler._mdsOrigClick = window.TWMap.mapHandler.onClick;
+            window.TWMap.mapHandler.spawnSector = hookedSpawnSector;
+            window.TWMap.mapHandler.onClick = hookedClick;
+            bindDrag();
+            showUi();
+            window.TWMap.reload();
+            emitState();
+        }
+
+        function disable() {
+            if (!sel._active) return;
+            sel._active = false;
+            if (window.TWMap.mapHandler._mdsOrigSpawn)
+                window.TWMap.mapHandler.spawnSector = window.TWMap.mapHandler._mdsOrigSpawn;
+            if (window.TWMap.mapHandler._mdsOrigClick)
+                window.TWMap.mapHandler.onClick = window.TWMap.mapHandler._mdsOrigClick;
+            unbindDrag();
+            clearAll();
+            $('#tw-mds-panel').remove();
+            if (sel._rubber) { sel._rubber.remove(); sel._rubber = null; }
+            window.TWMap.reload();
+            emitState();
+        }
+
+        /* ── CustomEvent bridge ─────────────────────────────────────── */
+
+        document.addEventListener('xbot:mapsel:enable',  enable);
+        document.addEventListener('xbot:mapsel:disable', disable);
+        document.addEventListener('xbot:mapsel:clear',   clearAll);
+
+        // Wait for TWMap to be ready before registering
+        if (!window.TWMap || !window.TWMap.mapHandler || !window.TWMap.villages) {
+            var mdsPoll = setInterval(function() {
+                if (window.TWMap && window.TWMap.mapHandler && window.TWMap.villages) {
+                    clearInterval(mdsPoll);
+                    emitState();
+                }
+            }, 200);
+        } else {
+            emitState();
+        }
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════════
        BOOT
     ═══════════════════════════════════════════════════════════════════════ */
 
@@ -1187,6 +1619,7 @@
         if (cfg.quickbarCollapse !== false) initQuickbarCollapse();
         if (cfg.bulkCancel !== false) initBulkCancel();
         if (cfg.unitMax !== false) initUnitMax();
+        if (cfg.mapDrawSelect !== false) initMapDrawSelect();
     }
 
     if (typeof $ !== 'undefined' && typeof TribalWars !== 'undefined') {

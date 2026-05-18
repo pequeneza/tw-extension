@@ -1750,6 +1750,7 @@ select.input {
 
 /* ── Label + Renamer view ────────────────────────────────────────────────── */
 .trigger--label { position: relative; top: unset; }
+.trigger--mapsel { position: relative; top: unset; }
 
 .label-tag-pills {
   display: flex;

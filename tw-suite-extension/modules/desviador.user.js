@@ -434,7 +434,7 @@
         const myY = parseInt((typeof game_data !== 'undefined' && game_data.village?.y) ?? '-1', 10);
 
         function getAvailableRows() {
-            return Array.from(document.querySelectorAll(
+            const rows = Array.from(document.querySelectorAll(
                 '.popup_helper a[href^="javascript:selectTarget"]'
             )).filter(a => {
                 const m = (a.getAttribute('href') || '').match(/selectTarget\((\d+),\s*(\d+)/);
@@ -444,6 +444,16 @@
                 if (tried.has(`${x},${y}`))  return false;   /* already tried */
                 return true;
             });
+            /* Sort by squared distance from the attacked village — pick closest first */
+            rows.sort((a, b) => {
+                const ma = (a.getAttribute('href') || '').match(/selectTarget\((\d+),\s*(\d+)/);
+                const mb = (b.getAttribute('href') || '').match(/selectTarget\((\d+),\s*(\d+)/);
+                if (!ma || !mb) return 0;
+                const da = (parseInt(ma[1], 10) - myX) ** 2 + (parseInt(ma[2], 10) - myY) ** 2;
+                const db = (parseInt(mb[1], 10) - myX) ** 2 + (parseInt(mb[2], 10) - myY) ** 2;
+                return da - db;
+            });
+            return rows;
         }
 
         /* Reuse already-loaded popup rows if the popup is still open — avoids an
@@ -521,11 +531,72 @@
     }
 
     function doScheduleCancel(p) {
-        const elapsed   = Date.now() - (p.sentAt || 0);
+        const elapsed  = Date.now() - (p.sentAt || 0);
         const remaining = Math.max(p.cancelMs - elapsed, 2000);
+        const cancelAt  = Date.now() + remaining;
         console.log(`[Desviador] Cancelar em ${Math.round(remaining / 1000)}s`);
 
-        setTimeout(() => {
+        /* ── Blur overlay ── */
+        const backdrop = document.createElement('div');
+        backdrop.style.cssText = [
+            'position:fixed;inset:0;z-index:999998;',
+            'backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);',
+            'background:rgba(5,8,20,0.55);',
+        ].join('');
+
+        const dialog = document.createElement('div');
+        dialog.style.cssText = [
+            'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:999999;',
+            'width:380px;',
+            'background:linear-gradient(160deg,#0d1525 0%,#0a1020 100%);',
+            'border:1px solid rgba(180,130,40,0.45);border-radius:16px;',
+            'padding:22px 32px 20px;font-family:"Trebuchet MS",sans-serif;',
+            'color:#e8d9b0;text-align:center;',
+            'box-shadow:0 20px 60px rgba(0,0,0,0.85),inset 0 1px 0 rgba(255,220,120,0.08);',
+            'user-select:none;',
+        ].join('');
+
+        const titleEl = document.createElement('div');
+        titleEl.style.cssText = 'font-size:13px;letter-spacing:0.08em;color:#a89060;margin-bottom:6px;text-transform:uppercase;';
+        titleEl.textContent = '🔀 Desviador — Aguardando cancelamento';
+
+        const villageEl = document.createElement('div');
+        villageEl.style.cssText = 'font-size:12px;color:#7a8fa6;margin-bottom:16px;';
+        villageEl.textContent = `Aldeia ${p.village}`;
+
+        const timerWrap = document.createElement('div');
+        timerWrap.style.cssText = 'width:280px;margin:0 auto;';
+
+        const timerEl = document.createElement('div');
+        timerEl.style.cssText = [
+            'font-size:38px;font-weight:700;font-family:monospace;',
+            'font-variant-numeric:tabular-nums;letter-spacing:0.04em;',
+            'transition:color 0.3s,text-shadow 0.3s;',
+        ].join('');
+
+        timerWrap.appendChild(timerEl);
+        dialog.appendChild(titleEl);
+        dialog.appendChild(villageEl);
+        dialog.appendChild(timerWrap);
+        document.body.appendChild(backdrop);
+        document.body.appendChild(dialog);
+
+        function fmtCd(ms) {
+            if (ms <= 0) return '00:00:00';
+            const total = Math.floor(ms / 1000);
+            const h = Math.floor(total / 3600);
+            const m = Math.floor((total % 3600) / 60);
+            const s = total % 60;
+            return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+        }
+
+        let tickId = null;
+
+        function executCancel() {
+            if (tickId) { clearInterval(tickId); tickId = null; }
+            backdrop.remove();
+            dialog.remove();
+
             const cancelLinks = Array.from(
                 document.querySelectorAll('a.command-cancel[data-home]')
             ).filter(a => a.getAttribute('data-home') === p.village);
@@ -540,13 +611,32 @@
             clearPending(p.cmdId);
             console.log('[Desviador] Apoio cancelado.');
 
-            /* Notify the incomings tab via localStorage storage event (fires in other tabs) */
             localStorage.setItem(LAST_CANCEL_KEY, JSON.stringify({
                 village: p.village, ts: Date.now(),
             }));
 
             setTimeout(() => { try { window.close(); } catch {} }, 3000);
-        }, remaining);
+        }
+
+        function render() {
+            const left = cancelAt - Date.now();
+            if (left <= 0) { executCancel(); return; }
+
+            timerEl.textContent = fmtCd(left);
+            if (left >= 60_000) {
+                timerEl.style.color = '#d4a84b';
+                timerEl.style.textShadow = '0 0 24px rgba(212,168,75,0.35)';
+            } else if (left >= 10_000) {
+                timerEl.style.color = '#e07b28';
+                timerEl.style.textShadow = '0 0 24px rgba(224,123,40,0.4)';
+            } else {
+                timerEl.style.color = '#cc3333';
+                timerEl.style.textShadow = '0 0 24px rgba(204,51,51,0.5)';
+            }
+        }
+
+        render();
+        tickId = setInterval(render, 50);
     }
 
     /* =========================================================

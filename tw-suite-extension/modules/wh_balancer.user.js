@@ -813,24 +813,25 @@
       for (const v of villagesData) remaining += getNow(v);
       let count = villagesData.length || 1;
       const capped = new Set();
-      let changed = true;
       let avg = Math.floor(remaining / count);
+      let changed = true;
 
-      while (changed) {
+      while (changed && count > 0) {
         changed = false;
-        avg = Math.floor(remaining / Math.max(1, count));
+        const candidateAvg = Math.floor(remaining / count);
         for (const v of villagesData) {
           if (capped.has(v.id)) continue;
           const cap = v.warehouseCapacity * needsPct;
-          if (cap < avg) {
-            remaining -= avg - cap;
-            count = Math.max(1, count - 1);
+          if (cap < candidateAvg) {
+            remaining -= cap;
+            count--;
             capped.add(v.id);
             changed = true;
           }
         }
+        if (count > 0) avg = Math.floor(remaining / count);
       }
-      return Math.floor(remaining / Math.max(1, count));
+      return avg;
     }
 
     function computeTotalsAndAverages(villagesData, incomingRes) {

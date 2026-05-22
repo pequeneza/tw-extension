@@ -113,6 +113,8 @@ interface QueueEntry {
   arrivalMs: number;
   /** Village ID of the source — needed when sending to Auto Sender */
   srcVillageId?: string | null;
+  /** Sigil reduction % (1–100). Undefined means no sigil — leave Kumin's field unchanged. */
+  sigilPct?: number;
 }
 
 /* ─── Helpers ─────────────────────────────────────────────────────────────── */
@@ -325,7 +327,7 @@ function useCountdown(sendMs: number, active: boolean) {
 }
 
 /* ─── GluerCandidateCard ──────────────────────────────────────────────────── */
-function GluerCandidateCard({ cand, target, arrivalMs, commandType, onQueue, queued, enabledUnits, committed }: {
+function GluerCandidateCard({ cand, target, arrivalMs, commandType, onQueue, queued, enabledUnits, committed, sigilPct }: {
   cand: GluerCandidate;
   target: Coord;
   arrivalMs: number;
@@ -334,6 +336,7 @@ function GluerCandidateCard({ cand, target, arrivalMs, commandType, onQueue, que
   queued: boolean;
   enabledUnits: Set<string>;
   committed: Record<string, number>;
+  sigilPct: number;
 }) {
   const allowedSet = useMemo(() => new Set(cand.allowedUnits), [cand.allowedUnits]);
 
@@ -394,6 +397,7 @@ function GluerCandidateCard({ cand, target, arrivalMs, commandType, onQueue, que
       sendMs: effectiveSendMs,
       arrivalMs,
       srcVillageId: cand.src.villageId,
+      sigilPct: sigilPct > 0 ? sigilPct : undefined,
     });
     // Reset card after queuing
     setAmounts(Object.fromEntries(cand.allowedUnits.map(u => [u, 0])));
@@ -622,6 +626,7 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
         launch: e.sendMs,
         arrival: e.arrivalMs,
         units: e.units,
+        sigilPct: e.sigilPct,
         note: e.name,
         status: "pending",
         createdAt: Date.now(),
@@ -867,6 +872,7 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
                     queued={queuedSources.has(key)}
                     enabledUnits={enabledUnits}
                     committed={committed.get(key) ?? {}}
+                    sigilPct={sigil}
                   />
                 );
               })}

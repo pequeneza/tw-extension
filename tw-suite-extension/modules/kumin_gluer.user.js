@@ -12,6 +12,9 @@
     if (window.__twKuminGluerRunning) return;
     window.__twKuminGluerRunning = true;
 
+    // Capture extension base URL synchronously before any async work
+    const EXT_BASE = (document.currentScript?.src ?? '').replace(/\/modules\/[^/]+$/, '');
+
     const QUEUE_KEY    = 'twKuminGluer_queue';
     const CACHE_KEY    = 'twKuminGluer_commandCache';
     const SETTINGS_KEY = 'twKuminGluer_settings';
@@ -73,6 +76,32 @@
     if (isVillage) whenReady(initVillage);
 
     function initVillage() {
+        /* Inject button style once — matches tw-incf-btn pattern from tw_utils */
+        if (!document.getElementById('kg-btn-style')) {
+            const style = document.createElement('style');
+            style.id = 'kg-btn-style';
+            style.textContent = `
+.kg-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    vertical-align: -3px;
+    line-height: 0;
+    padding: 3px 4px;
+    border: 1px solid #603000;
+    border-radius: 3px;
+    background: #e9d0a9;
+    box-shadow: 1px 1px 2px rgba(0,0,0,0.30);
+    margin: 0 3px 0 0;
+    user-select: none;
+}
+.kg-btn:hover { background: #f0dca0; border-color: #4a2000; }
+.kg-btn img { display: block; width: 18px; height: 18px; }`;
+            document.head.appendChild(style);
+        }
+
         const villageId = params.get('village')
             || ((typeof game_data !== 'undefined' && game_data.village)
                 ? String(game_data.village.id) : null);
@@ -128,8 +157,29 @@
             document.querySelectorAll('tr.command-row').forEach(tr => {
                 if (tr.__gluerBound) return;
                 tr.__gluerBound = true;
-                tr.style.cursor = 'pointer';
-                tr.addEventListener('click', () => selectRow(tr));
+
+                const firstTd = tr.querySelector('td');
+                if (!firstTd) return;
+
+                const btn = document.createElement('span');
+                btn.className = 'kg-btn';
+                btn.setAttribute('data-title', 'Kumin Gluer — selecionar ataque');
+
+                const img = document.createElement('img');
+                img.src = EXT_BASE + '/icons/colatudo.png';
+                img.alt = 'K';
+                img.addEventListener('error', () => {
+                    img.remove();
+                    btn.textContent = 'K';
+                    btn.style.fontWeight = 'bold';
+                    btn.style.fontSize = '13px';
+                    btn.style.padding = '2px 5px';
+                });
+
+                btn.appendChild(img);
+                btn.addEventListener('click', e => { e.stopPropagation(); selectRow(tr); });
+
+                firstTd.insertBefore(btn, firstTd.firstChild);
             });
         }
 

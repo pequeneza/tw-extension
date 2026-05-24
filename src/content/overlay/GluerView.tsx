@@ -514,6 +514,8 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
   const [enabledUnits,       setEnabledUnits]       = useState<Set<string>>(() => new Set(UNIT_ORDER_SLOW_TO_FAST));
   const [attackTimeDraft,    setAttackTimeDraft]    = useState("");
   const [attackTimeOverride, setAttackTimeOverride] = useState<number | null>(null);
+  const [nudgeMs,            setNudgeMs]            = useState(100);
+  const [nudgeDraft,         setNudgeDraft]         = useState("100");
   const [queue,              setQueueState]         = useState<QueueEntry[]>(() => loadQueue());
   const [copied,             setCopied]             = useState(false);
   const [now,                setNow]                = useState(() => getServerNowMs());
@@ -697,11 +699,42 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
                   setAttackTimeOverride(parsed);
                 }}
                 onBlur={() => {
-                  // If invalid, revert to effective value
                   if (attackTimeOverride === null && attack)
                     setAttackTimeDraft(fmtDate(attack.arrivalMs));
                 }}
               />
+              <div className="gluer-nudge-box">
+                <button className="btn btn-ghost gluer-nudge-btn"
+                  title={`−${nudgeMs} ms`}
+                  onClick={() => {
+                    const next = effectiveArrivalMs - nudgeMs;
+                    setAttackTimeOverride(next);
+                    setAttackTimeDraft(fmtDate(next));
+                  }}>−</button>
+                <input
+                  className="input gluer-nudge-input"
+                  type="number" min={1} step={1}
+                  value={nudgeDraft}
+                  title="Ajuste em ms"
+                  onChange={e => {
+                    setNudgeDraft(e.target.value);
+                    const n = parseInt(e.target.value, 10);
+                    if (Number.isFinite(n) && n > 0) setNudgeMs(n);
+                  }}
+                  onBlur={() => {
+                    const n = parseInt(nudgeDraft, 10);
+                    if (!Number.isFinite(n) || n <= 0) setNudgeDraft(String(nudgeMs));
+                  }}
+                />
+                <span style={{ fontSize: 10, color: "var(--n400)" }}>ms</span>
+                <button className="btn btn-ghost gluer-nudge-btn"
+                  title={`+${nudgeMs} ms`}
+                  onClick={() => {
+                    const next = effectiveArrivalMs + nudgeMs;
+                    setAttackTimeOverride(next);
+                    setAttackTimeDraft(fmtDate(next));
+                  }}>+</button>
+              </div>
             </div>
             <div className="gluer-attack-row">
               <span style={{ fontSize: 11, color: "var(--n400)" }}>Alvo:</span>

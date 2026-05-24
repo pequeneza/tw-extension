@@ -1590,6 +1590,26 @@ select.input {
   font-weight: 600;
   color: var(--n700);
 }
+.gluer-nudge-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+.gluer-nudge-btn {
+  padding: 1px 6px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  min-width: 22px;
+}
+.gluer-nudge-input {
+  width: 52px;
+  font-size: 11px;
+  font-family: var(--mono);
+  padding: 1px 4px;
+  text-align: center;
+}
 
 .gluer-cfg-label {
   font-size: 12px;

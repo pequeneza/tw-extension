@@ -92,3 +92,20 @@ Derives `_serverDateDiff` from `#serverDate` + `#serverTime` DOM elements, same 
 |----------|-------|-------------|
 | `CMD_TTL` | 90 000 ms | Command is considered stale after this time post-launch. |
 | `UNIT_IDS` | 12 unit names | All TribalWars unit types the script can fill. |
+
+---
+
+## ⚠ Timing contract — DO NOT MODIFY
+
+The confirm-page flow in `handleConfirmPage()` mirrors Kumin's `setupAttack → prepareToSend` exactly. **Do not change any of the following without first reviewing the Kumin source:**
+
+| Element | Value | Kumin equivalent |
+|---------|-------|-----------------|
+| Pre-scheduling delay | **3000 ms** `setTimeout` before `scheduleClickAtMs` | `setTimeout(prepareToSend, 3000)` in `setupAttack` |
+| Ping start timing | Inside the 3000 ms delay | `_0x1e1de0.start()` inside `prepareToSend` |
+| Coarse-wait formula | `targetMs - getEffectiveServerNowMs() - 2000` | `launchMs - (Timing.getCurrentServerTime() - serverDateDiff) - 2000` |
+| Fine-phase formula | `remaining = targetMs + offset - getEffectiveServerNowMs()` | `remaining = launchMs + timingOffset - (Timing.getCurrentServerTime() - serverDateDiff)` |
+| Busy-wait mechanism | `performance.now()` spin loop | `while (performance.now() - perfStart < remaining) {}` |
+| Server clock reference | `Timing.getCurrentServerTime() - _serverDateDiff` | `Timing.getCurrentServerTime() - serverDateDiff` |
+
+These values are **not arbitrary**. They encode timing behaviour validated against Kumin over multiple releases. Changing the 3000 ms constant, the busy-wait approach, or the server-time formula will break precision firing.

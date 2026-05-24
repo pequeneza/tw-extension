@@ -66,15 +66,16 @@
     }
 
     /** Slowest unit travel time in seconds for a mixed composition */
-    function travelSec(troops, distance, gameSpeed, unitSpeed) {
-    let max = 0;
+    function travelMs(troops, distance, gameSpeed, unitSpeed) {
+    let maxMs = 0;
     for (const [unit, count] of Object.entries(troops)) {
         if (count > 0 && BASE_SEC[unit]) {
-            const s = distance * BASE_SEC[unit] / (gameSpeed * unitSpeed);
-            if (s > max) max = s;
+            // Round to whole seconds first, then convert to ms — preserves depMs%1000 == arrivalMs%1000
+            const ms = Math.round(distance * BASE_SEC[unit] / (gameSpeed * unitSpeed)) * 1000;
+            if (ms > maxMs) maxMs = ms;
         }
     }
-    return max;
+    return maxMs;
 }
 
     function fmtDuration(sec) {
@@ -555,15 +556,15 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
             const sel = activeTroops(r.troops, active);
             if (!sel) continue;                                       // no selected units in this village
             const d       = dist(r.x, r.y, targetX, targetY);
-            const baseSec = travelSec(sel, d, cfg.gameSpeed, cfg.unitSpeed);
-            /* Sigil boosts support speed by sigilPct%, so travel time = baseSec / (1 + sigilPct/100).
+            const baseMs = travelMs(sel, d, cfg.gameSpeed, cfg.unitSpeed);
+            /* Sigil boosts support speed by sigilPct%, so travel time = baseMs / (1 + sigilPct/100).
              * sigilPct comes from the UI input [name=sigilia]. Attacks are unaffected. */
-            const sec     = (_cmdType === 'Support' && sigilPct > 0)
-                ? baseSec / (1 + sigilPct / 100)
-                : baseSec;
-            const depMs  = arrivalMs - Math.round(sec * 1000);
+            const trvMs  = (_cmdType === 'Support' && sigilPct > 0)
+                ? Math.round(baseMs / (1 + sigilPct / 100) / 1000) * 1000
+                : baseMs;
+            const depMs  = arrivalMs - trvMs;
             if (depMs < now) continue;                                // departure already past — skip
-            rows.push({ r, d, sec, depMs });
+            rows.push({ r, d, depMs });
         }
 
         /* Sort earliest-departure first */
@@ -579,7 +580,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
             return `<th class="sim-unit-th ${on ? 'sim-u-on' : 'sim-u-off'}" data-unit="${u}" title="${UNIT_LABEL[u] || u} — clica para ${on ? 'desactivar' : 'activar'}">${unitIconHtml(u)}</th>`;
         }).join('');
 
-        const trs = rows.map(({ r, sec, depMs }, i) => {
+        const trs = rows.map(({ r, depMs }, i) => {
             const depFmt  = fmtDatetime(depMs);
             const remSec  = Math.max(0, Math.floor((depMs - Date.now()) / 1000));
             const remFmt  = fmtDuration(remSec);

@@ -117,7 +117,7 @@
       var img = new Image();
       img.onload = img.onerror = function() { samples.push((performance.now() - t0) * mul); };
       // Kumin: uses window.location.hostname (not origin) — same pattern as _requestImage
-      img.src = window.location.hostname + '?random-no-cache=' + Math.floor((1 + Math.random()) * 65536).toString(32);
+      img.src = '//' + window.location.hostname + '?random-no-cache=' + Math.floor((1 + Math.random()) * 65536).toString(32);
     }
     takeSample();
     intervalId = setInterval(takeSample, 5000);
@@ -628,12 +628,6 @@
 
     var effectiveLaunch = cmd.randomOffsetTime || cmd.launch;
 
-    // Start ping measurement immediately so samples accumulate during countdown
-    // (mirrors Kumin's _0x1e1de0.start() in prepareToSend)
-    var pinger = _settings.autoTimingOffset
-      ? measurePing(_settings.timingOffsetMultiplier)
-      : null;
-
     // Catapult target (like Kumin: #place_confirm_catapult_target)
     if (cmd.catapultTarget) {
       var catSelect = document.querySelector('#place_confirm_catapult_target select');
@@ -643,51 +637,62 @@
     // Noble-train expansion: click #troop_confirm_train (snob-1) times (gated by autoSendNobles)
     if (_settings.autoSendNobles !== false) startNT(cmd);
 
-    // Show countdown overlay
+    // Show countdown overlay immediately (mirrors Kumin's timer render in setupAttack)
     showConfirmCountdown(cmd, effectiveLaunch);
 
-    // Offset resolver: called at the start of the 2-s busy-wait window.
-    // autoTimingOffset → freeze pinger (like Kumin's getAveragePing())
-    // else → use static timingOffset setting
-    // Legacy clickOffset is applied as a negative shift (positive = earlier)
-    function resolveOffset() {
-      var base = _settings.autoTimingOffset
-        ? (pinger ? pinger.getOffset() : 0)
-        : (_settings.timingOffset || 0);
-      // subtract any legacy clickOffset (positive = click earlier)
-      return base - (_settings.clickOffset || 0);
-    }
+    // 3000 ms delay before entering the timing sequence — mirrors Kumin's
+    // setTimeout(prepareToSend, 3000) in setupAttack. DO NOT REMOVE OR SHORTEN.
+    setTimeout(function() {
 
-    // Pre-cache the confirm button now so the click path after the busy-wait is minimal.
-    var _confirmBtn = document.getElementById('troop_confirm_submit')
-      || document.querySelector('.troop_confirm_go')
-      || (function() {
-          var btns = document.querySelectorAll('input[type="submit"]');
-          for (var i = 0; i < btns.length; i++) { if (/confirmar|confirm/i.test(btns[i].value)) return btns[i]; }
-          return null;
-        })();
+      // Start ping measurement inside the delay, same as Kumin's _0x1e1de0.start()
+      // inside prepareToSend (called after the 3000 ms wait).
+      var pinger = _settings.autoTimingOffset
+        ? measurePing(_settings.timingOffsetMultiplier)
+        : null;
 
-    scheduleClickAtMs(effectiveLaunch, function() {
-      // Click FIRST — every ms of work before this adds directly to timing error.
-      var _clickDeltaMs = getEffectiveServerNowMs() - effectiveLaunch; // captured right before click
-      if (_confirmBtn) {
-        _confirmBtn.click();
-        // Post-click work (no longer on the critical timing path).
-        updateStatus(cmd.id, 'sent');
-        emitState();
-        hideConfirmCountdown();
-        var _deltaStr = (_clickDeltaMs >= 0 ? '+' : '') + _clickDeltaMs.toFixed(0) + 'ms';
-        showStatus('AutoSender: enviado! (' + _deltaStr + ')' + (_settings.autoClose ? ' A fechar...' : ''), '#15803d');
-        try { sessionStorage.removeItem(SS_CONF); } catch (e) {}
-        if (_settings.autoClose !== false) {
-          setTimeout(function() { try { window.close(); } catch (e) {} }, 1800);
-        }
-      } else {
-        hideConfirmCountdown();
-        showStatus('AutoSender: erro — botão confirmar não encontrado!', '#b91c1c');
-        updateStatus(cmd.id, 'failed');
+      // Offset resolver: called at the start of the 2-s busy-wait window.
+      // autoTimingOffset → freeze pinger (like Kumin's getAveragePing())
+      // else → use static timingOffset setting
+      // Legacy clickOffset is applied as a negative shift (positive = earlier)
+      function resolveOffset() {
+        var base = _settings.autoTimingOffset
+          ? (pinger ? pinger.getOffset() : 0)
+          : (_settings.timingOffset || 0);
+        return base - (_settings.clickOffset || 0);
       }
-    }, resolveOffset, stopCountdownTick);
+
+      // Pre-cache the confirm button so the click path after the busy-wait is minimal.
+      var _confirmBtn = document.getElementById('troop_confirm_submit')
+        || document.querySelector('.troop_confirm_go')
+        || (function() {
+            var btns = document.querySelectorAll('input[type="submit"]');
+            for (var i = 0; i < btns.length; i++) { if (/confirmar|confirm/i.test(btns[i].value)) return btns[i]; }
+            return null;
+          })();
+
+      scheduleClickAtMs(effectiveLaunch, function() {
+        // Click FIRST — every ms of work before this adds directly to timing error.
+        var _clickDeltaMs = getEffectiveServerNowMs() - effectiveLaunch;
+        if (_confirmBtn) {
+          _confirmBtn.click();
+          // Post-click work (no longer on the critical timing path).
+          updateStatus(cmd.id, 'sent');
+          emitState();
+          hideConfirmCountdown();
+          var _deltaStr = (_clickDeltaMs >= 0 ? '+' : '') + _clickDeltaMs.toFixed(0) + 'ms';
+          showStatus('AutoSender: enviado! (' + _deltaStr + ')' + (_settings.autoClose ? ' A fechar...' : ''), '#15803d');
+          try { sessionStorage.removeItem(SS_CONF); } catch (e) {}
+          if (_settings.autoClose !== false) {
+            setTimeout(function() { try { window.close(); } catch (e) {} }, 1800);
+          }
+        } else {
+          hideConfirmCountdown();
+          showStatus('AutoSender: erro — botão confirmar não encontrado!', '#b91c1c');
+          updateStatus(cmd.id, 'failed');
+        }
+      }, resolveOffset, stopCountdownTick);
+
+    }, 3000); // mirrors Kumin setupAttack → setTimeout(prepareToSend, 3000)
   }
 
   /* ─── Watcher ────────────────────────────────────────────────────────────── */

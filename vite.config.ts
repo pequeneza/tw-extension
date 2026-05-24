@@ -100,6 +100,8 @@ function extensionAssetsPlugin() {
       if (existsSync(viteOut)) renameSync(viteOut, "dist/popup/popup.html");
 
       copyFileSync("src/manifest.json", "dist/manifest.json");
+      if (existsSync("src/rules.json"))
+        copyFileSync("src/rules.json", "dist/rules.json");
 
       if (existsSync("src/icons/icon.svg"))
         copyFileSync("src/icons/icon.svg", "dist/icons/icon.svg");

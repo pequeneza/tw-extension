@@ -77,24 +77,51 @@
             || ((typeof game_data !== 'undefined' && game_data.village)
                 ? String(game_data.village.id) : null);
 
-        /* Fetch troop templates from the rally point and send to the overlay */
+        /* Fetch troop templates from the rally point and send to the overlay.
+         * Cached in localStorage for 1 h per village to avoid firing a concurrent
+         * request during navigation (which causes the memo _partial to get 429'd). */
         if (villageId) {
-            fetch(`/game.php?village=${villageId}&screen=place`, { credentials: 'include' })
-                .then(r => r.text())
-                .then(html => {
-                    const doc = new DOMParser().parseFromString(html, 'text/html');
-                    const sel = doc.querySelector('#troop_template_selection');
-                    if (!sel) return;
-                    const options = Array.from(sel.querySelectorAll('option'))
-                        .filter(o => o.value && o.value !== '0')
-                        .map(o => ({ value: o.value, label: o.textContent.trim() }));
-                    if (options.length) {
-                        document.dispatchEvent(new CustomEvent('xbot:gluer:templates', {
-                            detail: { options },
-                        }));
-                    }
-                })
-                .catch(() => {});
+            const TMPL_KEY = `twKuminGluer_tmpl_${villageId}`;
+            const TMPL_TTL = 60 * 60 * 1000; // 1 hour
+            let cached = null;
+            try {
+                const raw = localStorage.getItem(TMPL_KEY);
+                if (raw) {
+                    const { ts, options } = JSON.parse(raw);
+                    if (Date.now() - ts < TMPL_TTL) cached = options;
+                }
+            } catch {}
+
+            if (cached) {
+                document.dispatchEvent(new CustomEvent('xbot:gluer:templates', { detail: { options: cached } }));
+            } else {
+                // Abort the fetch the instant TribalWars begins a _partial navigation so
+                // our in-flight request never competes with the memo _partial (→ 429).
+                const controller = new AbortController();
+                $(document).one('partial_reload_start', () => controller.abort());
+
+                setTimeout(() => {
+                    if (new URLSearchParams(window.location.search).get('screen') !== 'info_village') return;
+                    fetch(`/game.php?village=${villageId}&screen=place`, {
+                        credentials: 'include',
+                        signal: controller.signal,
+                    })
+                        .then(r => r.text())
+                        .then(html => {
+                            const doc = new DOMParser().parseFromString(html, 'text/html');
+                            const sel = doc.querySelector('#troop_template_selection');
+                            if (!sel) return;
+                            const options = Array.from(sel.querySelectorAll('option'))
+                                .filter(o => o.value && o.value !== '0')
+                                .map(o => ({ value: o.value, label: o.textContent.trim() }));
+                            if (options.length) {
+                                try { localStorage.setItem(TMPL_KEY, JSON.stringify({ ts: Date.now(), options })); } catch {}
+                                document.dispatchEvent(new CustomEvent('xbot:gluer:templates', { detail: { options } }));
+                            }
+                        })
+                        .catch(err => { if (err.name !== 'AbortError') console.warn('[KuminGluer] template fetch:', err); });
+                }, 5000);
+            }
         }
 
         function attachHandlers() {
@@ -391,6 +418,19 @@
     const ALL_UNITS = ['spear','sword','axe','archer','spy','light','marcher','heavy','ram','catapult','snob','knight'];
 
     /* Poll for Kumin's rendered rows; only open popups for commands not yet in cache */
+    /* Read Kumin's own localStorage queue — units are stored there, no popup clicks needed. */
+    function readKuminQueue() {
+        try {
+            const pid   = (typeof game_data !== 'undefined') ? game_data.player.id   : null;
+            const world = (typeof game_data !== 'undefined') ? game_data.world        : null;
+            if (!pid || !world) return [];
+            const raw = localStorage.getItem(`overviewVars_ID_${pid}${world}`);
+            if (!raw) return [];
+            const data = JSON.parse(raw);
+            return Array.isArray(data) ? data : [];
+        } catch { return []; }
+    }
+
     function cacheKuminCommands() {
         /* Load existing per-command unit data keyed by command ID */
         const unitCache = {};
@@ -403,37 +443,50 @@
             }
         } catch {}
 
+        const kuminQueue = readKuminQueue();
+
+        /* Match a command row to a Kumin queue entry by target and launch time (±2 s). */
+        function matchUnits(targetCoords, sendMs) {
+            const entry = kuminQueue.find(k => {
+                if (String(k.tgt || '').trim() !== String(targetCoords || '').trim()) return false;
+                if (!k.launch || !sendMs) return true;
+                return Math.abs(k.launch - sendMs) < 2000;
+            });
+            return (entry && entry.units && typeof entry.units === 'object') ? entry.units : {};
+        }
+
         let attempts = 0;
         const poll = () => {
             const rows = Array.from(document.querySelectorAll('tr[id^="command_"]'));
             if (rows.length > 0) {
-                const newRows = rows.filter(tr => !unitCache[tr.id.replace('command_', '')]);
-                console.log(`[KuminGluer] ${rows.length - newRows.length} cached, ${newRows.length} new — opening popups for new only.`);
+                const commands = rows.map(tr => {
+                    const id      = tr.id.replace('command_', '');
+                    const tds     = tr.querySelectorAll('td');
+                    const timerEl = tds[5]?.querySelector('b.commandTimer[data-endtime]');
+                    const endSec  = timerEl ? parseInt(timerEl.getAttribute('data-endtime'), 10) : null;
+                    const msEl    = tds[5]?.querySelector('span.grey.small');
+                    const ms      = parseInt(msEl?.textContent?.trim() || '0', 10);
+                    const sendMs  = endSec ? (endSec * 1000 + ms) : null;
+                    const cached  = unitCache[id] || {};
+                    const tgt     = tds[4]?.textContent?.trim() || cached.targetCoords || '';
 
-                extractAllCommands(newRows, (newCommands) => {
-                    newCommands.forEach(c => { unitCache[c.id] = c; });
+                    const units = Object.keys(cached.units || {}).length
+                        ? cached.units
+                        : matchUnits(tgt, sendMs ?? cached.sendMs);
 
-                    const commands = rows.map(tr => {
-                        const id      = tr.id.replace('command_', '');
-                        const tds     = tr.querySelectorAll('td');
-                        const timerEl = tds[5]?.querySelector('b.commandTimer[data-endtime]');
-                        const endSec  = timerEl ? parseInt(timerEl.getAttribute('data-endtime'), 10) : null;
-                        const msEl    = tds[5]?.querySelector('span.grey.small');
-                        const ms      = parseInt(msEl?.textContent?.trim() || '0', 10);
-                        const cached  = unitCache[id] || {};
-                        return {
-                            ...cached,
-                            id,
-                            label:        tds[2]?.textContent?.trim() || cached.label || '',
-                            source:       tds[3]?.textContent?.trim() || cached.source || '',
-                            targetCoords: tds[4]?.textContent?.trim() || cached.targetCoords || '',
-                            sendMs:       endSec ? (endSec * 1000 + ms) : (cached.sendMs || null),
-                        };
-                    });
-
-                    localStorage.setItem(CACHE_KEY, JSON.stringify({ commands, updatedAt: Date.now() }));
-                    console.log(`[KuminGluer] Cached ${commands.length} command(s).`);
+                    return {
+                        ...cached,
+                        id,
+                        label:        tds[2]?.textContent?.trim() || cached.label || '',
+                        source:       tds[3]?.textContent?.trim() || cached.source || '',
+                        targetCoords: tgt,
+                        sendMs:       sendMs ?? (cached.sendMs || null),
+                        units,
+                    };
                 });
+
+                localStorage.setItem(CACHE_KEY, JSON.stringify({ commands, updatedAt: Date.now() }));
+                console.log(`[KuminGluer] Cached ${commands.length} command(s) from Kumin localStorage.`);
             } else if (++attempts < 40) {
                 setTimeout(poll, 500);
             }

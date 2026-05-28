@@ -131,7 +131,9 @@
 
                 setTimeout(() => {
                     if (new URLSearchParams(window.location.search).get('screen') !== 'info_village') return;
-                    fetch(`/game.php?village=${villageId}&screen=place`, {
+                    const _t = new URLSearchParams(window.location.search).get('t');
+                    const sitterPfx = _t ? `t=${_t}&` : '';
+                    fetch(`/game.php?${sitterPfx}village=${villageId}&screen=place`, {
                         credentials: 'include',
                         signal: controller.signal,
                     })

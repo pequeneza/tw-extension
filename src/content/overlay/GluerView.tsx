@@ -37,6 +37,11 @@ const NT_OPTIONS: Array<[string, string]> = [
   ["fourthNobleRedNT",             "4º nobre red (×4)"],
 ];
 
+function sitterPrefix(): string {
+  const t = new URLSearchParams(window.location.search).get("t");
+  return t ? `t=${t}&` : "";
+}
+
 function loadGluerSettings(): Record<string, string> {
   try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}") ?? {}; } catch { return {}; }
 }
@@ -267,7 +272,7 @@ function computeCandidates(
 
 /* ─── fetchOwnHomeTroops ──────────────────────────────────────────────────── */
 async function fetchOwnHomeTroops(villageId: string): Promise<VillageTroops[]> {
-  const url = `${location.origin}/game.php?village=${encodeURIComponent(villageId)}&screen=overview_villages&mode=units&type=own_home`;
+  const url = `${location.origin}/game.php?${sitterPrefix()}village=${encodeURIComponent(villageId)}&screen=overview_villages&mode=units&type=own_home`;
   const html = await fetch(url, { credentials: "include" }).then(r => r.text());
   const doc  = new DOMParser().parseFromString(html, "text/html");
 
@@ -608,8 +613,8 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
     const villageId = attack?.villageId
       ?? window.location.search.match(/[?&]village=(\d+)/)?.[1];
     const url = villageId
-      ? `${location.origin}/game.php?village=${villageId}&screen=memo`
-      : `${location.origin}/game.php?screen=memo`;
+      ? `${location.origin}/game.php?${sitterPrefix()}village=${villageId}&screen=memo`
+      : `${location.origin}/game.php?${sitterPrefix()}screen=memo`;
     window.open(url, "_blank", "width=1000,height=600,noopener,noreferrer");
     setQueueState([]);
   }

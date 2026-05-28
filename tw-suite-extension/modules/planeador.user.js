@@ -50,9 +50,18 @@
     }
 
     function getCurrentVillageId() {
+        const params = new URLSearchParams(window.location.search);
+        // In sitter mode game_data.village.id reflects the sitter's own village, not the sat player's.
+        // The URL village= param is always the sat player's village, so use it directly.
+        if (params.get('t')) return params.get('village') || '';
         if (typeof game_data !== 'undefined' && game_data.village?.id)
             return String(game_data.village.id);
-        return new URLSearchParams(window.location.search).get('village') || '';
+        return params.get('village') || '';
+    }
+
+    function sitterPrefix() {
+        const t = new URLSearchParams(window.location.search).get('t');
+        return t ? `t=${t}&` : '';
     }
 
     function serverNowMs() {
@@ -177,7 +186,7 @@
         if (!vid) return [{ id: '0', name: 'Todos' }];
         try {
             /* Base overview_villages page reliably renders the full group navigation */
-            const res  = await fetch(`/game.php?village=${vid}&screen=overview_villages`, { credentials: 'include' });
+            const res  = await fetch(`/game.php?${sitterPrefix()}village=${vid}&screen=overview_villages`, { credentials: 'include' });
             const text = await res.text();
             const groups = parseGroups(text);
             console.log('[Planeador] groups found:', groups.length, groups.map(g => g.name));
@@ -242,7 +251,7 @@
         const vid = getCurrentVillageId();
         if (!vid) return [];
 
-        const url = `/game.php?village=${vid}&screen=overview_villages&mode=units&type=own_home&group=${groupId}&page=-1`;
+        const url = `/game.php?${sitterPrefix()}village=${vid}&screen=overview_villages&mode=units&type=own_home&group=${groupId}&page=-1`;
         try {
             const res  = await fetch(url, { credentials: 'include' });
             const text = await res.text();
@@ -340,7 +349,7 @@
         if (!vid) return null;
         try {
             const res  = await fetch(
-                `/game.php?village=${vid}&screen=info_village&x=${tx}&y=${ty}`,
+                `/game.php?${sitterPrefix()}village=${vid}&screen=info_village&x=${tx}&y=${ty}`,
                 { credentials: 'include' }
             );
             const text = await res.text();
@@ -865,8 +874,8 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
                     localStorage.setItem('twKuminGluer_queue', JSON.stringify(q));
                     const vid = getCurrentVillageId();
                     const memoUrl = vid
-                        ? `${location.origin}/game.php?village=${vid}&screen=memo`
-                        : `${location.origin}/game.php?screen=memo`;
+                        ? `${location.origin}/game.php?${sitterPrefix()}village=${vid}&screen=memo`
+                        : `${location.origin}/game.php?${sitterPrefix()}screen=memo`;
                     window.open(memoUrl, '_blank', 'width=1000,height=600,noopener,noreferrer');
                 } catch (err) {
                     console.error('[Planeador] Kumin queue error:', err);

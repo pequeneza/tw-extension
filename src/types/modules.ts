@@ -22,6 +22,7 @@ export type ModuleId =
   | "resource_buyer"
   | "planeador"
   | "tw_snipe_scheduler"
+  | "telegram_notifier"
   | "tw_utils"
   | "wh_balancer";
 
@@ -143,6 +144,14 @@ export const MODULE_CONFIGS: ModuleConfig[] = [
     matchPattern: /screen=overview|screen=place/,
     scriptFile: "tw_snipe_scheduler.user.js",
     icon: "🏹",
+  },
+  {
+    id: "telegram_notifier",
+    label: "Telegram Notifier",
+    description: "Envia alertas para o Telegram quando um captcha é detetado ou outros eventos ocorrem.",
+    matchPattern: /.*/,
+    scriptFile: "telegram_notifier.user.js",
+    icon: "🔔",
   },
   {
     id: "wh_balancer",

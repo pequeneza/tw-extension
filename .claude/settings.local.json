@@ -23,7 +23,8 @@
       "Bash(dir \"C:\\\\Users\\\\peque\\\\OneDrive\\\\Ambiente de Trabalho\\\\TWScripts\\\\tw-extension\\\\kumin_script\")",
       "Bash(Get-ChildItem \"C:\\\\Users\\\\peque\\\\OneDrive\\\\Ambiente de Trabalho\\\\TWScripts\\\\tw-extension\\\\kumin_script\" -Recurse)",
       "Bash(Select-Object FullName)",
-      "Bash(node *)"
+      "Bash(node *)",
+      "Bash(Get-ChildItem *)"
     ]
   },
   "enabledPlugins": {

@@ -17,6 +17,7 @@ import { ResourceBuyerView }  from "./ResourceBuyerView";
 import { LabelView }         from "./LabelView";
 import { AutoSenderView }   from "./AutoSenderView";
 import { TwUtilsView }     from "./TwUtilsView";
+import { TelegramView }   from "./TelegramView";
 
 /* ─── Helpers ─────────────────────────────────────────────────────────────── */
 function _p2(n: number) { return String(n).padStart(2, "0"); }
@@ -50,6 +51,7 @@ type View = { type: "list" } |
             { type: "label" } |
             { type: "autosender" } |
             { type: "twutils" } |
+            { type: "telegram" } |
             { type: "license" };
 
 /* ─── useSettings — lives in OverlayRoot, never unmounts ─────────────────── */
@@ -705,6 +707,10 @@ function Panel({
         onBack={() => setViewP({ type: "list" })}
         onShowDrawerChange={onTwUtilsDrawerChange}
       />
+      <TelegramView
+        visible={view.type === "telegram"}
+        onBack={() => setViewP({ type: "list" })}
+      />
       <LicenseView
         visible={view.type === "license"}
         onBack={() => setViewP({ type: "list" })}
@@ -846,6 +852,7 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
     if (v === "gluer")      return { type: "gluer" };
     if (v === "autosender") return { type: "autosender" };
     if (v === "twutils")    return { type: "twutils" };
+    if (v === "telegram")   return { type: "telegram" };
     if (v === "license")    return { type: "license" };
     return { type: "list" };
   });
@@ -955,6 +962,12 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
           <button className="trigger trigger--mapsel"
             onClick={() => { setViewP({ type: "twutils" }); setOpen(true); }}
             title="Map Draw Select" aria-label="Map Draw Select">⚙️</button>
+        )}
+
+        {isOn("telegram_notifier") && (
+          <button className="trigger trigger--telegram"
+            onClick={() => { setViewP({ type: "telegram" }); setOpen(true); }}
+            title="Telegram Notifier" aria-label="Telegram Notifier">🔔</button>
         )}
       </div>
       {/* Backdrop only shown when open */}

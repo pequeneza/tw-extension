@@ -76,6 +76,7 @@ const USERSCRIPT_MAP: Record<string, string> = {
   [`${MODULES_DIR}/tw_snipe_scheduler.user.js`]:   "tw_snipe_scheduler.user.js",
   [`${MODULES_DIR}/wh_balancer.user.js`]:          "wh_balancer.user.js",
   [`${MODULES_DIR}/planeador.user.js`]:             "planeador.user.js",
+  [`${MODULES_DIR}/telegram_notifier.user.js`]:     "telegram_notifier.user.js",
   [`${MODULES_DIR}/tw_utils.user.js`]:              "tw_utils.user.js",
 };
 

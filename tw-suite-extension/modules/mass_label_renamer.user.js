@@ -94,8 +94,14 @@
 
   function isSupport(row) {
     try {
-      var src = window.$(row).find('img:eq(0)').attr('src');
-      return !!(src && src.indexOf('support') >= 0);
+      var $row = window.$(row);
+      if ($row.find('[data-command-type="support"]').length) return true;
+      var found = false;
+      $row.find('img').each(function () {
+        var s = window.$(this).attr('src') || '';
+        if (s.indexOf('support') >= 0) { found = true; return false; }
+      });
+      return found;
     } catch (e) { return false; }
   }
 
@@ -494,6 +500,8 @@
         var $row     = window.$(row);
         var $cmdCell = $row.find('td:eq(0)');
         if (!$cmdCell.length) return;
+
+        if (isSupport(row)) return;
 
         var $label = $cmdCell.find('.quickedit-label');
         var name   = $label.length

@@ -591,8 +591,11 @@
         }
 
         let tickId = null;
+        let cancelled = false;
 
         function executCancel() {
+            if (cancelled) return;
+            cancelled = true;
             if (tickId) { clearInterval(tickId); tickId = null; }
             backdrop.remove();
             dialog.remove();

@@ -359,6 +359,7 @@
                     if (td1) td1.style.outline = '2px solid #22c55e';
 
                     if (delay <= 0) {
+                        if (getPending(cmdId)) return; /* already claimed by recovery or another tab */
                         console.warn(`[Desviador] ${cmdId}: tempo insuficiente — a abrir imediatamente.`);
                         const detail = scheduledDetails.get(cmdId);
                         if (detail) detail.fired = true;
@@ -377,6 +378,7 @@
 
                     timers.push(setTimeout(() => {
                         if (!active) return;
+                        if (getPending(cmdId)) return; /* another tab already claimed this cmdId */
                         const detail = scheduledDetails.get(cmdId);
                         if (detail) detail.fired = true;
                         localStorage.removeItem(SCHED_PREFIX + cmdId);
@@ -532,6 +534,12 @@
 
     function doScheduleCancel(p) {
         const elapsed  = Date.now() - (p.sentAt || 0);
+        if (elapsed > p.cancelMs + 30_000) {
+            console.warn('[Desviador] Janela de cancelamento expirada. A fechar.');
+            clearPending(p.cmdId);
+            setTimeout(() => { try { window.close(); } catch {} }, 1000);
+            return;
+        }
         const remaining = Math.max(p.cancelMs - elapsed, 2000);
         const cancelAt  = Date.now() + remaining;
         console.log(`[Desviador] Cancelar em ${Math.round(remaining / 1000)}s`);
@@ -605,7 +613,15 @@
             ).filter(a => a.getAttribute('data-home') === p.village);
 
             if (cancelLinks.length === 0) {
-                console.warn('[Desviador] Sem links de cancelamento visíveis — a recarregar.');
+                const reloadCount = (p.reloadCount || 0) + 1;
+                if (reloadCount >= 3) {
+                    console.error('[Desviador] Falha ao cancelar após 3 tentativas. A desistir.');
+                    clearPending(p.cmdId);
+                    setTimeout(() => { try { window.close(); } catch {} }, 1000);
+                    return;
+                }
+                console.warn(`[Desviador] Sem links de cancelamento visíveis — a recarregar (tentativa ${reloadCount}/3).`);
+                setPending({ ...p, reloadCount });
                 location.reload();
                 return;
             }

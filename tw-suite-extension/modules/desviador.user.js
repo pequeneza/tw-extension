@@ -540,9 +540,67 @@
             setTimeout(() => { try { window.close(); } catch {} }, 1000);
             return;
         }
-        const remaining = Math.max(p.cancelMs - elapsed, 2000);
+        // Recall trick: TW uses return = sentAt + 2*cancelMs (cancelMs in whole seconds).
+        // So return%1000 = sentAt%1000. Check sentAt ms against gap ms window.
+        var _retrying = false;
+        if (p.gapAfterMs && p.gapBeforeMs && p.sentAt) {
+            var _sentMs  = p.sentAt % 1000;
+            var _gapMsLo = p.gapAfterMs  % 1000;
+            var _gapMsHi = p.gapBeforeMs % 1000;
+            var _msOk = (_gapMsLo < _gapMsHi)
+                ? (_sentMs > _gapMsLo && _sentMs < _gapMsHi)
+                : (_sentMs > _gapMsLo || _sentMs < _gapMsHi);
+            if (!_msOk) {
+                console.warn('[Desviador] Recall: sentAt ms=' + _sentMs + ' fora da janela [' + _gapMsLo + '-' + _gapMsHi + ']. Cancelar e tentar novamente.');
+                _retrying = true;
+            }
+        }
+        const remaining = _retrying ? 2000 : Math.max(p.cancelMs - elapsed, 2000);
         const cancelAt  = Date.now() + remaining;
         console.log(`[Desviador] Cancelar em ${Math.round(remaining / 1000)}s`);
+
+        // Rename the outgoing command via TW AJAX label endpoint (with retries)
+        if (p.note && !_retrying) {
+            var _renamed = false;
+            var _tryRename = function(attempt) {
+                if (_renamed) return;
+                var links = Array.from(document.querySelectorAll('a.command-cancel[data-home]'))
+                    .filter(function(a) { return a.getAttribute('data-home') === p.village; });
+                if (!links.length) {
+                    if (attempt < 8) setTimeout(function() { _tryRename(attempt + 1); }, 1000);
+                    else console.warn('[Desviador] Comando não encontrado para renomear após ' + attempt + ' tentativas.');
+                    return;
+                }
+                var link = links[0];
+                var row  = link.closest('tr');
+                // Try multiple sources for the command ID
+                var href = link.getAttribute('href') || '';
+                var idM  = href.match(/[?&]id=(\d+)/);
+                var cmdId = (idM && idM[1])
+                    || link.getAttribute('data-command')
+                    || link.getAttribute('data-id')
+                    || (row && (row.querySelector('span.quickedit[data-id]') || {getAttribute: function(){return null;}}).getAttribute('data-id'))
+                    || null;
+                if (!cmdId) {
+                    console.warn('[Desviador] ID do comando não encontrado (href=' + href.slice(0,80) + ')');
+                    return;
+                }
+                var csrf = (typeof game_data !== 'undefined' && game_data.csrf) ? game_data.csrf : null;
+                if (!csrf || typeof $ === 'undefined') return;
+                _renamed = true;
+                $.post('/game.php?village=' + p.village + '&screen=place&ajax=label_unit', {
+                    id:   cmdId,
+                    name: p.note,
+                    h:    csrf,
+                }).done(function() {
+                    console.log('[Desviador] Renomeado cmd=' + cmdId + ' → "' + p.note + '"');
+                }).fail(function(xhr) {
+                    console.warn('[Desviador] Falha ao renomear cmd=' + cmdId + ' status=' + xhr.status);
+                    _renamed = false; // allow retry
+                });
+            };
+            setTimeout(function() { _tryRename(0); }, 2000);
+        }
 
         /* ── Blur overlay ── */
         const backdrop = document.createElement('div');
@@ -628,11 +686,32 @@
 
             cancelLinks[0].click();
             clearPending(p.cmdId);
+            document.title = '✓ Cancelado — Desviador';
             console.log('[Desviador] Apoio cancelado.');
 
             localStorage.setItem(LAST_CANCEL_KEY, JSON.stringify({
                 village: p.village, ts: Date.now(),
             }));
+
+            // Recall retry: ms was off, re-queue immediately (send again now)
+            if (_retrying && p.retryEntry && typeof window.xbot_addToQueue === 'function') {
+                var _gapMid = Math.floor(((p.gapAfterMs || 0) + (p.gapBeforeMs || 0)) / 2);
+                var _retryLaunch = Date.now() + 3000; // send ASAP after 3s
+                // cancelMs must be whole seconds so TW return ms = sentAt ms
+                var _newCancelMs = Math.round((_gapMid - _retryLaunch) / 2 / 1000) * 1000;
+                if (_gapMid > Date.now() + 5000 && _newCancelMs > 2000) {
+                    window.xbot_addToQueue(Object.assign({}, p.retryEntry, {
+                        launch: _retryLaunch,
+                        arrival: _gapMid,
+                        cancelAfterMs: _newCancelMs,
+                        status: undefined,
+                        createdAt: undefined,
+                    }));
+                    console.log('[Desviador] Recall re-agendado (cancelar em ' + Math.round(_newCancelMs / 1000) + 's)');
+                } else {
+                    console.warn('[Desviador] Recall: janela já passou — sem retry.');
+                }
+            }
 
             setTimeout(() => { try { window.close(); } catch {} }, 3000);
         }
@@ -641,6 +720,7 @@
             const left = cancelAt - Date.now();
             if (left <= 0) { executCancel(); return; }
 
+            document.title = '⛔ NÃO FECHAR — ' + fmtCd(left);
             timerEl.textContent = fmtCd(left);
             if (left >= 60_000) {
                 timerEl.style.color = '#d4a84b';

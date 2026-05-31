@@ -314,6 +314,25 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
   transform: translateX(0);
 }
 
+/* ── Drawer resize handle ─────────────────────────────────────────────────── */
+.drawer-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2147483643;
+  background: transparent;
+  transition: background 0.15s;
+}
+.drawer-resize-handle:hover {
+  background: rgba(59, 130, 246, 0.25);
+}
+.drawer-resize-handle--dragging {
+  background: rgba(59, 130, 246, 0.45);
+}
+
 /* ── Panel header ────────────────────────────────────────────────────────── */
 .panel-header {
   display: flex;

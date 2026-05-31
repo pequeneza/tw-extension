@@ -21,6 +21,13 @@ import { TelegramView }   from "./TelegramView";
 
 /* ─── Helpers ─────────────────────────────────────────────────────────────── */
 function _p2(n: number) { return String(n).padStart(2, "0"); }
+function getServerNowMs(): number {
+  try {
+    const w = window as Window & { Timing?: { getCurrentServerTime?: () => number } };
+    if (w.Timing?.getCurrentServerTime) return w.Timing.getCurrentServerTime();
+  } catch { /* */ }
+  return Date.now();
+}
 function fmtTriggerTimer(diffMs: number): string {
   const h = Math.floor(diffMs / 3_600_000);
   const m = Math.floor((diffMs % 3_600_000) / 60_000);
@@ -780,7 +787,7 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
   // Auto Sender queue count + next launch time — poll localStorage
   const [asQueueCount,  setAsQueueCount]  = useState(0);
   const [asNextLaunch,  setAsNextLaunch]  = useState<number | null>(null);
-  const [asNow,         setAsNow]         = useState(() => Date.now());
+  const [asNow,         setAsNow]         = useState(() => getServerNowMs());
   useEffect(() => {
     const update = () => {
       try {
@@ -798,14 +805,14 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
       } catch { setAsQueueCount(0); setAsNextLaunch(null); }
     };
     update();
-    const id = setInterval(update, 3000);
+    const id = setInterval(update, 1000);
     return () => clearInterval(id);
   }, []);
 
-  // Countdown ticker — runs while there's a pending launch
+  // Countdown ticker using server time — matches auto_sender confirm overlay
   useEffect(() => {
     if (asNextLaunch === null) return;
-    const id = setInterval(() => setAsNow(Date.now()), 500);
+    const id = setInterval(() => setAsNow(getServerNowMs()), 200);
     return () => clearInterval(id);
   }, [asNextLaunch]);
 
@@ -886,6 +893,44 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
   const isInfoVillage  = /screen=info_village/.test(window.location.href);
   const isExchangePage = /screen=market.*mode=exchange/.test(window.location.href);
   const isLabelPage    = /screen=overview_villages.*mode=incomings/.test(window.location.href);
+
+  // Resizable drawer — custom width persists in sessionStorage
+  const [drawerWidth, setDrawerWidth] = useState<number | null>(() => {
+    const saved = sessionStorage.getItem("xbot_drawer_width");
+    return saved ? Number(saved) : null;
+  });
+  const [resizing, setResizing] = useState(false);
+  const draggingRef = useRef(false);
+
+  const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    draggingRef.current = true;
+    setResizing(true);
+    const startX = e.clientX;
+    const drawerEl = (e.currentTarget as HTMLElement).parentElement;
+    const startWidth = drawerEl
+      ? drawerEl.getBoundingClientRect().width
+      : (drawerWidth ?? 340);
+
+    const onMove = (ev: MouseEvent) => {
+      if (!draggingRef.current) return;
+      const newWidth = Math.max(240, Math.min(900, startWidth + ev.clientX - startX));
+      setDrawerWidth(newWidth);
+    };
+    const onUp = () => {
+      draggingRef.current = false;
+      setResizing(false);
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      setDrawerWidth((w) => {
+        if (w !== null) sessionStorage.setItem("xbot_drawer_width", String(Math.round(w)));
+        return w;
+      });
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [drawerWidth]);
+
   return (
     <>
       <div className="trigger-stack">
@@ -974,12 +1019,16 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
       <div className="backdrop" style={{ display: open ? "block" : "none" }}
            onClick={() => setOpen(false)} />
 
-      {/* Drawer — wider when snipe view is active */}
-      
+      {/* Drawer — wider when snipe view is active; right edge is draggable to resize */}
       <div className={`drawer${open ? " drawer--open" : ""}
         ${isSnipe ? " drawer--snipe" : ""}
         ${isBalancer ? " drawer--balancer" : ""}
-        ${isGluer ? " drawer--snipe" : ""}`}>
+        ${isGluer ? " drawer--snipe" : ""}`}
+        style={drawerWidth !== null ? { width: `${drawerWidth}px` } : undefined}>
+        <div
+          className={`drawer-resize-handle${resizing ? " drawer-resize-handle--dragging" : ""}`}
+          onMouseDown={handleResizeMouseDown}
+        />
         <Panel
           visible={open}
           onClose={() => setOpen(false)}

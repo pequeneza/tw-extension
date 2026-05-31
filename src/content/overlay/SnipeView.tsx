@@ -73,7 +73,20 @@ interface SnipeQueueEntry {
   midGapArrivalMs: number;
 }
 
-type Tab = "auto" | "manual";
+interface RecallGapCandidate {
+  gapIdx: number;
+  gapAfterMs: number;
+  gapBeforeMs: number;
+  sendMs: number;
+  cancelAtMs: number;
+  cancelAfterMs: number;
+  returnMs: number;
+  tripMs: number;
+  feasible: boolean;
+  reason?: string;
+}
+
+type Tab = "auto" | "manual" | "recall";
 
 /* ─── Helpers ─────────────────────────────────────────────────────────────── */
 function pad2(n: number) { return String(n).padStart(2, "0"); }
@@ -120,6 +133,43 @@ function travelMs(unit: string, from: Coord, to: Coord, speedFactor: number) {
 function clampInt(n: number, lo: number, hi: number) {
   if (!Number.isFinite(n)) return lo;
   return Math.max(lo, Math.min(hi, Math.trunc(n)));
+}
+
+async function fetchWorldSpeed(): Promise<{ gameSpeed: number; unitSpeed: number }> {
+  const gd = (window as Window & { game_data?: { speed?: number; unit_speed?: number } }).game_data;
+  if (gd?.speed != null && gd?.unit_speed != null) {
+    return { gameSpeed: gd.speed, unitSpeed: gd.unit_speed };
+  }
+  try {
+    const html = await fetch(
+      `${location.origin}/page/settings`,
+      { credentials: "include" }
+    ).then(r => r.text());
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    let gameSpeed = 1, unitSpeed = 1;
+    for (const s of doc.querySelectorAll("script")) {
+      const t = s.textContent ?? "";
+      let m = t.match(/"speed"\s*:\s*([\d.]+)/);
+      if (m) gameSpeed = parseFloat(m[1]!);
+      m = t.match(/"unit_speed"\s*:\s*([\d.]+)/);
+      if (m) unitSpeed = parseFloat(m[1]!);
+    }
+    if (gameSpeed === 1) {
+      doc.querySelectorAll("tr").forEach(tr => {
+        const tds = tr.querySelectorAll("td");
+        if (tds.length < 2) return;
+        const label = tds[0]!.textContent?.toLowerCase() ?? "";
+        const val   = parseFloat((tds[1]!.textContent ?? "").replace(",", "."));
+        if (!isNaN(val)) {
+          if (label.includes("velocidade do jogo"))      gameSpeed = val;
+          if (label.includes("velocidade das unidades")) unitSpeed = val;
+        }
+      });
+    }
+    return { gameSpeed, unitSpeed };
+  } catch {
+    return { gameSpeed: 1, unitSpeed: 1 };
+  }
 }
 
 function getServerNowMs(): number {
@@ -315,7 +365,6 @@ async function readIncomingsFromDOM(): Promise<Incoming[]> {
     if (cmdType === "support") continue;
 
     const label = getRowLabel(tr);
-    if (!label.toLowerCase().includes("nobre")) continue;
 
     const endSpan = tr.querySelector<HTMLElement>("span[data-endtime]");
     const endSec  = parseInt(endSpan?.getAttribute("data-endtime") ?? "", 10);
@@ -434,6 +483,302 @@ function computeCandidates(
 
   out.sort((x, y) => x.sendMs - y.sendMs);
   return out.slice(0, 15);
+}
+
+/* ─── Recall computation ──────────────────────────────────────────────────── */
+function computeRecallCandidates(
+  incomings: Incoming[],
+  srcCoord: Coord,
+  dstCoord: Coord,
+  unit: string,
+  speedFactor: number,
+): RecallGapCandidate[] {
+  // TW return rule: return = sentAt + 2×cancelMs, where cancelMs must be whole seconds.
+  // So return%1000 = sentAt%1000 always.
+  // For return%1000 = midMs%1000 (in gap), sendMs must also share that ms:
+  //   sendMs = midMs − N×1000  (any integer N preserves the ms component)
+  // Cancel window: cancelMs = N/2 × 1000 ≤ 10 min → N ≤ 1200.
+  //   N must be EVEN so that cancelMs is a whole number of seconds.
+  // Troops must be in flight at cancel: cancelMs < tripMs.
+  const CANCEL_WINDOW_S = 590; // 9m50s — leaves buffer under the strict 10-min limit
+  const SEND_BUFFER_MS  = 30_000; // 30 s for auto_sender to open and fill the place screen
+  const now    = getServerNowMs();
+  const tripMs = Math.round(travelMs(unit, srcCoord, dstCoord, speedFactor) / 1000) * 1000;
+  const result: RecallGapCandidate[] = [];
+
+  for (let i = 0; i < incomings.length - 1; i++) {
+    const a = incomings[i]!;
+    const b = incomings[i + 1]!;
+    const gapAfterMs  = a.arrivalMs;
+    const gapBeforeMs = b.arrivalMs;
+    const midMs       = Math.floor((gapAfterMs + gapBeforeMs) / 2);
+
+    // Largest even N satisfying all constraints
+    const maxNByWindow = CANCEL_WINDOW_S * 2;                      // cancel window
+    const maxNByTrip   = Math.floor(tripMs / 1000) * 2 - 2;        // troops in flight
+    const maxNByTime   = Math.floor((midMs - now - SEND_BUFFER_MS) / 1000); // sendMs in future
+    const N = Math.floor(Math.min(maxNByWindow, maxNByTrip, maxNByTime) / 2) * 2; // largest even N
+
+    const sendMs        = midMs - N * 1000;
+    const cancelAfterMs = (N / 2) * 1000;          // whole seconds; return = sendMs + N*1000 = midMs ✓
+    const cancelAtMs    = sendMs + cancelAfterMs;
+    const returnMs      = midMs;
+
+    let feasible = true;
+    let reason: string | undefined;
+    if (midMs <= now) {
+      feasible = false; reason = "Janela já passou";
+    } else if (N < 2) {
+      feasible = false; reason = "Ataque demasiado próximo — sem tempo para cancelar";
+    } else if (cancelAfterMs >= tripMs) {
+      feasible = false; reason = `Destino demasiado perto (tropas: ${Math.round(tripMs/60000)}min, cancelar: ${Math.round(cancelAfterMs/60000)}min)`;
+    }
+
+    result.push({ gapIdx: i, gapAfterMs, gapBeforeMs, sendMs, cancelAtMs, cancelAfterMs, returnMs, tripMs, feasible, reason });
+  }
+  return result;
+}
+
+/* ─── RecallTab ───────────────────────────────────────────────────────────── */
+function RecallTab({
+  incomings,
+  speedFactor,
+  srcVillageId,
+  srcCoord,
+  troops,
+  loadingTroops,
+  onLoadTroops,
+}: {
+  incomings: Incoming[];
+  speedFactor: number;
+  srcVillageId: string | null;
+  srcCoord: Coord | null;
+  troops: VillageTroops[];
+  loadingTroops: boolean;
+  onLoadTroops: () => void;
+}) {
+  const [queued, setQueued] = useState<Set<number>>(new Set());
+  const [error,  setError]  = useState<string | null>(null);
+
+  // Source village troops (match by id or coord)
+  const srcVillageTroops = troops.find(
+    v => srcVillageId ? v.villageId === srcVillageId
+                      : srcCoord ? v.coord.x === srcCoord.x && v.coord.y === srcCoord.y : false
+  ) ?? null;
+
+  // Closest own village (excluding source) as destination
+  const dstVillage = srcCoord
+    ? [...troops]
+        .filter(v => v.villageId !== srcVillageId)
+        .sort((a, b) => euclidean(a.coord, srcCoord) - euclidean(b.coord, srcCoord))[0] ?? null
+    : null;
+  const dstCoord = dstVillage?.coord ?? null;
+
+  // Unit selection state
+  const displayUnits = srcVillageTroops
+    ? UNIT_ORDER_DISPLAY.filter(u => (srcVillageTroops.troops[u] ?? 0) > 0)
+    : [];
+
+  const [amounts, setAmounts] = useState<Record<string, number>>({});
+  const [drafts,  setDrafts]  = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!srcVillageTroops) return;
+    setAmounts(Object.fromEntries(displayUnits.map(u => [u, 0])));
+    setDrafts(Object.fromEntries(displayUnits.map(u => [u, "0"])));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [srcVillageTroops?.villageId]);
+
+  const toggleUnit = useCallback((unit: string) => {
+    const avail = srcVillageTroops?.troops[unit] ?? 0;
+    const next  = (amounts[unit] ?? 0) > 0 ? 0 : avail;
+    setAmounts(p => ({ ...p, [unit]: next }));
+    setDrafts(p  => ({ ...p, [unit]: String(next) }));
+  }, [amounts, srcVillageTroops]);
+
+  const selectAll = useCallback(() => {
+    if (!srcVillageTroops) return;
+    const next = Object.fromEntries(displayUnits.map(u => [u, srcVillageTroops.troops[u] ?? 0]));
+    setAmounts(next);
+    setDrafts(Object.fromEntries(Object.entries(next).map(([k, v]) => [k, String(v)])));
+  }, [srcVillageTroops, displayUnits]);
+
+  // Slowest selected unit determines travel time
+  const slowestUnit = [...UNIT_ORDER_FAST_TO_SLOW].reverse().find(u => (amounts[u] ?? 0) > 0) ?? null;
+  const hasSelection = Object.values(amounts).some(v => v > 0);
+
+  const candidates = srcCoord && dstCoord && slowestUnit && incomings.length >= 2
+    ? computeRecallCandidates(incomings, srcCoord, dstCoord, slowestUnit, speedFactor)
+    : [];
+
+  function queueGap(c: RecallGapCandidate) {
+    if (!srcVillageId || !srcCoord || !dstCoord) return;
+    const units = Object.fromEntries(Object.entries(amounts).filter(([, v]) => v > 0));
+
+    // Recompute launch at click time — render-time sendMs may be stale
+    const clickNow   = getServerNowMs();
+    const midMs      = Math.floor((c.gapAfterMs + c.gapBeforeMs) / 2);
+    const maxN = Math.floor(Math.min(
+      1180,
+      Math.floor(c.tripMs / 1000) * 2 - 2,
+      Math.floor((midMs - clickNow - 25_000) / 1000), // 25s lookahead to auto_sender
+    ) / 2) * 2;
+    const launch        = maxN > 0 ? midMs - maxN * 1000 : midMs - 2000;
+    const cancelAfterMs = maxN > 0 ? (maxN / 2) * 1000   : 1000;
+    // Cancel time on the second — ms doesn't matter for the cancel click
+    const cancelAtSec = new Date(launch + cancelAfterMs);
+    const cancelLabel = `${pad2(cancelAtSec.getHours())}:${pad2(cancelAtSec.getMinutes())}:${pad2(cancelAtSec.getSeconds())}`;
+
+    const entry = {
+      src:           `${srcCoord.x}|${srcCoord.y}`,
+      tgt:           `${dstCoord.x}|${dstCoord.y}`,
+      srcVillageId,
+      type:          "support",
+      launch,
+      arrival:       c.returnMs,
+      units,
+      note:          `[SC] Cancelar às ${cancelLabel}`,
+      cancelAfterMs,
+      gapAfterMs:    c.gapAfterMs,
+      gapBeforeMs:   c.gapBeforeMs,
+    };
+    document.dispatchEvent(new CustomEvent("xbot:autosender:run", { detail: { action: "addToQueue", entry } }));
+    setQueued(s => new Set([...s, c.gapIdx]));
+  }
+
+  return (
+    <div>
+      {/* Source */}
+      <div className="cfg-section">
+        <div className="section-label">Origem (aldeia defendida)</div>
+        {srcCoord ? (
+          <div style={{ fontSize: 12, fontFamily: "var(--mono)", color: "var(--n400)" }}>
+            {srcCoord.x}|{srcCoord.y}
+            {srcVillageId && <span style={{ color: "var(--n500)", marginLeft: 6 }}>id:{srcVillageId}</span>}
+          </div>
+        ) : (
+          <div className="state-msg">Navega para os ataques recebidos de uma aldeia.</div>
+        )}
+      </div>
+
+      {/* Destination (auto-detected) */}
+      {srcCoord && (
+        <div className="cfg-section">
+          <div className="section-label">Destino (aldeia própria mais próxima)</div>
+          {dstVillage ? (
+            <div style={{ fontSize: 12, fontFamily: "var(--mono)", color: "var(--n400)" }}>
+              {dstCoord!.x}|{dstCoord!.y}
+              <span style={{ color: "var(--n500)", marginLeft: 6 }}>
+                ({(Math.round(euclidean(srcCoord, dstCoord!) * 10) / 10).toFixed(1)} fields)
+              </span>
+            </div>
+          ) : troops.length === 0 ? (
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <button className="btn btn-save btn-save--dirty" onClick={onLoadTroops} disabled={loadingTroops}>
+                {loadingTroops ? <><span className="spinner" /> A carregar…</> : "Carregar tropas"}
+              </button>
+              <span style={{ fontSize: 11, color: "var(--n500)" }}>necessário para detectar destino</span>
+            </div>
+          ) : (
+            <div className="state-msg">Sem outras aldeias próprias disponíveis.</div>
+          )}
+        </div>
+      )}
+
+      {/* Source village troops card */}
+      {srcCoord && (
+        <div className="cfg-section">
+          <div className="section-label">Tropas na aldeia defendida</div>
+          {!srcVillageTroops && troops.length === 0 ? (
+            <div className="state-msg">Carrega as tropas para ver as unidades disponíveis.</div>
+          ) : !srcVillageTroops ? (
+            <div className="state-msg">Aldeia de origem não encontrada na lista de tropas.</div>
+          ) : (
+            <div className="snipe-card">
+              <div className="snipe-card-row">
+                <button className="btn btn-ghost" onClick={selectAll}>Select all</button>
+                {slowestUnit && (
+                  <span style={{ fontSize: 11, color: "var(--n500)" }}>
+                    slowest: <strong>{slowestUnit}</strong>
+                  </span>
+                )}
+              </div>
+              <div className="snipe-units">
+                {displayUnits.map(unit => {
+                  const avail = srcVillageTroops.troops[unit] ?? 0;
+                  const val   = amounts[unit] ?? 0;
+                  return (
+                    <div key={unit} className={`snipe-unitbox${val > 0 ? " snipe-unitbox--on" : ""}`}>
+                      <img src={unitIconUrl(unit)} alt={unit} className="snipe-unit-icon"
+                           onClick={() => toggleUnit(unit)} title={`Click to toggle all ${unit}`} />
+                      <div className="snipe-unit-avail">{avail}</div>
+                      <input
+                        className="snipe-unit-input"
+                        type="number" min={0} max={avail} step={1}
+                        value={drafts[unit] ?? String(val)}
+                        onChange={e => {
+                          const raw = e.target.value;
+                          setDrafts(p => ({ ...p, [unit]: raw }));
+                          const n = clampInt(parseInt(raw, 10), 0, avail);
+                          if (Number.isFinite(n)) setAmounts(p => ({ ...p, [unit]: n }));
+                        }}
+                        onBlur={() => {
+                          const n = parseInt(drafts[unit] ?? "0", 10);
+                          const clamped = Number.isFinite(n) ? clampInt(n, 0, avail) : val;
+                          setAmounts(p => ({ ...p, [unit]: clamped }));
+                          setDrafts(p => ({ ...p, [unit]: String(clamped) }));
+                        }}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Gap candidates */}
+      {srcCoord && dstCoord && hasSelection && incomings.length >= 2 && (
+        <div className="cfg-section">
+          <div className="section-label">Janelas de snipe cancel ({candidates.length})</div>
+          {candidates.map(c => (
+            <div key={c.gapIdx} style={{
+              marginBottom: 8, padding: "8px 10px", borderRadius: 8,
+              background: c.feasible ? "rgba(13,148,136,0.08)" : "rgba(80,80,80,0.06)",
+              border: `1px solid ${c.feasible ? "rgba(13,148,136,0.3)" : "rgba(100,100,100,0.18)"}`,
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12 }}>
+                <strong>Janela #{c.gapIdx + 1}</strong>
+                {!c.feasible && <span style={{ color: "var(--r500)", fontSize: 11 }}>{c.reason}</span>}
+                {c.feasible && queued.has(c.gapIdx) && <span style={{ color: "var(--g600)", fontSize: 11 }}>✓ Na fila</span>}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: "2px 6px", fontFamily: "var(--mono)", fontSize: 11, color: "var(--n300)" }}>
+                <span>Enviar:</span>   <span>{fmtDateMs(c.sendMs).split(" ")[1]}</span>
+                <span>Cancelar:</span><span>{(fmtDateMs(c.cancelAtMs).split(" ")[1] ?? "").split(".")[0]}</span>
+                <span>Retorno:</span> <span>{fmtDateMs(c.returnMs).split(" ")[1]}</span>
+                <span>Viagem:</span>  <span>{Math.floor(c.tripMs / 60000)}m{Math.round((c.tripMs % 60000) / 1000)}s</span>
+              </div>
+              {c.feasible && !queued.has(c.gapIdx) && (
+                <button
+                  className="btn btn-save btn-save--dirty"
+                  style={{ marginTop: 6, width: "100%", fontSize: 12 }}
+                  onClick={() => queueGap(c)}
+                >⚡ Queue to AutoSender</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {srcCoord && dstCoord && !hasSelection && incomings.length >= 2 && (
+        <div className="cfg-section"><div className="state-msg">Seleciona tropas para calcular as janelas.</div></div>
+      )}
+      {srcCoord && dstCoord && incomings.length < 2 && (
+        <div className="cfg-section"><div className="state-msg">Precisas de pelo menos 2 ataques recebidos.</div></div>
+      )}
+      {error && <div className="cfg-section"><div className="snipe-error">{error}</div></div>}
+    </div>
+  );
 }
 
 /* ─── useCountdown ────────────────────────────────────────────────────────── */
@@ -858,10 +1203,12 @@ export function SnipeView({ visible, onBack }: {
 }) {
   const [tab, setTab] = useState<Tab>("auto");
 
-  const [gameSpeed,      setGameSpeed]      = useState(1.4);
-  const [unitSpeed,      setUnitSpeed]      = useState(0.75);
-  const [gameSpeedDraft, setGameSpeedDraft] = useState("1.4");
-  const [unitSpeedDraft, setUnitSpeedDraft] = useState("0.75");
+  const [nobleOnly, setNobleOnly] = useState(false);
+
+  const [gameSpeed,      setGameSpeed]      = useState(1.0);
+  const [unitSpeed,      setUnitSpeed]      = useState(1.0);
+  const [gameSpeedDraft, setGameSpeedDraft] = useState("1.0");
+  const [unitSpeedDraft, setUnitSpeedDraft] = useState("1.0");
   const [sigil,          setSigil]          = useState(0);
   const [sigilDraft,     setSigilDraft]     = useState("0");
 
@@ -948,9 +1295,12 @@ export function SnipeView({ visible, onBack }: {
     return best ? incomings.find((i) => coordKey(i.target) === best[0])!.target : null;
   })();
 
-  const filteredIncomings = target
-    ? incomings.filter((i) => coordKey(i.target) === coordKey(target))
-    : incomings;
+  const filteredIncomings = (
+    target ? incomings.filter((i) => coordKey(i.target) === coordKey(target)) : incomings
+  ).filter((i) => !nobleOnly || i.label.toLowerCase().includes("nobre"));
+
+  const currentVillageId = readCurrentVillageId();
+  const srcCoord: Coord | null = filteredIncomings[0]?.target ?? incomings[0]?.target ?? null;
 
   const sigilRatio  = 1 + sigil / 100;
   const speedFactor = 1 / (gameSpeed * unitSpeed * sigilRatio);
@@ -968,6 +1318,17 @@ export function SnipeView({ visible, onBack }: {
       setAutoError(`Failed to read incomings: ${(e as Error).message}`)
     );
   }, []);
+
+  // Fetch world speed once on first open — same logic as planeador.fetchServerConfig
+  const speedFetchedRef = useRef(false);
+  useEffect(() => {
+    if (!visible || speedFetchedRef.current) return;
+    speedFetchedRef.current = true;
+    fetchWorldSpeed().then(({ gameSpeed: gs, unitSpeed: us }) => {
+      setGameSpeed(gs);  setGameSpeedDraft(String(gs));
+      setUnitSpeed(us);  setUnitSpeedDraft(String(us));
+    });
+  }, [visible]);
 
   useEffect(() => { if (!visible) return; loadIncomings(); }, [visible]);
 
@@ -996,7 +1357,8 @@ export function SnipeView({ visible, onBack }: {
         <div className="cfg-header-text">
           <span className="cfg-title">Snipe Scheduler</span>
           <span className="cfg-subtitle">
-            {tab === "manual" ? "teammate support" :
+            {tab === "recall" ? "snipe cancel" :
+             tab === "manual" ? "teammate support" :
              target ? `target ${target.x}|${target.y}` : "gap snipe planner"}
           </span>
         </div>
@@ -1015,6 +1377,10 @@ export function SnipeView({ visible, onBack }: {
               className={`btn${tab === "manual" ? " btn-save" : " btn-ghost"}`}
               onClick={() => setTab("manual")}
             >✏️ Manual</button>
+            <button
+              className={`btn${tab === "recall" ? " btn-save" : " btn-ghost"}`}
+              onClick={() => setTab("recall")}
+            >🔄 Snipe Cancel</button>
           </div>
         </div>
 
@@ -1048,7 +1414,13 @@ export function SnipeView({ visible, onBack }: {
               />
             </label>
             {tab === "auto" && (
-              <button className="btn btn-ghost" onClick={loadIncomings}>↺ Refresh</button>
+              <>
+                <button className="btn btn-ghost" onClick={loadIncomings}>↺ Refresh</button>
+                <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, cursor: "pointer", userSelect: "none" }}>
+                  <input type="checkbox" checked={nobleOnly} onChange={(e) => setNobleOnly(e.target.checked)} />
+                  Nobre only
+                </label>
+              </>
             )}
           </div>
         </div>
@@ -1119,7 +1491,11 @@ export function SnipeView({ visible, onBack }: {
                 )}
                 {incomings.length > 0 && filteredIncomings.length < 2 && (
                   <div className="cfg-section">
-                    <div className="state-msg">Need at least 2 "Nobre" incomings to the same target.</div>
+                    <div className="state-msg">
+                      {nobleOnly
+                        ? 'Need at least 2 "Nobre" incomings. Disable "Nobre only" to see all attacks.'
+                        : "Need at least 2 incomings to the same target."}
+                    </div>
                   </div>
                 )}
 
@@ -1168,6 +1544,19 @@ export function SnipeView({ visible, onBack }: {
             speedFactor={speedFactor}
             onQueue={addToSnipeQueue}
             queuedSources={queuedSources}
+          />
+        )}
+
+        {/* ── RECALL TAB ── */}
+        {tab === "recall" && (
+          <RecallTab
+            incomings={filteredIncomings.length >= 2 ? filteredIncomings : incomings}
+            speedFactor={speedFactor}
+            srcVillageId={currentVillageId}
+            srcCoord={srcCoord}
+            troops={troops}
+            loadingTroops={loadingTroops}
+            onLoadTroops={loadTroops}
           />
         )}
 

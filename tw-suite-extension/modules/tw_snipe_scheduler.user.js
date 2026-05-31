@@ -345,9 +345,7 @@
       ).toLowerCase();
       if (cmdType === 'support') continue;
 
-      // Only consider commands labelled with "Nobre"
       const label = getCommandLabel($tr);
-      if (!label.toLowerCase().includes('nobre')) continue;
 
       // Extract timing
       const endSpan = $tr.find('span[data-endtime]').first();

@@ -24,7 +24,8 @@
       "Bash(Get-ChildItem \"C:\\\\Users\\\\peque\\\\OneDrive\\\\Ambiente de Trabalho\\\\TWScripts\\\\tw-extension\\\\kumin_script\" -Recurse)",
       "Bash(Select-Object FullName)",
       "Bash(node *)",
-      "Bash(Get-ChildItem *)"
+      "Bash(Get-ChildItem *)",
+      "PowerShell(Get-Content *)"
     ]
   },
   "enabledPlugins": {

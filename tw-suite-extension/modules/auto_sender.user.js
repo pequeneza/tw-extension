@@ -13,11 +13,13 @@
   window.__twAutoSenderRunning = true;
 
   /* ─── Constants ─────────────────────────────────────────────────────────── */
-  var LS_QUEUE    = 'xbot_autosender_queue';
-  var LS_ACTIVE   = 'xbot_autosender_active';
-  var LS_SETTINGS = 'xbot_autosender_settings';
-  var SS_CONF     = 'xbot_autosender_confirming';
-  var SS_PAUSE    = 'xbot_autosender_paused';
+  var LS_QUEUE         = 'xbot_autosender_queue';
+  var LS_ACTIVE        = 'xbot_autosender_active';
+  var LS_SETTINGS      = 'xbot_autosender_settings';
+  var SS_CONF          = 'xbot_autosender_confirming';
+  var SS_PAUSE         = 'xbot_autosender_paused';
+  var SS_SC_ACTIVE     = 'xbot_snipe_cancel_active';     // sessionStorage flag → cancel pending on next place load
+  var SC_PENDING_PFX   = 'xbot_snipe_cancel_pending_';  // snipe-cancel phase key
   var CMD_TTL        = 90000;
   var FILL_TIMEOUT_MS = 6000; // max wait for unit_input_* to appear after coord input triggers AJAX re-render
   var UNIT_IDS       = ['spear','sword','axe','archer','spy','light','marcher','heavy','ram','catapult','snob','knight'];
@@ -38,10 +40,8 @@
     try { _settings = Object.assign({}, SETTING_DEFAULTS,
                                     JSON.parse(localStorage.getItem(LS_SETTINGS) || '{}')); }
     catch (e) {}
-    // Resolve effective open-tab delay: prefer explicit openTabDelay, fall back to lookahead
-    _settings._openTabDelaySec = _settings.openTabDelay != null
-      ? _settings.openTabDelay
-      : (_settings.lookahead || 40);
+    // Always use lookahead — openTabDelay is deprecated and ignored
+    _settings._openTabDelaySec = _settings.lookahead || 40;
   }
   loadSettings();
 
@@ -213,6 +213,10 @@
              sigilPct:         entry.sigilPct         != null ? entry.sigilPct         : 0,
              randomOffset:     entry.randomOffset     != null ? entry.randomOffset     : null,
              randomOffsetTime: entry.randomOffsetTime != null ? entry.randomOffsetTime : null,
+             cancelAfterMs:    entry.cancelAfterMs    != null ? entry.cancelAfterMs    : null,
+             gapAfterMs:       entry.gapAfterMs       != null ? entry.gapAfterMs       : null,
+             gapBeforeMs:      entry.gapBeforeMs      != null ? entry.gapBeforeMs      : null,
+             travelMs:         entry.travelMs         != null ? entry.travelMs         : null,
              status:  'pending', createdAt: Date.now() });
     writeQueue(q);
     emitState();
@@ -237,6 +241,7 @@
     else if (d.action === 'resume')                  { sessionStorage.removeItem(SS_PAUSE); emitState(); }
     else if (d.action === 'remove' && d.id)          { writeQueue(readQueue().filter(function(e) { return e.id !== d.id; })); emitState(); }
     else if (d.action === 'getState')                { emitState(); }
+    else if (d.action === 'addToQueue' && d.entry)   { addToQueue(d.entry); }
     else if (d.action === 'applySettings') {
       if (d.settings) {
         try { localStorage.setItem(LS_SETTINGS, JSON.stringify(d.settings)); } catch (e) {}
@@ -679,11 +684,53 @@
           updateStatus(cmd.id, 'sent');
           emitState();
           hideConfirmCountdown();
-          var _deltaStr = (_clickDeltaMs >= 0 ? '+' : '') + _clickDeltaMs.toFixed(0) + 'ms';
-          showStatus('AutoSender: enviado! (' + _deltaStr + ')' + (_settings.autoClose ? ' A fechar...' : ''), '#15803d');
           try { sessionStorage.removeItem(SS_CONF); } catch (e) {}
-          if (_settings.autoClose !== false) {
-            setTimeout(function() { try { window.close(); } catch (e) {} }, 1800);
+
+          if (cmd.gapAfterMs && cmd.gapBeforeMs) {
+            // Write cancel pending state BEFORE the confirm click fires so it's
+            // available immediately when TW redirects back to screen=place.
+            var _cancelCmdId = 'snipe_' + cmd.id;
+            var _sentAt = Date.now();
+            var _midGap = Math.floor((cmd.gapAfterMs + cmd.gapBeforeMs) / 2);
+
+            if (_midGap <= _sentAt) {
+              showStatus('AutoSender: janela de cancelamento passou!', '#b91c1c');
+              setTimeout(function() { try { window.close(); } catch(e) {} }, 1500);
+            } else {
+            var _cancelMs = Math.max(2000, Math.round((_midGap - _sentAt) / 2 / 1000) * 1000);
+            var _sentMs   = _sentAt % 1000;
+            var _gapMsLo  = cmd.gapAfterMs  % 1000;
+            var _gapMsHi  = cmd.gapBeforeMs % 1000;
+            var _msOk     = _sentMs > _gapMsLo && _sentMs <= _gapMsHi;
+            var _retryEntry = {
+              src: cmd.src, tgt: cmd.tgt, srcVillageId: cmd.srcVillageId,
+              type: cmd.type, units: cmd.units, note: cmd.note,
+              gapAfterMs: cmd.gapAfterMs, gapBeforeMs: cmd.gapBeforeMs,
+            };
+            var _scPayload = JSON.stringify({
+              village: cmd.srcVillageId, cancelMs: _cancelMs,
+              cmdId: _cancelCmdId, sentAt: _sentAt,
+              gapAfterMs: cmd.gapAfterMs, gapBeforeMs: cmd.gapBeforeMs,
+              note: cmd.note || null, retryEntry: _retryEntry,
+            });
+            // Persist state in localStorage (survives navigation) + sessionStorage flag
+            try { localStorage.setItem(SC_PENDING_PFX + _cancelCmdId, _scPayload); } catch(e) {}
+            try { sessionStorage.setItem(SS_SC_ACTIVE, _cancelCmdId); } catch(e) {}
+            // Clear LS_ACTIVE so handlePlacePage doesn't refill the form on the redirect
+            try { localStorage.removeItem(LS_ACTIVE); } catch(e) {}
+            if (_msOk) {
+              showStatus('AutoSender: enviado (ms:' + _sentMs + ')! Cancelar em ' + Math.round(_cancelMs/1000) + 's…', '#0d9488');
+            } else {
+              showStatus('AutoSender: ms ' + _sentMs + ' fora da janela. A cancelar e tentar novamente…', '#d97706');
+            }
+            // TW naturally redirects to screen=place after confirm — no manual navigate needed
+            }
+          } else {
+            var _deltaStr = (_clickDeltaMs >= 0 ? '+' : '') + _clickDeltaMs.toFixed(0) + 'ms';
+            showStatus('AutoSender: enviado! (' + _deltaStr + ')' + (_settings.autoClose ? ' A fechar...' : ''), '#15803d');
+            if (_settings.autoClose !== false) {
+              setTimeout(function() { try { window.close(); } catch (e) {} }, 1800);
+            }
           }
         } else {
           hideConfirmCountdown();
@@ -727,6 +774,10 @@
                        sigilPct:         e.sigilPct         != null ? e.sigilPct         : 0,
                        randomOffset:     e.randomOffset     != null ? e.randomOffset     : null,
                        randomOffsetTime: e.randomOffsetTime != null ? e.randomOffsetTime : null,
+                       cancelAfterMs:    e.cancelAfterMs    != null ? e.cancelAfterMs    : null,
+                       gapAfterMs:       e.gapAfterMs       != null ? e.gapAfterMs       : null,
+                       gapBeforeMs:      e.gapBeforeMs      != null ? e.gapBeforeMs      : null,
+                       travelMs:         e.travelMs         != null ? e.travelMs         : null,
                        writtenAt: Date.now() };
         try { localStorage.setItem(LS_ACTIVE, JSON.stringify(active)); } catch (err) {}
 
@@ -760,6 +811,197 @@
 
   initWorkerTimers();
 
+  /* ─── Snipe-cancel phase handler ────────────────────────────────────────── */
+  function handleSnipeCancel(p) {
+    var _retrying = false;
+    var cancelAt  = null; // set by _initFromDOM once actual ms is read from DOM
+
+    // Countdown overlay
+    var backdrop = document.createElement('div');
+    backdrop.style.cssText = 'position:fixed;inset:0;z-index:999998;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);background:rgba(5,8,20,0.55);';
+    var dialog = document.createElement('div');
+    dialog.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:999999;width:380px;background:linear-gradient(160deg,#0d1525 0%,#0a1020 100%);border:1px solid rgba(180,130,40,0.45);border-radius:16px;padding:22px 32px 20px;font-family:"Trebuchet MS",sans-serif;color:#e8d9b0;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.85);user-select:none;';
+    var titleEl = document.createElement('div');
+    titleEl.style.cssText = 'font-size:13px;letter-spacing:0.08em;color:#a89060;margin-bottom:6px;text-transform:uppercase;';
+    titleEl.textContent = '🔄 Snipe Cancel — A aguardar comando…';
+    var infoEl = document.createElement('div');
+    infoEl.style.cssText = 'font-size:12px;color:#7a8fa6;margin-bottom:16px;';
+    infoEl.textContent = 'Aldeia ' + p.village + (p.note ? ' · ' + p.note : '');
+    var timerEl = document.createElement('div');
+    timerEl.style.cssText = 'font-size:38px;font-weight:700;font-family:monospace;font-variant-numeric:tabular-nums;letter-spacing:0.04em;';
+    dialog.appendChild(titleEl); dialog.appendChild(infoEl); dialog.appendChild(timerEl);
+    document.body.appendChild(backdrop); document.body.appendChild(dialog);
+
+    function fmtCd(ms) {
+      if (ms <= 0) return '00:00:00';
+      var t = Math.floor(ms / 1000);
+      return ('0'+Math.floor(t/3600)).slice(-2)+':'+('0'+Math.floor((t%3600)/60)).slice(-2)+':'+('0'+(t%60)).slice(-2);
+    }
+
+    var tickId = null;
+    var done = false;
+
+    // Repurpose the overlay to show a "gap missed" message + close countdown
+    function showMissedFeedback(headline, detail, closeMs) {
+      titleEl.textContent = headline;
+      titleEl.style.color = '#e0a020';
+      infoEl.textContent  = detail;
+      var closeAt = Date.now() + (closeMs || 8000);
+      var fbTick = setInterval(function() {
+        var left = closeAt - Date.now();
+        if (left <= 0) {
+          clearInterval(fbTick);
+          backdrop.remove(); dialog.remove();
+          try { window.close(); } catch(e) {}
+          return;
+        }
+        timerEl.style.fontSize = '22px';
+        timerEl.style.color    = '#e0a020';
+        timerEl.textContent    = 'A fechar em ' + Math.ceil(left / 1000) + 's';
+      }, 200);
+    }
+
+    function doCancel() {
+      if (done) return;
+      done = true;
+      if (tickId) { clearInterval(tickId); tickId = null; }
+      localStorage.removeItem(SC_PENDING_PFX + p.cmdId);
+
+      var cancelLinks = Array.from(document.querySelectorAll('a.command-cancel[data-home]'))
+        .filter(function(a) { return a.getAttribute('data-home') === p.village; });
+
+      if (!cancelLinks.length) {
+        var rc = (p.reloadCount || 0) + 1;
+        if (rc >= 3) { console.error('[AutoSender SC] Sem link de cancelamento. A desistir.'); backdrop.remove(); dialog.remove(); setTimeout(function() { try { window.close(); } catch(e) {} }, 1000); return; }
+        localStorage.setItem(SC_PENDING_PFX + p.cmdId, JSON.stringify(Object.assign({}, p, { reloadCount: rc })));
+        try { sessionStorage.setItem(SS_SC_ACTIVE, p.cmdId); } catch(e) {} // re-arm for reload
+        location.reload(); return;
+      }
+
+      var cancelClickTime = Date.now();
+      cancelLinks[0].click();
+      console.log('[AutoSender SC] Apoio cancelado.');
+
+      // Retry if ms missed the gap window
+      if (_retrying && p.retryEntry) {
+        var _sentAt2        = p.sentAt || cancelClickTime;
+        var _expectedReturn = cancelClickTime + (cancelClickTime - _sentAt2);
+        var _gapMid = Math.floor(((p.gapAfterMs || 0) + (p.gapBeforeMs || 0)) / 2);
+        var _rl  = _expectedReturn + 10000; // 10 s after troops home
+        // Adjust ms component of _rl to match midGap so the return lands exactly there
+        var _targetMs = _gapMid % 1000;
+        _rl += (_targetMs - (_rl % 1000) + 1000) % 1000;
+        var _ncm = Math.round((_gapMid - _rl) / 2 / 1000) * 1000;
+        if (_gapMid > _rl + 2000 && _ncm > 2000) {
+          addToQueue(Object.assign({}, p.retryEntry, { launch: _rl, arrival: _gapMid, cancelAfterMs: _ncm }));
+          console.log('[AutoSender SC] Retry na fila (launch ' + new Date(_rl).toLocaleTimeString('pt-PT') + ', cancelar em ' + Math.round(_ncm / 1000) + 's)');
+          document.title = '⚠️ Gap perdido — a reagendar';
+          showMissedFeedback('⚠️ Gap perdido — a reagendar',
+            'ms fora da janela. Nova tentativa às ' + new Date(_rl).toLocaleTimeString('pt-PT'), 8000);
+        } else {
+          console.warn('[AutoSender SC] Janela passou — sem retry.');
+          document.title = '❌ Gap perdido';
+          showMissedFeedback('❌ Gap perdido', 'Sem tempo para nova tentativa.', 6000);
+        }
+        return;
+      }
+
+      // Success path
+      document.title = '✓ Cancelado — Snipe Cancel';
+      backdrop.remove(); dialog.remove();
+      setTimeout(function() { try { window.close(); } catch(e) {} }, 3000);
+    }
+
+    function render() {
+      if (cancelAt === null) { timerEl.textContent = '…'; return; }
+      var left = cancelAt - Date.now();
+      if (left <= 0) { doCancel(); return; }
+      document.title = '⛔ NÃO FECHAR — ' + fmtCd(left);
+      timerEl.textContent = fmtCd(left);
+    }
+
+    // Poll for command to appear; read actual ms from DOM, rename, then set cancelAt
+    function _initFromDOM(attempt) {
+      if (done) return;
+      var links = Array.from(document.querySelectorAll('a.command-cancel[data-home]'))
+        .filter(function(a) { return a.getAttribute('data-home') === p.village; });
+
+      if (!links.length) {
+        if (attempt < 3) { setTimeout(function() { _initFromDOM(attempt + 1); }, 3000); return; }
+        _applyEstimate(); return; // command never appeared after 9 s — fall back to sentAt estimate
+      }
+
+      // Read actual ms from the command row: <td>…:<span class="grey small">752</span></td>
+      var row      = links[0].closest('tr');
+      var msEl     = row && row.querySelector('span.grey.small');
+      var actualMs = msEl ? parseInt(msEl.textContent.trim(), 10) : NaN;
+
+      var _gapLo  = (p.gapAfterMs  || 0) % 1000;
+      var _gapHi  = (p.gapBeforeMs || 0) % 1000;
+      var _midGap = Math.floor(((p.gapAfterMs || 0) + (p.gapBeforeMs || 0)) / 2);
+
+      if (!isNaN(actualMs) && p.gapAfterMs && p.gapBeforeMs) {
+        var _msOk = _gapLo < _gapHi
+          ? (actualMs > _gapLo && actualMs <= _gapHi)
+          : (actualMs > _gapLo || actualMs <= _gapHi); // wraparound across 1-second boundary
+        if (_msOk) {
+          // Good ms: rename via TW's quickedit-out widget, then compute cancelAt from actual DOM ms
+          if (p.note) {
+            var qeSpan    = row.querySelector('span.quickedit-out');
+            var renameBtn = row.querySelector('a.rename-icon');
+            if (renameBtn && qeSpan) {
+              renameBtn.click(); // opens inline input
+              setTimeout(function() {
+                var inp = qeSpan.querySelector('input[type="text"]');
+                if (inp) {
+                  inp.value = p.note;
+                  inp.dispatchEvent(new Event('input', { bubbles: true }));
+                  var confirm = qeSpan.querySelector('a.rename-confirm, a[data-type="confirm"], a.quickedit-btn-confirm');
+                  if (confirm) {
+                    confirm.click();
+                    console.log('[AutoSender SC] Renomeado (quickedit): ' + p.note);
+                  } else {
+                    inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+                    console.log('[AutoSender SC] Renomeado via Enter: ' + p.note);
+                  }
+                }
+              }, 400);
+            }
+          }
+          var _sentSec    = Math.floor((p.sentAt || Date.now()) / 1000) * 1000;
+          var _sentWithMs = _sentSec + actualMs;
+          var _cancelMs   = Math.max(2000, Math.round((_midGap - _sentWithMs) / 2 / 1000) * 1000);
+          cancelAt = _sentWithMs + _cancelMs;
+          if (cancelAt < Date.now() + 2000) cancelAt = Date.now() + 2000;
+          console.log('[AutoSender SC] ms=' + actualMs + ' ok. Cancelar em ' + Math.round(_cancelMs/1000) + 's às ' + new Date(cancelAt).toLocaleTimeString('pt-PT'));
+          titleEl.textContent = '🔄 Snipe Cancel — Aguardando cancelamento';
+        } else {
+          // Bad ms: cancel immediately, retry after troops return
+          _retrying = true;
+          cancelAt  = Date.now() + 2000;
+          console.warn('[AutoSender SC] ms=' + actualMs + ' fora da janela (' + _gapLo + '-' + _gapHi + ']. Cancelar e tentar novamente.');
+          titleEl.textContent = '🔄 Snipe Cancel — ms fora da janela, a cancelar…';
+        }
+      } else {
+        _applyEstimate();
+      }
+    }
+
+    // Fallback when actual ms is unavailable: use sentAt estimate
+    function _applyEstimate() {
+      if (!p.gapAfterMs || !p.sentAt) { cancelAt = Date.now() + Math.max(2000, p.cancelMs || 2000); return; }
+      var _midGap = Math.floor((p.gapAfterMs + p.gapBeforeMs) / 2);
+      var _est    = Math.max(2000, Math.round((_midGap - p.sentAt) / 2 / 1000) * 1000);
+      cancelAt    = p.sentAt + _est;
+      if (cancelAt < Date.now() + 2000) cancelAt = Date.now() + 2000;
+      titleEl.textContent = '🔄 Snipe Cancel — Aguardando cancelamento';
+    }
+
+    render();
+    tickId = setInterval(render, 200);
+    _initFromDOM(0);
+  }
+
   whenReady(function() {
     var params = new URLSearchParams(location.search);
     var screen = params.get('screen') || '';
@@ -768,7 +1010,23 @@
     if (screen === 'place' && tryVal === 'confirm') {
       handleConfirmPage();
     } else if (screen === 'place') {
-      handlePlacePage();
+      // Check for a snipe-cancel pending on this place page load.
+      // TW redirects naturally to screen=place after confirm — we detect it via
+      // the sessionStorage flag written just before the confirm click.
+      var scId = null;
+      try { scId = sessionStorage.getItem(SS_SC_ACTIVE); } catch(e) {}
+      if (scId) {
+        var scPending = null;
+        try { scPending = JSON.parse(localStorage.getItem(SC_PENDING_PFX + scId) || 'null'); } catch(e) {}
+        if (scPending) {
+          try { sessionStorage.removeItem(SS_SC_ACTIVE); } catch(e) {} // consume flag
+          handleSnipeCancel(scPending);
+        } else {
+          handlePlacePage();
+        }
+      } else {
+        handlePlacePage();
+      }
     } else {
       runWatcher();
     }

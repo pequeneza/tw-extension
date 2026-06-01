@@ -211,7 +211,16 @@ function QueueTab({ queue, paused, active, now, onSend, onRemove, onPauseToggle,
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       <span className="gluer-queue-src">{entry.src}</span>
                       <span style={{ color: "var(--n300)", fontSize: 11 }}>→</span>
-                      <span className="gluer-queue-tgt">{entry.tgt}</span>
+                      {entry.tgtVillageId ? (
+                        <a
+                          className="gluer-queue-tgt"
+                          href={`${location.origin}/game.php?village=${entry.srcVillageId}&screen=info_village&id=${entry.tgtVillageId}`}
+                          target="_blank" rel="noopener noreferrer"
+                          style={{ color: "var(--b500)", textDecoration: "underline" }}
+                        >{entry.tgt}</a>
+                      ) : (
+                        <span className="gluer-queue-tgt">{entry.tgt}</span>
+                      )}
                       <span style={{
                         fontSize: 9, fontWeight: 700, padding: "1px 4px",
                         borderRadius: 3, flexShrink: 0, whiteSpace: "nowrap",
@@ -560,7 +569,7 @@ export function AutoSenderView({ visible, onBack }: { visible: boolean; onBack: 
   useEffect(() => {
     const h = (e: Event) => {
       const d = (e as CustomEvent).detail as { queue: QueueEntry[]; paused: boolean; active: boolean };
-      setQueue(d.queue ?? []);
+      setQueue((d.queue ?? []).slice().sort((a, b) => a.launch - b.launch));
       setPaused(d.paused ?? false);
       setActive(d.active ?? false);
     };
@@ -574,7 +583,7 @@ export function AutoSenderView({ visible, onBack }: { visible: boolean; onBack: 
     const poll = () => {
       try {
         const q = JSON.parse(localStorage.getItem("xbot_autosender_queue") ?? "[]");
-        if (Array.isArray(q)) setQueue(q);
+        if (Array.isArray(q)) setQueue(q.slice().sort((a: QueueEntry, b: QueueEntry) => a.launch - b.launch));
       } catch { /* */ }
     };
     poll();

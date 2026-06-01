@@ -218,6 +218,7 @@
              gapBeforeMs:      entry.gapBeforeMs      != null ? entry.gapBeforeMs      : null,
              travelMs:         entry.travelMs         != null ? entry.travelMs         : null,
              status:  'pending', createdAt: Date.now() });
+    q.sort(function(a, b) { return a.launch - b.launch; });
     writeQueue(q);
     emitState();
     return id;
@@ -501,13 +502,25 @@
     }
 
     render();
-    var tickId = setInterval(render, 50);
-    el._tickId = tickId;
+    el._tickId = setInterval(render, 50);
+
+    // Separate 1s interval for document.title — kept out of the 50ms hot path
+    // to avoid DOM write overhead near the performance.now() busy-wait.
+    function renderTitle() {
+      var diff = launchMs - getEffectiveServerNowMs();
+      document.title = '⚡ ' + fmtCd(diff) + (cmd.tgt ? ' → ' + cmd.tgt : '');
+    }
+    renderTitle();
+    el._titleTickId = setInterval(renderTitle, 1000);
   }
 
   function hideConfirmCountdown() {
     var el = document.getElementById('__xbot_confirm_overlay');
-    if (el) { if (el._tickId) clearInterval(el._tickId); el.remove(); }
+    if (el) {
+      if (el._tickId)      clearInterval(el._tickId);
+      if (el._titleTickId) clearInterval(el._titleTickId);
+      el.remove();
+    }
     var bd = document.getElementById('__xbot_backdrop');
     if (bd) bd.remove();
   }
@@ -515,7 +528,8 @@
   // Stop the 50ms render tick WITHOUT removing the overlay (called at busy-wait entry)
   function stopCountdownTick() {
     var el = document.getElementById('__xbot_confirm_overlay');
-    if (el && el._tickId) { clearInterval(el._tickId); el._tickId = null; }
+    if (el && el._tickId)      { clearInterval(el._tickId);      el._tickId      = null; }
+    if (el && el._titleTickId) { clearInterval(el._titleTickId); el._titleTickId = null; }
   }
 
   /* ─── Place page handler ─────────────────────────────────────────────────── */
@@ -528,6 +542,9 @@
 
     // Consume immediately so other tabs cannot steal it
     localStorage.removeItem(LS_ACTIVE);
+    // Persist the xbot_sender flag so the confirm page (which won't have xbot_sender=1 in URL)
+    // can also suppress competing scripts (mano_de_deus, Kumin, etc.).
+    try { sessionStorage.setItem('xbot_sender_tab', '1'); } catch(e) {}
 
     var gd = window.game_data;
     if (gd && cmd.srcVillageId && gd.village && String(gd.village.id) !== String(cmd.srcVillageId)) {
@@ -727,10 +744,12 @@
             }
           } else {
             var _deltaStr = (_clickDeltaMs >= 0 ? '+' : '') + _clickDeltaMs.toFixed(0) + 'ms';
-            showStatus('AutoSender: enviado! (' + _deltaStr + ')' + (_settings.autoClose ? ' A fechar...' : ''), '#15803d');
             if (_settings.autoClose !== false) {
-              setTimeout(function() { try { window.close(); } catch (e) {} }, 1800);
+              // Set flag BEFORE navigation so the landing page can close the tab.
+              // A setTimeout-based close is cancelled when TW navigates away from this page.
+              try { sessionStorage.setItem('xbot_autoclose', '1'); } catch(e) {}
             }
+            showStatus('AutoSender: enviado! (' + _deltaStr + ')' + (_settings.autoClose !== false ? ' A fechar...' : ''), '#15803d');
           }
         } else {
           hideConfirmCountdown();
@@ -786,7 +805,7 @@
         for (var j = 0; j < q2.length; j++) { if (q2[j].id === e.id) { q2[j].status = 'launching'; writeQueue(q2); break; } }
         emitNeeded = true;
 
-        var url = location.origin + '/game.php?village=' + e.srcVillageId + '&screen=place';
+        var url = location.origin + '/game.php?village=' + e.srcVillageId + '&screen=place&xbot_sender=1';
         if (e.tgtVillageId) url += '&target=' + e.tgtVillageId;
         window.open(url, '_blank');
         break; // one at a time
@@ -807,6 +826,47 @@
       if (++tries > 40) { clearInterval(poll); return; }
       if (window.$ && window.game_data) { clearInterval(poll); cb(); }
     }, 200);
+  }
+
+  // On AutoSender tabs: synchronously rename the confirm button before Kumin's async-loaded
+  // script can execute. Kumin looks for #troop_confirm_submit by ID — removing the ID
+  // prevents it from finding or clicking the button. AutoSender finds the button via
+  // value matching (existing fallback) and still clicks it precisely.
+  // This runs synchronously in the same JS tick as Kumin's $.ajax call, guaranteeing it
+  // completes before any network response can fire Kumin's script.
+  (function() {
+    var _isSenderTab = false;
+    try { _isSenderTab = sessionStorage.getItem('xbot_sender_tab') === '1'; } catch(e) {}
+    if (_isSenderTab) {
+      try {
+        var _btn = document.getElementById('troop_confirm_submit');
+        if (_btn) _btn.removeAttribute('id');
+        // Also keep history.replaceState for any URL-checking logic in Kumin
+        if (location.search.indexOf('xbot_sender=1') === -1) {
+          history.replaceState(null, '', location.href + '&xbot_sender=1');
+        }
+      } catch(e) {}
+    }
+  })();
+
+  // Close-after-send: if the confirm click set this flag, close on whatever page TW landed on
+  var _shouldAutoClose = false;
+  try { _shouldAutoClose = sessionStorage.getItem('xbot_autoclose') === '1'; } catch(e) {}
+  if (_shouldAutoClose) {
+    try { sessionStorage.removeItem('xbot_autoclose'); } catch(e) {}
+    var _closeIn = 3;
+    document.title = '✓ Enviado · A fechar em ' + _closeIn + 's';
+    var _closeTick = setInterval(function() {
+      _closeIn--;
+      if (_closeIn <= 0) {
+        clearInterval(_closeTick);
+        document.title = '✓ A fechar…';
+        try { window.close(); } catch(e) {}
+      } else {
+        document.title = '✓ Enviado · A fechar em ' + _closeIn + 's';
+      }
+    }, 1000);
+    return; // skip watcher / place / confirm logic on this tab
   }
 
   initWorkerTimers();

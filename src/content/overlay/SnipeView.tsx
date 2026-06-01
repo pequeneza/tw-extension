@@ -10,8 +10,9 @@
  */
 
 import React, {
-  useCallback, useEffect, useRef, useState,
+  useCallback, useEffect, useMemo, useRef, useState,
 } from "react";
+import { computeScheduledByVillage, subtractScheduled } from "./queue-utils";
 
 /* ─── Constants ───────────────────────────────────────────────────────────── */
 const STORAGE_KEY_PLAN   = "tw_gap_snipe_plan_v12";
@@ -1285,6 +1286,16 @@ export function SnipeView({ visible, onBack }: {
 
   const queuedSources = new Set(snipeQueue.map((e) => e.source));
 
+  const scheduledMap = useMemo(() => computeScheduledByVillage(), [snipeQueue, troops]);
+
+  const effectiveTroops = useMemo(
+    () => troops.map((v) => ({
+      ...v,
+      troops: subtractScheduled(v.troops, scheduledMap.get(`${v.coord.x}|${v.coord.y}`) ?? {}),
+    })),
+    [troops, scheduledMap],
+  );
+
   const coordKey = (c: Coord) => `${c.x}|${c.y}`;
 
   const target: Coord | null = (() => {
@@ -1305,7 +1316,7 @@ export function SnipeView({ visible, onBack }: {
   const sigilRatio  = 1 + sigil / 100;
   const speedFactor = 1 / (gameSpeed * unitSpeed * sigilRatio);
   const candidates  = target && filteredIncomings.length >= 2
-    ? computeCandidates(filteredIncomings, gapIdx, troops, target, speedFactor)
+    ? computeCandidates(filteredIncomings, gapIdx, effectiveTroops, target, speedFactor)
     : [];
 
   const gapA     = filteredIncomings[gapIdx];
@@ -1538,7 +1549,7 @@ export function SnipeView({ visible, onBack }: {
         {/* ── MANUAL TAB ── */}
         {tab === "manual" && (
           <ManualTab
-            troops={troops}
+            troops={effectiveTroops}
             loadingTroops={loadingTroops}
             onLoadTroops={loadTroops}
             speedFactor={speedFactor}
@@ -1554,7 +1565,7 @@ export function SnipeView({ visible, onBack }: {
             speedFactor={speedFactor}
             srcVillageId={currentVillageId}
             srcCoord={srcCoord}
-            troops={troops}
+            troops={effectiveTroops}
             loadingTroops={loadingTroops}
             onLoadTroops={loadTroops}
           />

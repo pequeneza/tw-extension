@@ -105,7 +105,8 @@
       cls.includes("botcheck") ||
       cls.includes("bot-check") ||
       cls.includes("bot-protection-row") ||
-      title === "Proteção contra Bots"
+      title === "Proteção contra Bots" ||
+      (cls.includes("quest_new") && !!(el.closest?.("#botprotection_quest") || el.closest?.("[data-title='Proteção contra Bots']")))
     );
   }
 
@@ -117,7 +118,8 @@
       document.querySelector(".botcheck") ||
       document.querySelector(".bot-check") ||
       document.querySelector(".bot-protection-row") ||
-      document.querySelector("[data-title='Proteção contra Bots']")
+      document.querySelector("[data-title='Proteção contra Bots']") ||
+      document.querySelector("#botprotection_quest .quest_new")
     );
   }
 
@@ -138,7 +140,7 @@
         if (isCaptchaElement(node)) { onCaptchaDetected(); return; }
         if (node.nodeType === 1) {
           const inner = node.querySelector
-            ? node.querySelector("#bot_check, #botcheck_content, #botprotection_quest, .botcheck, .bot-check, .bot-protection-row, [data-title='Proteção contra Bots']")
+            ? node.querySelector("#bot_check, #botcheck_content, #botprotection_quest, .botcheck, .bot-check, .bot-protection-row, [data-title='Proteção contra Bots'], #botprotection_quest .quest_new")
             : null;
           if (inner) { onCaptchaDetected(); return; }
         }

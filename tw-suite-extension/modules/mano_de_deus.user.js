@@ -9,6 +9,8 @@
 
 (function () {
   'use strict';
+  if (new URLSearchParams(window.location.search).get('xbot_sender') === '1' ||
+      sessionStorage.getItem('xbot_sender_tab') === '1') return;
 
   // ---------------- storage keys ----------------
   const LS_FINE_OFFSET   = 'CS.offsetFineMs';        // user calibration (+/- ms)

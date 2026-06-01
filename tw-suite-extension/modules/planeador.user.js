@@ -555,13 +555,38 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
         return Object.keys(sel).length ? sel : null;
     }
 
+    function computeScheduledByVillage() {
+        const m = new Map();
+        const terminal = new Set(['sent', 'failed']);
+        function add(coord, units) {
+            const ex = m.get(coord) || {};
+            for (const [u, n] of Object.entries(units)) ex[u] = (ex[u] || 0) + n;
+            m.set(coord, ex);
+        }
+        try {
+            for (const e of JSON.parse(localStorage.getItem('xbot_autosender_queue') || '[]'))
+                if (e.src && e.units && !terminal.has(e.status || '')) add(e.src, e.units);
+        } catch {}
+        for (const [key, field] of [['tw_snipe_queue_v1', 'source'], ['twKuminGluer_queue', 'source']]) {
+            try {
+                for (const e of JSON.parse(localStorage.getItem(key) || '[]'))
+                    if (e[field] && e.units) add(e[field], e.units);
+            } catch {}
+        }
+        return m;
+    }
+
     function renderTable(villages, usedUnits, targetX, targetY, targetVillageId, arrivalMs, cfg, selUnits, sigilPct) {
-        const active = selUnits && selUnits.size ? selUnits : new Set(UNIT_ORDER);
-        const now    = serverNowMs();
+        const active       = selUnits && selUnits.size ? selUnits : new Set(UNIT_ORDER);
+        const now          = serverNowMs();
+        const scheduledMap = computeScheduledByVillage();
 
         /* For each village: compute travel using selected units; skip if no selected troops or departure already past */
         const rows = [];
         for (const r of villages) {
+            const scheduled = scheduledMap.get(`${r.x}|${r.y}`) || {};
+            const netTroops = {};
+            for (const [u, n] of Object.entries(r.troops)) netTroops[u] = Math.max(0, n - (scheduled[u] || 0));
             const sel = activeTroops(r.troops, active);
             if (!sel) continue;                                       // no selected units in this village
             const d       = dist(r.x, r.y, targetX, targetY);
@@ -573,7 +598,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
                 : baseMs;
             const depMs  = arrivalMs - trvMs;
             if (depMs < now) continue;                                // departure already past — skip
-            rows.push({ r, d, depMs });
+            rows.push({ r, d, depMs, netTroops });
         }
 
         /* Sort earliest-departure first */
@@ -589,14 +614,14 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
             return `<th class="sim-unit-th ${on ? 'sim-u-on' : 'sim-u-off'}" data-unit="${u}" title="${UNIT_LABEL[u] || u} — clica para ${on ? 'desactivar' : 'activar'}">${unitIconHtml(u)}</th>`;
         }).join('');
 
-        const trs = rows.map(({ r, depMs }, i) => {
+        const trs = rows.map(({ r, depMs, netTroops }, i) => {
             const depFmt  = fmtDatetime(depMs);
             const remSec  = Math.max(0, Math.floor((depMs - Date.now()) / 1000));
             const remFmt  = fmtDuration(remSec);
             const urgent  = remSec < 300; // < 5 min
 
             const unitCells = usedUnits.map(u => {
-                const count = r.troops[u] || 0;
+                const count = netTroops[u] || 0;
                 const on    = active.has(u);
                 if (!count) return `<td class="sim-zero">0</td>`;
                 if (!on)    return `<td>${count}</td>`;
@@ -605,7 +630,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
 
             /* Only send the green (active) units — non-selected units would change travel speed */
             const troopsForUrl = {};
-            for (const [u, c] of Object.entries(r.troops)) if (c > 0 && active.has(u)) troopsForUrl[u] = c;
+            for (const [u, c] of Object.entries(netTroops)) if (c > 0 && active.has(u)) troopsForUrl[u] = c;
             const url = buildAttackUrl(r.villageId, targetX, targetY, troopsForUrl, targetVillageId);
 
             /* Kumin entry: use arrival time + leave select at default "arrival", matching kumin_gluer behaviour */

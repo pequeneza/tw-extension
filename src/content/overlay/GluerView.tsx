@@ -12,6 +12,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { computeScheduledByVillage } from "./queue-utils";
 
 /* ─── Constants ───────────────────────────────────────────────────────────── */
 const QUEUE_KEY    = "twKuminGluer_queue";
@@ -118,6 +119,8 @@ interface QueueEntry {
   arrivalMs: number;
   /** Village ID of the source — needed when sending to Auto Sender */
   srcVillageId?: string | null;
+  /** Village ID of the target — used for info_village link */
+  tgtVillageId?: string | null;
   /** Sigil reduction % (1–100). Undefined means no sigil — leave Kumin's field unchanged. */
   sigilPct?: number;
 }
@@ -332,9 +335,10 @@ function useCountdown(sendMs: number, active: boolean) {
 }
 
 /* ─── GluerCandidateCard ──────────────────────────────────────────────────── */
-function GluerCandidateCard({ cand, target, arrivalMs, commandType, onQueue, queued, enabledUnits, committed, sigilPct }: {
+function GluerCandidateCard({ cand, target, tgtVillageId, arrivalMs, commandType, onQueue, queued, enabledUnits, committed, sigilPct }: {
   cand: GluerCandidate;
   target: Coord;
+  tgtVillageId: string | null;
   arrivalMs: number;
   commandType: "Attack" | "Support";
   onQueue: (entry: Omit<QueueEntry, "id">) => void;
@@ -402,6 +406,7 @@ function GluerCandidateCard({ cand, target, arrivalMs, commandType, onQueue, que
       sendMs: effectiveSendMs,
       arrivalMs,
       srcVillageId: cand.src.villageId,
+      tgtVillageId,
       sigilPct: sigilPct > 0 ? sigilPct : undefined,
     });
     // Reset card after queuing
@@ -549,18 +554,8 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
   const candidates  = effectiveAttack ? computeCandidates(effectiveAttack, troops, speedFactor, enabledUnits) : [];
   const target: Coord | null = attack ? { x: attack.targetX, y: attack.targetY } : null;
 
-  // Per-village committed amounts (derived from queue)
-  const committed = useMemo(() => {
-    const m = new Map<string, Record<string, number>>();
-    for (const entry of queue) {
-      const existing = m.get(entry.source) ?? {};
-      for (const [unit, amt] of Object.entries(entry.units)) {
-        existing[unit] = (existing[unit] ?? 0) + (amt as number);
-      }
-      m.set(entry.source, { ...existing });
-    }
-    return m;
-  }, [queue]);
+  // Per-village committed amounts — aggregated across all three scheduling queues
+  const committed = useMemo(() => computeScheduledByVillage(), [queue]);
 
   // Identify queued entries by source coords
   const queuedSources = new Set(queue.map(q => q.source));
@@ -628,7 +623,7 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
         src: e.source,
         tgt: e.target,
         srcVillageId: e.srcVillageId ?? null,
-        tgtVillageId: null,
+        tgtVillageId: e.tgtVillageId ?? null,
         type: e.commandType.toLowerCase() as "attack" | "support",
         launch: e.sendMs,
         arrival: e.arrivalMs,
@@ -904,6 +899,7 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
                     key={key}
                     cand={cand}
                     target={target}
+                    tgtVillageId={attack?.villageId ?? null}
                     arrivalMs={effectiveArrivalMs}
                     commandType={commandType}
                     onQueue={addToQueue}
@@ -944,7 +940,16 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
                       <img src={unitIconUrl(e.slowestUnit)} alt={e.slowestUnit} className="gluer-unit-icon" />
                       <span className="gluer-queue-src">{e.source}</span>
                       <span style={{ color: "var(--n300)", fontSize: 11 }}>→</span>
-                      <span className="gluer-queue-tgt">{e.target}</span>
+                      {e.tgtVillageId && e.srcVillageId ? (
+                        <a
+                          className="gluer-queue-tgt"
+                          href={`${location.origin}/game.php?village=${e.srcVillageId}&screen=info_village&id=${e.tgtVillageId}`}
+                          target="_blank" rel="noopener noreferrer"
+                          style={{ color: "var(--b500)", textDecoration: "underline" }}
+                        >{e.target}</a>
+                      ) : (
+                        <span className="gluer-queue-tgt">{e.target}</span>
+                      )}
                       <button
                         className="btn btn-ghost"
                         style={{ marginLeft: "auto", flex: "none", padding: "1px 6px", fontSize: 11, color: "var(--r500)" }}

@@ -293,6 +293,11 @@ function saveManualState(s: ManualState) {
 }
 
 /* ─── DOM readers ─────────────────────────────────────────────────────────── */
+function sitterPrefix(): string {
+  const t = new URLSearchParams(window.location.search).get("t");
+  return t ? `t=${t}&` : "";
+}
+
 function readCurrentVillageId(): string | null {
   const el = document.querySelector<HTMLElement>("#commands_incomings");
   const dv = el?.getAttribute("data-village");
@@ -327,7 +332,7 @@ function getRowTargetCoord(tr: HTMLElement): Coord | null {
 }
 
 async function fetchCoordFromInfoCommand(commandId: string, villageId: string): Promise<Coord | null> {
-  const url = `${location.origin}/game.php?village=${villageId}&screen=info_command&id=${commandId}&type=other`;
+  const url = `${location.origin}/game.php?${sitterPrefix()}village=${villageId}&screen=info_command&id=${commandId}&type=other`;
   const html = await fetch(url, { credentials: "include" }).then((r) => r.text());
   const doc = new DOMParser().parseFromString(html, "text/html");
   let coord: Coord | null = null;
@@ -359,11 +364,7 @@ async function readIncomingsFromDOM(): Promise<Incoming[]> {
   const list: Incoming[] = [];
 
   for (const tr of rows) {
-    const cmdType = (
-      tr.getAttribute("data-command-type") ??
-      tr.querySelector("[data-command-type]")?.getAttribute("data-command-type") ?? ""
-    ).toLowerCase();
-    if (cmdType === "support") continue;
+    if (!tr.querySelector('img[src*="attack"]')) continue;
 
     const label = getRowLabel(tr);
 
@@ -398,7 +399,7 @@ async function readIncomingsFromDOM(): Promise<Incoming[]> {
 }
 
 async function fetchOwnHomeTroops(villageId: string): Promise<VillageTroops[]> {
-  const url = `${location.origin}/game.php?village=${encodeURIComponent(villageId)}&screen=overview_villages&mode=units&type=own_home`;
+  const url = `${location.origin}/game.php?${sitterPrefix()}village=${encodeURIComponent(villageId)}&screen=overview_villages&mode=units&type=own_home`;
   const html = await fetch(url, { credentials: "include" }).then((r) => r.text());
   const doc  = new DOMParser().parseFromString(html, "text/html");
 
@@ -567,10 +568,16 @@ function RecallTab({
                       : srcCoord ? v.coord.x === srcCoord.x && v.coord.y === srcCoord.y : false
   ) ?? null;
 
-  // Closest own village (excluding source) as destination
+  // Closest own village (excluding source) as destination.
+  // Exclude by both ID and coord: if villageId is null (parse failed on overview link),
+  // the ID check alone would not exclude it and distance-0 source would win the sort.
   const dstVillage = srcCoord
     ? [...troops]
-        .filter(v => v.villageId !== srcVillageId)
+        .filter(v => {
+          if (srcVillageId && v.villageId === srcVillageId) return false;
+          if (v.coord.x === srcCoord.x && v.coord.y === srcCoord.y) return false;
+          return true;
+        })
         .sort((a, b) => euclidean(a.coord, srcCoord) - euclidean(b.coord, srcCoord))[0] ?? null
     : null;
   const dstCoord = dstVillage?.coord ?? null;
@@ -630,6 +637,7 @@ function RecallTab({
     const cancelAtSec = new Date(launch + cancelAfterMs);
     const cancelLabel = `${pad2(cancelAtSec.getHours())}:${pad2(cancelAtSec.getMinutes())}:${pad2(cancelAtSec.getSeconds())}`;
 
+    const sitterT = new URLSearchParams(window.location.search).get("t") || null;
     const entry = {
       src:           `${srcCoord.x}|${srcCoord.y}`,
       tgt:           `${dstCoord.x}|${dstCoord.y}`,
@@ -642,6 +650,7 @@ function RecallTab({
       cancelAfterMs,
       gapAfterMs:    c.gapAfterMs,
       gapBeforeMs:   c.gapBeforeMs,
+      sitterT,
     };
     document.dispatchEvent(new CustomEvent("xbot:autosender:run", { detail: { action: "addToQueue", entry } }));
     setQueued(s => new Set([...s, c.gapIdx]));
@@ -842,7 +851,7 @@ function CandidateCard({ candidate, target, midGapArrivalMs, gapLabel, onQueue, 
       target, unitsToSend: units, midGapArrivalMs,
     }));
     window.open(
-      `${location.origin}/game.php?village=${encodeURIComponent(candidate.src.villageId!)}&screen=place`,
+      `${location.origin}/game.php?${sitterPrefix()}village=${encodeURIComponent(candidate.src.villageId!)}&screen=place`,
       "_blank", "noopener,noreferrer"
     );
   }, [candidate, amounts, target, midGapArrivalMs]);
@@ -1251,7 +1260,7 @@ export function SnipeView({ visible, onBack }: {
       midGapArrivalMs: entry.midGapArrivalMs,
     }));
     window.open(
-      `${location.origin}/game.php?village=${encodeURIComponent(entry.sourceVillageId)}&screen=place`,
+      `${location.origin}/game.php?${sitterPrefix()}village=${encodeURIComponent(entry.sourceVillageId)}&screen=place`,
       "_blank", "noopener,noreferrer"
     );
   }
@@ -1277,8 +1286,8 @@ export function SnipeView({ visible, onBack }: {
     localStorage.setItem("twKuminGluer_queue", JSON.stringify(kuminEntries));
     const vid = readCurrentVillageId();
     const url = vid
-      ? `${location.origin}/game.php?village=${vid}&screen=memo`
-      : `${location.origin}/game.php?screen=memo`;
+      ? `${location.origin}/game.php?${sitterPrefix()}village=${vid}&screen=memo`
+      : `${location.origin}/game.php?${sitterPrefix()}screen=memo`;
     window.open(url, "_blank", "noopener,noreferrer");
     setSnipeQueue([]);
     saveSnipeQueue([]);

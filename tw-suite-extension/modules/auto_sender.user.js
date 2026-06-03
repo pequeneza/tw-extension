@@ -163,6 +163,10 @@
     return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds()) + '.' + pad3(d.getMilliseconds());
   }
   function genId() { return 'as_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8); }
+  function _sitterPrefix() {
+    var t = new URLSearchParams(location.search).get('t');
+    return t ? 't=' + t + '&' : '';
+  }
 
   /* ─── Queue helpers ──────────────────────────────────────────────────────── */
   function readQueue()   { try { return JSON.parse(localStorage.getItem(LS_QUEUE) || '[]'); } catch (e) { return []; } }
@@ -547,7 +551,9 @@
     try { sessionStorage.setItem('xbot_sender_tab', '1'); } catch(e) {}
 
     var gd = window.game_data;
-    if (gd && cmd.srcVillageId && gd.village && String(gd.village.id) !== String(cmd.srcVillageId)) {
+    var _pageVillageId = new URLSearchParams(location.search).get('village')
+      || (gd && gd.village && String(gd.village.id));
+    if (_pageVillageId && cmd.srcVillageId && String(_pageVillageId) !== String(cmd.srcVillageId)) {
       showStatus('AutoSender: erro — aldeia errada!', '#b91c1c');
       updateStatus(cmd.id, 'failed');
       return;
@@ -805,7 +811,8 @@
         for (var j = 0; j < q2.length; j++) { if (q2[j].id === e.id) { q2[j].status = 'launching'; writeQueue(q2); break; } }
         emitNeeded = true;
 
-        var url = location.origin + '/game.php?village=' + e.srcVillageId + '&screen=place&xbot_sender=1';
+        var sitterPfx = e.sitterT ? 't=' + e.sitterT + '&' : _sitterPrefix();
+        var url = location.origin + '/game.php?' + sitterPfx + 'village=' + e.srcVillageId + '&screen=place&xbot_sender=1';
         if (e.tgtVillageId) url += '&target=' + e.tgtVillageId;
         window.open(url, '_blank');
         break; // one at a time

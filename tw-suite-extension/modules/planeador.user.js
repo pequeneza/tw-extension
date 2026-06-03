@@ -120,7 +120,9 @@
 
     function buildAttackUrl(villageId, tx, ty, troops, targetVillageId) {
         const server = getServerId();
+        const t = new URLSearchParams(window.location.search).get('t');
         const p = new URLSearchParams({ village: villageId, screen: 'place', x: tx, y: ty, from: 'simulator' });
+        if (t) p.set('t', t);
         for (const [unit, count] of Object.entries(troops)) {
             if (count > 0) p.set(`att_${unit}`, count);
         }
@@ -641,11 +643,13 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
             const kuminEntry = { name: r.name, source: `${r.x}|${r.y}`, target: `${targetX}|${targetY}`, date: kuminDate, commandType: _cmdType, units: troopsForUrl, sendMs: depMs, sigilPct: sigilPct || 0 };
 
             /* AutoSender entry */
+            const _sitterT = new URLSearchParams(window.location.search).get('t') || null;
             const autosendEntry = { src: `${r.x}|${r.y}`, tgt: `${targetX}|${targetY}`,
                                     srcVillageId: r.villageId, tgtVillageId: targetVillageId || null,
                                     type: _cmdType.toLowerCase(),
                                     launch: depMs, arrival: arrivalMs, units: troopsForUrl, note: r.name,
-                                    sigilPct: sigilPct || 0 };
+                                    sigilPct: sigilPct || 0,
+                                    sitterT: _sitterT };
 
             return `<tr data-vid="${r.villageId}">
   <td class="sim-village-cell" title="${r.name}">${i + 1}. ${r.name}</td>

@@ -830,11 +830,7 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
       if (!wrap) { setGapCount(0); return; }
       let attacks = 0;
       wrap.querySelectorAll<HTMLElement>("tr.command-row").forEach((tr) => {
-        const t = (
-          tr.getAttribute("data-command-type") ??
-          tr.querySelector("[data-command-type]")?.getAttribute("data-command-type") ?? ""
-        ).toLowerCase();
-        if (t !== "support") attacks++;
+        if (tr.querySelector('img[src*="attack"]')) attacks++;
       });
       setGapCount(Math.max(0, attacks - 1));
     };

@@ -29,6 +29,7 @@
     const tryParam  = params.get('try');
     const village   = params.get('village');
     const desvCmdId = params.get('__desv');
+    const tParam    = params.get('t');
 
     const isIncomings = screenId === 'overview_villages' &&
                         mode     === 'incomings'          &&
@@ -37,6 +38,10 @@
     const isConfirm = screenId === 'place' && tryParam === 'confirm';
 
     /* ── helpers ─────────────────────────────────────────────────────────────*/
+
+    function sitterPrefix() {
+        return tParam ? `t=${tParam}&` : '';
+    }
 
     function whenReady(cb) {
         let tries = 0;
@@ -95,7 +100,7 @@
         toRecover.forEach((d, i) => {
             setTimeout(() => {
                 setPending({ phase: 'send', village: d.village, cancelMs: d.cancelMs, cmdId: d.cmdId });
-                window.open(`/game.php?village=${d.village}&screen=place&__desv=${d.cmdId}`, '_blank');
+                window.open(`/game.php?${sitterPrefix()}village=${d.village}&screen=place&__desv=${d.cmdId}`, '_blank');
             }, i * RECOVERY_STAGGER_MS);
         });
     }
@@ -365,7 +370,7 @@
                         if (detail) detail.fired = true;
                         localStorage.removeItem(SCHED_PREFIX + cmdId);
                         setPending({ phase: 'send', village: destVillage, cancelMs, cmdId });
-                        window.open(`/game.php?village=${destVillage}&screen=place&__desv=${cmdId}`, '_blank');
+                        window.open(`/game.php?${sitterPrefix()}village=${destVillage}&screen=place&__desv=${cmdId}`, '_blank');
                         return;
                     }
 
@@ -384,7 +389,7 @@
                         localStorage.removeItem(SCHED_PREFIX + cmdId);
                         if (td1) td1.style.outline = '2px solid #d97706';
                         setPending({ phase: 'send', village: destVillage, cancelMs, cmdId });
-                        window.open(`/game.php?village=${destVillage}&screen=place&__desv=${cmdId}`, '_blank');
+                        window.open(`/game.php?${sitterPrefix()}village=${destVillage}&screen=place&__desv=${cmdId}`, '_blank');
                         dispatchState();
                     }, delay));
 
@@ -588,7 +593,7 @@
                 var csrf = (typeof game_data !== 'undefined' && game_data.csrf) ? game_data.csrf : null;
                 if (!csrf || typeof $ === 'undefined') return;
                 _renamed = true;
-                $.post('/game.php?village=' + p.village + '&screen=place&ajax=label_unit', {
+                $.post('/game.php?' + sitterPrefix() + 'village=' + p.village + '&screen=place&ajax=label_unit', {
                     id:   cmdId,
                     name: p.note,
                     h:    csrf,

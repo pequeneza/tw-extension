@@ -80,7 +80,8 @@ const USERSCRIPT_MAP: Record<string, string> = {
   [`${MODULES_DIR}/tw_utils.user.js`]:              "tw_utils.user.js",
 };
 
-const BRIDGE_SRC = "src/modules/tw-suite-config-bridge.js";
+const BRIDGE_SRC  = "src/modules/tw-suite-config-bridge.js";
+const AS_MSGS_SRC = `${MODULES_DIR}/autosender_messages.json`;
 const ICON_SIZES = [16, 48, 128] as const;
 const ICON_GOLD: [number, number, number] = [200, 144, 42];
 
@@ -117,15 +118,19 @@ function extensionAssetsPlugin() {
         copyFileSync(BRIDGE_SRC, "dist/modules/tw-suite-config-bridge.js");
 
       const bridge = existsSync(BRIDGE_SRC) ? readFileSync(BRIDGE_SRC, "utf8") : "";
+      const asMsgs = existsSync(AS_MSGS_SRC)
+        ? `var __xbot_msgs = ${readFileSync(AS_MSGS_SRC, "utf8").trim()};\n`
+        : "";
       for (const [srcFile, dstFile] of Object.entries(USERSCRIPT_MAP)) {
         if (!existsSync(srcFile)) {
           console.warn(`[tw-ext] Missing: ${srcFile}`);
           continue;
         }
         const original = readFileSync(srcFile, "utf8");
+        const extras   = dstFile === "auto_sender.user.js" ? asMsgs : "";
         const combined = bridge
-          ? `${bridge}\n\n/* ─── ${dstFile} ─── */\n\n${original}`
-          : original;
+          ? `${bridge}\n\n${extras}/* ─── ${dstFile} ─── */\n\n${original}`
+          : extras + original;
         writeFileSync(join("dist/modules", dstFile), combined, "utf8");
       }
 

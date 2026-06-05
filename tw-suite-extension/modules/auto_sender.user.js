@@ -24,6 +24,17 @@
   var FILL_TIMEOUT_MS = 6000; // max wait for unit_input_* to appear after coord input triggers AJAX re-render
   var UNIT_IDS       = ['spear','sword','axe','archer','spy','light','marcher','heavy','ram','catapult','snob','knight'];
 
+  // noblesQnt values taken directly from Kumin's ntTemplates object.
+  var NT_COUNT = {
+    noNT: 1,
+    twoNoblesSame: 2, threeNoblesSame: 3, fourNoblesSame: 4, fiveNoblesSame: 5,
+    secondNobleWithRest: 2, thirdNobleWithRest: 3, fourNobleWithRest: 4, fiveNobleWithRest: 5,
+    splitSecondThirdNobleNT: 4, secondNobleBuffNT: 4, thirdNobleBuffNT: 4,
+    secondNobleBuffWith5NoblesNT: 5, secondNobleBuffWith2NoblesNT: 2,
+    firstNobleRedNT: 4, secondNobleRedNT: 4, thirdNobleRedNT: 4, fourthNobleRedNT: 4,
+    firstNobleRed5NT: 5, secondNobleRed5NT: 5, thirdNobleRed5NT: 5,
+  };
+
   /* ─── Settings (live-reloadable) ─────────────────────────────────────────── */
   var SETTING_DEFAULTS = {
     lookahead: 40,
@@ -254,6 +265,36 @@
       loadSettings();
       emitState();
     }
+    else if (d.action === 'updateEntry' && d.id && d.patch) {
+      var q4 = readQueue();
+      for (var m = 0; m < q4.length; m++) {
+        if (q4[m].id === d.id) {
+          var p = d.patch;
+          if (p.type     != null) q4[m].type     = p.type;
+          if (p.note     != null) q4[m].note     = p.note;
+          if (p.arrival  != null) q4[m].arrival  = p.arrival;
+          if (p.launch   != null) q4[m].launch   = p.launch;
+          if (p.travelMs != null) q4[m].travelMs = p.travelMs;
+          if (p.sigilPct    != null) q4[m].sigilPct    = p.sigilPct;
+          if (p.ntTemplate  != null) q4[m].ntTemplate  = p.ntTemplate;
+          if (p.units    != null) q4[m].units    = p.units;
+          writeQueue(q4);
+          break;
+        }
+      }
+      emitState();
+    }
+    else if (d.action === 'sendNow' && d.id) {
+      var q3 = readQueue();
+      for (var k = 0; k < q3.length; k++) {
+        if (q3[k].id === d.id && q3[k].status === 'pending') {
+          q3[k].launch = getEffectiveServerNowMs() + (_settings._openTabDelaySec * 1000);
+          writeQueue(q3);
+          break;
+        }
+      }
+      emitState();
+    }
   });
 
   /* ─── Status overlay ─────────────────────────────────────────────────────── */
@@ -286,13 +327,14 @@
     function finePhase() {
       if (stopped) return;
       try { if (onFinePhase) onFinePhase(); } catch (e) {}
-      try { if (window.Timing && window.Timing.resetTickHandlers) window.Timing.resetTickHandlers(); } catch (e) {}
       // Kumin: pingOffset resolved at fine-phase entry, same timing as getAveragePing() call
       var offset = (getOffsetFn ? getOffsetFn() : 0);
       // Kumin exact: remaining = launchTime + pingOffset - (Timing.getCurrentServerTime() - serverDateDiff)
+      // resetTickHandlers moved to AFTER remaining is captured so server time is still live
       var remaining = targetServerMs + offset - getEffectiveServerNowMs();
       dbg('finePhase: target=%s  now=%s  offset=%s  remaining=%s ms',
           targetServerMs, getEffectiveServerNowMs(), offset, remaining.toFixed(1));
+      try { if (window.Timing && window.Timing.resetTickHandlers) window.Timing.resetTickHandlers(); } catch (e) {}
       // Kumin exact busy-wait: performance.now() - perfStart < remaining
       var perfStart = performance.now();
       while (!stopped && performance.now() - perfStart < remaining) {}
@@ -401,6 +443,8 @@
     }
   }
 
+  /* ─── Conquest messages ─────────────────────────────────────────────────── */
+
   /* ─── Confirm countdown overlay ─────────────────────────────────────────── */
   function fmtCd(diff) {
     var sign = diff < 0 ? '-' : '';
@@ -427,6 +471,11 @@
   }
 
   function showConfirmCountdown(cmd, launchMs) {
+    // Pick message once per attack — never re-randomized during the countdown.
+    var _msgs  = (typeof __xbot_msgs !== 'undefined' ? __xbot_msgs : {});
+    var _pool  = ((cmd.type || '').toLowerCase() === 'support' ? _msgs.support : _msgs.attack) || [];
+    var conquestMsg = _pool.length ? _pool[Math.floor(Math.random() * _pool.length)] : '';
+
     // Full-screen blur backdrop
     var backdrop = document.getElementById('__xbot_backdrop');
     if (!backdrop) {
@@ -456,53 +505,68 @@
       document.body.appendChild(el);
     }
 
-    var unitHtml = buildUnitIcons(cmd.units);
+    // Static parts written once — avoids re-rendering on every 50ms tick.
+    // Show full NT train count if template is set (e.g. twoNoblesSame → snob: 2)
+    var _displayUnits = cmd.units;
+    var _ntTotal = (cmd.ntTemplate && cmd.ntTemplate !== 'noNT') ? (NT_COUNT[cmd.ntTemplate] || 1) : 0;
+    if (_ntTotal > 1) _displayUnits = Object.assign({}, cmd.units, { snob: _ntTotal });
+    var unitHtml = buildUnitIcons(_displayUnits);
+    el.innerHTML = [
+      /* header */
+      '<div style="font-size:10px;color:#5a6a7a;letter-spacing:0.12em;margin-bottom:10px;">⚡ XBOT AUTO SENDER</div>',
 
+      /* src → tgt */
+      '<div style="font-size:14px;color:#b8a882;margin-bottom:10px;">',
+        '<span style="color:#8a9aaa">' + (cmd.src || '') + '</span>',
+        '&nbsp;<span style="color:#4a5a6a">→</span>&nbsp;',
+        '<span style="color:#d4c8a8">' + (cmd.tgt || '') + '</span>',
+      '</div>',
+
+      /* unit icons */
+      unitHtml
+        ? '<div style="margin-bottom:10px;min-height:26px;">' + unitHtml + '</div>'
+        : '',
+
+      /* conquest message — chosen once, shown below troops */
+      conquestMsg
+        ? '<div style="margin-bottom:14px;padding:8px 0;' +
+            'border-top:1px solid rgba(180,130,40,0.18);border-bottom:1px solid rgba(180,130,40,0.18);' +
+            'font-size:11px;color:#7a6a4a;font-style:italic;letter-spacing:0.015em;line-height:1.45;">' +
+            '&#9876;&nbsp;' + conquestMsg + '</div>'
+        : '',
+
+      /* countdown label */
+      '<div style="font-size:10px;color:#4a5a6a;letter-spacing:0.06em;margin-bottom:4px;">PARTIDA EM</div>',
+
+      /* countdown span — only textContent/color updated by render() */
+      '<div style="width:100%;text-align:center;margin-bottom:6px;">',
+        '<span id="__xbot_cd_span" style="',
+          'display:inline-block;width:280px;',
+          'font-size:38px;font-weight:700;font-family:"Courier New",monospace;',
+          'font-variant-numeric:tabular-nums;letter-spacing:0.02em;',
+          'color:#d4a84b;line-height:1.1;">…</span>',
+      '</div>',
+
+      /* timestamp + note */
+      '<div style="font-size:10px;color:#3a4a5a;margin-top:8px;">',
+        fmtTime(launchMs),
+        (cmd.note ? '&nbsp;·&nbsp;<span style="color:#5a6a4a">' + cmd.note + '</span>' : ''),
+      '</div>',
+    ].join('');
+
+    var cdSpan = el.querySelector('#__xbot_cd_span');
+
+    // render() only updates the countdown number — static parts above are untouched.
     function render() {
+      if (!cdSpan) return;
       var diff  = launchMs - getEffectiveServerNowMs();
-      // color: gold > 60s, amber 10-60s, red < 10s
-      var color = diff > 60000 ? '#d4a84b' : diff > 10000 ? '#e07b28' : '#cc3333';
-      var glow  = diff > 60000
+      cdSpan.textContent = fmtCd(diff);
+      cdSpan.style.color      = diff > 60000 ? '#d4a84b' : diff > 10000 ? '#e07b28' : '#cc3333';
+      cdSpan.style.textShadow = diff > 60000
         ? '0 0 24px rgba(212,168,75,0.35)'
         : diff > 10000
           ? '0 0 24px rgba(224,123,40,0.4)'
           : '0 0 24px rgba(204,51,51,0.5)';
-
-      el.innerHTML = [
-        /* header */
-        '<div style="font-size:10px;color:#5a6a7a;letter-spacing:0.12em;margin-bottom:10px;">⚡ XBOT AUTO SENDER</div>',
-
-        /* src → tgt */
-        '<div style="font-size:14px;color:#b8a882;margin-bottom:10px;">',
-          '<span style="color:#8a9aaa">' + (cmd.src || '') + '</span>',
-          '&nbsp;<span style="color:#4a5a6a">→</span>&nbsp;',
-          '<span style="color:#d4c8a8">' + (cmd.tgt || '') + '</span>',
-        '</div>',
-
-        /* unit icons */
-        unitHtml
-          ? '<div style="margin-bottom:12px;min-height:26px;">' + unitHtml + '</div>'
-          : '',
-
-        /* countdown label */
-        '<div style="font-size:10px;color:#4a5a6a;letter-spacing:0.06em;margin-bottom:4px;">PARTIDA EM</div>',
-
-        /* countdown — fixed-width wrapper prevents layout shift */
-        '<div style="width:100%;text-align:center;margin-bottom:6px;">',
-          '<span style="',
-            'display:inline-block;width:280px;',
-            'font-size:38px;font-weight:700;font-family:"Courier New",monospace;',
-            'font-variant-numeric:tabular-nums;letter-spacing:0.02em;',
-            'color:' + color + ';text-shadow:' + glow + ';line-height:1.1;',
-          '">' + fmtCd(diff) + '</span>',
-        '</div>',
-
-        /* timestamp + note */
-        '<div style="font-size:10px;color:#3a4a5a;margin-top:8px;">',
-          fmtTime(launchMs),
-          (cmd.note ? '&nbsp;·&nbsp;<span style="color:#5a6a4a">' + cmd.note + '</span>' : ''),
-        '</div>',
-      ].join('');
     }
 
     render();
@@ -620,10 +684,21 @@
   }
 
   /* ─── Noble-train expander (mirrors Kumin's startNT) ────────────────────── */
+  // Returns ms until all NT expansion clicks are complete (so caller can delay the overlay).
+  // Delays are based on the template's noblesQnt so the overlay waits even if the button
+  // isn't in the DOM yet at call time — each setTimeout callback re-queries the button.
   function startNT(cmd) {
-    var snobCount = (cmd.units && cmd.units.snob) || 0;
-    if (snobCount < 2) return;
-    var clicks = snobCount - 1;
+    var nt     = cmd.ntTemplate && cmd.ntTemplate !== 'noNT' ? cmd.ntTemplate : null;
+    var clicks = nt
+      ? Math.max(0, (NT_COUNT[nt] || 1) - 1)
+      : Math.max(0, ((cmd.units && cmd.units.snob) || 0) - 1);
+
+    if (clicks <= 0) {
+      if (nt) setTimeout(function() { fillNT(nt); }, 1200);
+      return 0;
+    }
+
+    // Schedule expansion clicks — button re-queried at each fire time (same as Kumin)
     for (var ni = 0; ni < clicks; ni++) {
       (function(idx) {
         setTimeout(function() {
@@ -632,7 +707,176 @@
         }, idx * 200);
       })(ni);
     }
+
+    // Fill function at 1200ms (like Kumin's eval(fillFunction)())
+    if (nt) setTimeout(function() { fillNT(nt); }, 1200);
+
+    return clicks * 200 + 100; // delay until last click + buffer
   }
+
+  /* ─── NT fill functions (ported from Kumin) ─────────────────────────────── */
+  function _ntRow(i) { return (document.getElementsByClassName('units-row')[i] || {}).childNodes; }
+  function _trainUi(i) {
+    var els = document.getElementsByClassName('train-ui');
+    var idx = i;
+    if (els[idx] && !els[idx].childNodes[5]) idx = idx + 1;
+    return (els[idx] || {}).childNodes;
+  }
+  function _hasArcher() { return window.gameData && Array.isArray(window.gameData.units) && window.gameData.units.includes('archer'); }
+  function _hasKnight() { return window.gameData && Array.isArray(window.gameData.units) && window.gameData.units.includes('knight'); }
+  function _updateSum() { try { window.Place.confirmScreen.updateUnitsSum(); } catch(e) {} }
+  function _setVal(nodes, idx, val) { if (nodes && nodes[idx] && nodes[idx].childNodes[0]) nodes[idx].childNodes[0].value = val; }
+  function _getVal(nodes, idx) { return nodes && nodes[idx] && nodes[idx].childNodes[0] ? parseInt(nodes[idx].childNodes[0].textContent) || 0 : 0; }
+
+  function fillNT(nt) {
+    try {
+      switch (nt) {
+        case 'twoNoblesSame':   return _fillNSame(2);
+        case 'threeNoblesSame': return _fillNSame(3);
+        case 'fourNoblesSame':  return _fillNSame(4);
+        case 'fiveNoblesSame':  return _fillNSame(5);
+        case 'splitSecondThirdNobleNT':      return _fill2nd3rdNoblesNT();
+        case 'secondNobleBuffNT':             return _fill2ndNobleBuffNT();
+        case 'thirdNobleBuffNT':              return _fill3rdNobleBuffNT();
+        case 'secondNobleBuffWith5NoblesNT':  return _fill2ndNobleBuffWith5NoblesNT();
+        case 'secondNobleBuffWith2NoblesNT':  return _fill2ndNobleBuffWith2NoblesNT();
+        case 'secondNobleRedNT':              return _fill2ndNobleRedNT();
+        case 'thirdNobleRedNT':               return _fill3rdNobleRedNT();
+        case 'fourthNobleRedNT':              return _fill4thNobleRedNT();
+        case 'secondNobleRed5NT':             return _fill2ndNobleRed5NT();
+        case 'thirdNobleRed5NT':              return _fill3rdNobleRed5NT();
+        // no-op templates (Kumin also has empty functions for these):
+        // secondNobleWithRest/thirdNobleWithRest/fourNobleWithRest/fiveNobleWithRest
+        // firstNobleRedNT / firstNobleRed5NT / noNT
+      }
+    } catch(e) { console.warn('[AutoSender] fillNT error:', e); }
+  }
+
+  // Copy row 0 units to rows 1..N-1
+  function _fillNSame(n) {
+    var row0 = _ntRow(0);
+    if (!row0) return;
+    for (var r = 1; r < n; r++) {
+      var rowR = _ntRow(r);
+      if (!rowR) continue;
+      for (var c = 3; c < rowR.length - 1; c++) {
+        var src = row0[c + 2];
+        var dst = rowR[c];
+        if (src && src.childNodes[0] && dst && dst.childNodes[0])
+          dst.childNodes[0].value = src.childNodes[0].textContent;
+      }
+    }
+    _updateSum();
+  }
+
+  function _buffCommon(rows, n) {
+    var hasArcher = _hasArcher(), hasKnight = _hasKnight();
+    var lightIdx  = hasArcher ? 8 : 7;
+    var archerOff = hasArcher ? 1 : 0;
+    var knightOff = hasKnight ? 1 : 0;
+    var nobleIdx  = lightIdx + 4 + archerOff + knightOff;
+    var axeIdx    = hasArcher ? 6 : 5;
+    var ui = _trainUi(1);
+    var archer = hasArcher ? _getVal(ui, lightIdx + 1) : 0;
+    var light  = _getVal(ui, lightIdx);
+    var ram    = _getVal(ui, lightIdx + 2 + archerOff);
+    var cat    = _getVal(ui, lightIdx + 3 + archerOff);
+    // Clear expanded rows
+    for (var r = 1; r < n; r++) {
+      var row = _ntRow(r); if (!row) continue;
+      for (var c = 1; c < row.length - 1; c++) { if (row[c] && row[c].childNodes[0]) row[c].childNodes[0].value = ''; }
+    }
+    return { hasArcher: hasArcher, hasKnight: hasKnight, lightIdx: lightIdx, archerOff: archerOff, knightOff: knightOff, nobleIdx: nobleIdx, axeIdx: axeIdx, archer: archer, light: light, ram: ram, cat: cat, ui: ui };
+  }
+
+  function _fill2nd3rdNoblesNT() {
+    var b    = _buffCommon([1,2,3], 4);
+    var spear = _getVal(b.ui, 5);
+    var spl   = Math.floor((parseInt(spear) - parseInt(_getVal(_ntRow(0), 5))) / 2);  // simplified split
+    // row1
+    var r1 = _ntRow(1); _setVal(r1, 3, spl); _setVal(r1, b.axeIdx, b.light); if (b.archer > 0) _setVal(r1, b.axeIdx + 1, b.archer); _setVal(r1, b.nobleIdx, 1);
+    // row2
+    var r2 = _ntRow(2); _setVal(r2, 3, spl); _setVal(r2, b.axeIdx, b.light); _setVal(r2, b.nobleIdx, 1);
+    // row3
+    var r3 = _ntRow(3); _setVal(r3, 3, 1000); _setVal(r3, b.nobleIdx, 1);
+    _updateSum();
+  }
+
+  function _fillBuffNT(buffRow, totalRows, extraCatBase) {
+    var b    = _buffCommon(null, totalRows);
+    var spear = parseInt((_trainUi(1)[5] || {childNodes:[{textContent:'0'}]}).childNodes[0].textContent) || 0;
+    var axe   = 5000 - b.light - b.archer - 1;
+    var spearBuff = 1000;
+    var needed    = 2000 + (1000 - (b.ram + b.cat)) + (extraCatBase || 0) * 1000;
+    if (axe > spear - needed)   axe = spear - needed;
+    else if (axe < spear - needed) spearBuff = spear - 2000 - axe;
+    if (axe < 0) axe = 0;
+    // row buffRow gets the buff
+    var rb = _ntRow(buffRow); _setVal(rb, 3, axe); _setVal(rb, b.axeIdx, b.light); if (b.archer > 0) _setVal(rb, b.axeIdx + 1, b.archer); _setVal(rb, b.nobleIdx, 1);
+    // other rows get spear + noble only
+    for (var r = 1; r < totalRows; r++) {
+      if (r === buffRow) continue;
+      var rx = _ntRow(r);
+      _setVal(rx, 3, r === 2 && buffRow !== 2 ? spearBuff : 1000);
+      _setVal(rx, b.axeIdx, 0);
+      _setVal(rx, b.nobleIdx, 1);
+    }
+    _updateSum();
+  }
+
+  function _fill2ndNobleBuffNT()            { _fillBuffNT(1, 4, 0); }
+  function _fill3rdNobleBuffNT()            { _fillBuffNT(2, 4, 0); }
+  function _fill2ndNobleBuffWith5NoblesNT() { _fillBuffNT(1, 5, 1); }
+  function _fill2ndNobleBuffWith2NoblesNT() {
+    var b = _buffCommon(null, 2);
+    var spear = parseInt((_trainUi(1)[5] || {childNodes:[{textContent:'0'}]}).childNodes[0].textContent) || 0;
+    var axe = 5000 - b.light - b.archer - 1;
+    if (axe > spear - 3000) axe = spear - 3000;
+    if (axe < 0) axe = 0;
+    var r1 = _ntRow(1); _setVal(r1, 3, axe); _setVal(r1, b.axeIdx, b.light); if (b.archer > 0) _setVal(r1, b.axeIdx + 1, b.archer); _setVal(r1, b.nobleIdx, 1);
+    _updateSum();
+  }
+
+  function _fillRedNT(redRow, totalRows, spearOverride) {
+    var b = _buffCommon(null, totalRows);
+    var spear = parseInt((_trainUi(1)[5] || {childNodes:[{textContent:'0'}]}).childNodes[0].textContent) || 0;
+    var spearRed = spear - 100; if (spearRed < 0) spearRed = 0;
+    for (var r = 1; r < totalRows; r++) {
+      var rx = _ntRow(r);
+      if (r === redRow) {
+        _setVal(rx, 3, spearRed); _setVal(rx, b.axeIdx, b.light); if (b.archer > 0) _setVal(rx, b.axeIdx + 1, b.archer);
+        _setVal(rx, b.axeIdx + 2 + b.archerOff, b.ram); _setVal(rx, b.axeIdx + 3 + b.archerOff, b.cat);
+        _setVal(rx, b.nobleIdx, 1);
+      } else {
+        _setVal(rx, 3, spearOverride != null ? spearOverride : 33); _setVal(rx, b.nobleIdx, 1);
+      }
+    }
+    _updateSum();
+  }
+
+  function _fill2ndNobleRedNT()  { _fillRedNT(1, 4, 33); }
+  function _fill3rdNobleRedNT()  { _fillRedNT(2, 4, 33); }
+  function _fill4thNobleRedNT()  { _fillRedNT(3, 4, 33); }
+
+  function _fillRed5NT(redRow, totalRows) {
+    var b = _buffCommon(null, totalRows);
+    var spear = parseInt((_trainUi(1)[5] || {childNodes:[{textContent:'0'}]}).childNodes[0].textContent) || 0;
+    var spearRed = spear - 34 - 100; if (spearRed < 0) spearRed = 0;
+    for (var r = 1; r < totalRows; r++) {
+      var rx = _ntRow(r);
+      if (r === redRow) {
+        _setVal(rx, 3, spearRed); _setVal(rx, b.axeIdx, b.light); if (b.archer > 0) _setVal(rx, b.axeIdx + 1, b.archer);
+        _setVal(rx, b.axeIdx + 2 + b.archerOff, b.ram); _setVal(rx, b.axeIdx + 3 + b.archerOff, b.cat);
+        _setVal(rx, b.nobleIdx, 1);
+      } else {
+        _setVal(rx, 3, 25); _setVal(rx, b.nobleIdx, 1);
+      }
+    }
+    _updateSum();
+  }
+
+  function _fill2ndNobleRed5NT()  { _fillRed5NT(1, 5); }
+  function _fill3rdNobleRed5NT()  { _fillRed5NT(2, 5); }
 
   /* ─── Confirm page handler ───────────────────────────────────────────────── */
   function handleConfirmPage() {
@@ -662,14 +906,22 @@
       if (catSelect) catSelect.value = cmd.catapultTarget;
     }
 
-    // Noble-train expansion: click #troop_confirm_train (snob-1) times (gated by autoSendNobles)
-    if (_settings.autoSendNobles !== false) startNT(cmd);
+    // NT expansion always runs when ntTemplate is explicitly set (overrides autoSendNobles)
+    var _hasExplicitNT = cmd.ntTemplate && cmd.ntTemplate !== 'noNT';
+    var _ntDelay = (_settings.autoSendNobles !== false || _hasExplicitNT) ? startNT(cmd) : 0;
 
-    // Show countdown overlay immediately (mirrors Kumin's timer render in setupAttack)
-    showConfirmCountdown(cmd, effectiveLaunch);
+    // Select NT template type dropdown if present on the confirm page
+    if (cmd.ntTemplate && cmd.ntTemplate !== 'noNT') {
+      var ntSelect = document.querySelector('#troop_confirm_type, select[name="type"]');
+      if (ntSelect) ntSelect.value = cmd.ntTemplate;
+    }
+
+    // Show countdown overlay only after NT expansion is done (so the UI reflects the final state)
+    setTimeout(function() { showConfirmCountdown(cmd, effectiveLaunch); }, _ntDelay);
 
     // 3000 ms delay before entering the timing sequence — mirrors Kumin's
     // setTimeout(prepareToSend, 3000) in setupAttack. DO NOT REMOVE OR SHORTEN.
+    // Shifted by _ntDelay so timing budget is preserved.
     setTimeout(function() {
 
       // Start ping measurement inside the delay, same as Kumin's _0x1e1de0.start()
@@ -699,10 +951,10 @@
           })();
 
       scheduleClickAtMs(effectiveLaunch, function() {
-        // Click FIRST — every ms of work before this adds directly to timing error.
-        var _clickDeltaMs = getEffectiveServerNowMs() - effectiveLaunch;
         if (_confirmBtn) {
           _confirmBtn.click();
+          // Measure delta immediately after click — matches Kumin's zero-work-before-click pattern.
+          var _clickDeltaMs = getEffectiveServerNowMs() - effectiveLaunch;
           // Post-click work (no longer on the critical timing path).
           updateStatus(cmd.id, 'sent');
           emitState();

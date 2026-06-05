@@ -128,7 +128,7 @@ function euclidean(a: Coord, b: Coord) {
 
 function travelMs(unit: string, from: Coord, to: Coord, speedFactor: number) {
   const mpf = UNIT_MIN_PER_FIELD[unit] ?? UNIT_MIN_PER_FIELD["spear"]!;
-  return mpf * euclidean(from, to) * speedFactor * 60 * 1000;
+  return Math.round(mpf * euclidean(from, to) * speedFactor * 60 * 1000 / 1000) * 1000;
 }
 
 function clampInt(n: number, lo: number, hi: number) {
@@ -399,42 +399,60 @@ async function readIncomingsFromDOM(): Promise<Incoming[]> {
 }
 
 async function fetchOwnHomeTroops(villageId: string): Promise<VillageTroops[]> {
-  const url = `${location.origin}/game.php?${sitterPrefix()}village=${encodeURIComponent(villageId)}&screen=overview_villages&mode=units&type=own_home`;
-  const html = await fetch(url, { credentials: "include" }).then((r) => r.text());
-  const doc  = new DOMParser().parseFromString(html, "text/html");
-
-  const table = [...doc.querySelectorAll<HTMLTableElement>("table.vis")]
-    .find((t) => t.querySelector('thead img[src*="/graphic/unit/unit_"]'));
-  if (!table) return [];
-
-  const headerUnits: string[] = [];
-  table.querySelectorAll("thead th").forEach((th) => {
-    const img = th.querySelector<HTMLImageElement>("img");
-    if (!img) return;
-    const m = (img.getAttribute("src") ?? "").match(/\/unit_([a-z0-9_]+)\./i);
-    if (!m) return;
-    const raw = m[1]!.toLowerCase();
-    if (raw === "militia" || !(raw in UNIT_MIN_PER_FIELD)) return;
-    headerUnits.push(raw);
-  });
-
   const out: VillageTroops[] = [];
-  doc.querySelectorAll<HTMLTableRowElement>("table.vis tbody tr").forEach((tr) => {
-    const label   = tr.querySelector<HTMLElement>(".quickedit-label");
-    const coord   = parseCoord(label?.textContent ?? tr.textContent ?? "");
-    if (!coord) return;
-    const a       = tr.querySelector<HTMLAnchorElement>("a[href*='village=']");
-    const idMatch = (a?.getAttribute("href") ?? "").match(/[?&]village=(\d+)/);
-    const vId     = idMatch ? idMatch[1]! : null;
-    const tds     = [...tr.querySelectorAll<HTMLElement>("td.unit-item")];
-    if (!tds.length) return;
-    const troops: Record<string, number> = {};
-    headerUnits.forEach((unit, i) => {
-      const raw = (tds[i]?.textContent ?? "").replace(/[^\d]/g, "");
-      troops[unit] = raw ? parseInt(raw, 10) : 0;
+  const headerUnits: string[] = [];
+  const seenCoords = new Set<string>();
+  let page = 0;
+
+  while (true) {
+    const url = `${location.origin}/game.php?${sitterPrefix()}village=${encodeURIComponent(villageId)}`
+              + `&screen=overview_villages&mode=units&type=own_home&group=0&page=${page}`;
+    const html = await fetch(url, { credentials: "include" }).then((r) => r.text());
+    const doc  = new DOMParser().parseFromString(html, "text/html");
+
+    const table = [...doc.querySelectorAll<HTMLTableElement>("table.vis")]
+      .find((t) => t.querySelector('thead img[src*="/graphic/unit/unit_"]'));
+    if (!table) break;
+
+    if (page === 0) {
+      table.querySelectorAll("thead th").forEach((th) => {
+        const img = th.querySelector<HTMLImageElement>("img");
+        if (!img) return;
+        const m = (img.getAttribute("src") ?? "").match(/\/unit_([a-z0-9_]+)\./i);
+        if (!m) return;
+        const raw = m[1]!.toLowerCase();
+        if (raw === "militia" || !(raw in UNIT_MIN_PER_FIELD)) return;
+        headerUnits.push(raw);
+      });
+    }
+
+    const rows = [...table.querySelectorAll<HTMLTableRowElement>("tbody tr")];
+    let addedThisPage = 0;
+
+    rows.forEach((tr) => {
+      const label   = tr.querySelector<HTMLElement>(".quickedit-label");
+      const coord   = parseCoord(label?.textContent ?? tr.textContent ?? "");
+      if (!coord) return;
+      const key = `${coord.x}|${coord.y}`;
+      if (seenCoords.has(key)) return;
+      seenCoords.add(key);
+      const a       = tr.querySelector<HTMLAnchorElement>("a[href*='village=']");
+      const idMatch = (a?.getAttribute("href") ?? "").match(/[?&]village=(\d+)/);
+      const vId     = idMatch ? idMatch[1]! : null;
+      const tds     = [...tr.querySelectorAll<HTMLElement>("td.unit-item")];
+      if (!tds.length) return;
+      const troops: Record<string, number> = {};
+      headerUnits.forEach((unit, i) => {
+        const raw = (tds[i]?.textContent ?? "").replace(/[^\d]/g, "");
+        troops[unit] = raw ? parseInt(raw, 10) : 0;
+      });
+      out.push({ villageId: vId, coord, troops });
+      addedThisPage++;
     });
-    out.push({ villageId: vId, coord, troops });
-  });
+
+    if (addedThisPage === 0) break;
+    page++;
+  }
 
   return out;
 }
@@ -1272,6 +1290,28 @@ export function SnipeView({ visible, onBack }: {
     } catch { /* clipboard denied */ }
   }
 
+  function sendToAutosender() {
+    if (!snipeQueue.length) return;
+    const sitterT = new URLSearchParams(window.location.search).get("t") || null;
+    for (const e of snipeQueue) {
+      document.dispatchEvent(new CustomEvent("xbot:autosender:run", { detail: {
+        action: "addToQueue",
+        entry: {
+          src: e.source,
+          tgt: `${e.target.x}|${e.target.y}`,
+          srcVillageId: e.sourceVillageId ?? null,
+          type: "support",
+          launch: e.sendMs,
+          arrival: e.arrivalMs,
+          units: e.units,
+          note: e.label,
+          sitterT,
+        },
+      }}));
+    }
+    clearSnipeQueue();
+  }
+
   async function openInKumin() {
     try { await navigator.clipboard.writeText(snipeQueue.map((e, i) => toSnipeBBString(e, i)).join("\n")); } catch { /* */ }
     const kuminEntries = snipeQueue.map((e) => ({
@@ -1282,6 +1322,7 @@ export function SnipeView({ visible, onBack }: {
       commandType: "Support",
       slowestUnit: e.chosenSlowestUnit,
       units: e.units,
+      sigilPct: sigil > 0 ? sigil : undefined,
     }));
     localStorage.setItem("twKuminGluer_queue", JSON.stringify(kuminEntries));
     const vid = readCurrentVillageId();
@@ -1617,12 +1658,17 @@ export function SnipeView({ visible, onBack }: {
       </div>
 
       {snipeQueue.length > 0 && (
-        <div className="cfg-footer" style={{ gap: 6 }}>
+        <div className="cfg-footer" style={{ gap: 6, flexWrap: "wrap" }}>
           <button className="btn btn-ghost" onClick={copySnipeBB} style={{ flex: 1 }}>
             {bbCopied ? "✓ Copiado" : "📋 Copiar BB"}
           </button>
           <button className="btn btn-save btn-save--dirty" onClick={openInKumin} style={{ flex: 1 }}>
-            🚀 Abrir no Kumin
+            📜 Kumin
+          </button>
+          <button className="btn btn-save btn-save--dirty" onClick={sendToAutosender}
+            style={{ flex: 1, background: "var(--b500)" }}
+            title="Enviar para Auto Sender (xBot)">
+            🚀 Autosend
           </button>
         </div>
       )}

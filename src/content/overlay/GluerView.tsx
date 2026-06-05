@@ -19,23 +19,27 @@ const QUEUE_KEY    = "twKuminGluer_queue";
 const SETTINGS_KEY = "twKuminGluer_settings";
 
 const NT_OPTIONS: Array<[string, string]> = [
-  ["noNT",                         "Sem NT (×1)"],
-  ["twoNoblesSame",                "2 iguais (×2)"],
-  ["threeNoblesSame",              "3 iguais (×3)"],
-  ["fourNoblesSame",               "4 iguais (×4)"],
-  ["fiveNoblesSame",               "5 iguais (×5)"],
-  ["secondNobleWithRest",          "2 c/ resto (×2)"],
-  ["thirdNobleWithRest",           "3 c/ resto (×3)"],
-  ["fourNobleWithRest",            "4 c/ resto (×4)"],
-  ["fiveNobleWithRest",            "5 c/ resto (×5)"],
-  ["splitSecondThirdNobleNT",      "Split 2+3 nobre (×2)"],
-  ["secondNobleBuffNT",            "2º nobre buff (×2)"],
-  ["thirdNobleBuffNT",             "3º nobre buff (×3)"],
-  ["secondNobleBuffWith2NoblesNT", "2º buff 2 nobres (×2)"],
-  ["secondNobleBuffWith5NoblesNT", "2º buff 5 nobres (×5)"],
-  ["secondNobleRedNT",             "2º nobre red (×2)"],
-  ["thirdNobleRedNT",              "3º nobre red (×3)"],
-  ["fourthNobleRedNT",             "4º nobre red (×4)"],
+  ["splitSecondThirdNobleNT",      "Split in 2nd&3rd Noble NT"],
+  ["secondNobleBuffNT",            "2nd Noble Buff NT"],
+  ["thirdNobleBuffNT",             "3rd Noble Buff NT"],
+  ["secondNobleBuffWith5NoblesNT", "2nd Noble Buff With 5 Nobles NT"],
+  ["secondNobleBuffWith2NoblesNT", "2nd Noble Buff With 2 Nobles NT"],
+  ["secondNobleWithRest",          "2 Nobles Selected/Rest"],
+  ["thirdNobleWithRest",           "3 Nobles Selected/Rest"],
+  ["fourNobleWithRest",            "4 Nobles Selected/Rest"],
+  ["fiveNobleWithRest",            "5 Nobles Selected/Rest"],
+  ["twoNoblesSame",                "2 Commands Same of Selected"],
+  ["threeNoblesSame",              "3 Commands Same of Selected"],
+  ["fourNoblesSame",               "4 Commands Same of Selected"],
+  ["fiveNoblesSame",               "5 Commands Same of Selected"],
+  ["firstNobleRedNT",              "1st Noble Red NT"],
+  ["secondNobleRedNT",             "2nd Noble Red NT"],
+  ["thirdNobleRedNT",              "3rd Noble Red NT"],
+  ["fourthNobleRedNT",             "4th Noble Red NT"],
+  ["firstNobleRed5NT",             "1st Noble Red 5NT"],
+  ["secondNobleRed5NT",            "2nd Noble Red 5NT"],
+  ["thirdNobleRed5NT",             "3rd Noble Red 5NT"],
+  ["noNT",                         "no NT"],
 ];
 
 function sitterPrefix(): string {
@@ -275,45 +279,63 @@ function computeCandidates(
 
 /* ─── fetchOwnHomeTroops ──────────────────────────────────────────────────── */
 async function fetchOwnHomeTroops(villageId: string): Promise<VillageTroops[]> {
-  const url = `${location.origin}/game.php?${sitterPrefix()}village=${encodeURIComponent(villageId)}&screen=overview_villages&mode=units&type=own_home`;
-  const html = await fetch(url, { credentials: "include" }).then(r => r.text());
-  const doc  = new DOMParser().parseFromString(html, "text/html");
-
-  const table = [...doc.querySelectorAll<HTMLTableElement>("table.vis")]
-    .find(t => t.querySelector("thead img[src*='/graphic/unit/unit_']"));
-  if (!table) return [];
-
-  const headerUnits: string[] = [];
-  table.querySelectorAll("thead th").forEach(th => {
-    const img = th.querySelector<HTMLImageElement>("img");
-    if (!img) return;
-    const m = (img.getAttribute("src") ?? "").match(/\/unit_([a-z0-9_]+)\./i);
-    if (!m) return;
-    const raw = m[1]!.toLowerCase();
-    if (raw === "militia" || !(raw in UNIT_MIN_PER_FIELD)) return;
-    headerUnits.push(raw);
-  });
-
   const out: VillageTroops[] = [];
-  doc.querySelectorAll<HTMLTableRowElement>("table.vis tbody tr").forEach(tr => {
-    const label   = tr.querySelector<HTMLElement>(".quickedit-label");
-    const text    = label?.textContent ?? tr.textContent ?? "";
-    const coordM  = text.match(/(\d{3})\|(\d{3})/);
-    if (!coordM) return;
-    const coord: Coord = { x: +coordM[1]!, y: +coordM[2]! };
-    const a       = tr.querySelector<HTMLAnchorElement>("a[href*='village=']");
-    const idMatch = (a?.getAttribute("href") ?? "").match(/[?&]village=(\d+)/);
-    const vId     = idMatch ? idMatch[1]! : null;
-    const tds     = [...tr.querySelectorAll<HTMLElement>("td.unit-item")];
-    if (!tds.length) return;
-    const troops: Record<string, number> = {};
-    headerUnits.forEach((unit, i) => {
-      const raw = (tds[i]?.textContent ?? "").replace(/[^\d]/g, "");
-      troops[unit] = raw ? parseInt(raw, 10) : 0;
+  const headerUnits: string[] = [];
+  const seenCoords = new Set<string>();
+  let page = 0;
+
+  while (true) {
+    const url = `${location.origin}/game.php?${sitterPrefix()}village=${encodeURIComponent(villageId)}`
+              + `&screen=overview_villages&mode=units&type=own_home&group=0&page=${page}`;
+    const html = await fetch(url, { credentials: "include" }).then(r => r.text());
+    const doc  = new DOMParser().parseFromString(html, "text/html");
+
+    const table = [...doc.querySelectorAll<HTMLTableElement>("table.vis")]
+      .find(t => t.querySelector("thead img[src*='/graphic/unit/unit_']"));
+    if (!table) break;
+
+    if (page === 0) {
+      table.querySelectorAll("thead th").forEach(th => {
+        const img = th.querySelector<HTMLImageElement>("img");
+        if (!img) return;
+        const m = (img.getAttribute("src") ?? "").match(/\/unit_([a-z0-9_]+)\./i);
+        if (!m) return;
+        const raw = m[1]!.toLowerCase();
+        if (raw === "militia" || !(raw in UNIT_MIN_PER_FIELD)) return;
+        headerUnits.push(raw);
+      });
+    }
+
+    const rows = [...table.querySelectorAll<HTMLTableRowElement>("tbody tr")];
+    let addedThisPage = 0;
+
+    rows.forEach(tr => {
+      const label   = tr.querySelector<HTMLElement>(".quickedit-label");
+      const text    = label?.textContent ?? tr.textContent ?? "";
+      const coordM  = text.match(/(\d{3})\|(\d{3})/);
+      if (!coordM) return;
+      const coord: Coord = { x: +coordM[1]!, y: +coordM[2]! };
+      const key = `${coord.x}|${coord.y}`;
+      if (seenCoords.has(key)) return;
+      seenCoords.add(key);
+      const a       = tr.querySelector<HTMLAnchorElement>("a[href*='village=']");
+      const idMatch = (a?.getAttribute("href") ?? "").match(/[?&]village=(\d+)/);
+      const vId     = idMatch ? idMatch[1]! : null;
+      const tds     = [...tr.querySelectorAll<HTMLElement>("td.unit-item")];
+      if (!tds.length) return;
+      const troops: Record<string, number> = {};
+      headerUnits.forEach((unit, i) => {
+        const raw = (tds[i]?.textContent ?? "").replace(/[^\d]/g, "");
+        troops[unit] = raw ? parseInt(raw, 10) : 0;
+      });
+      const name = label?.textContent?.trim() ?? `${coord.x}|${coord.y}`;
+      out.push({ villageId: vId, name, coord, troops });
+      addedThisPage++;
     });
-    const name = label?.textContent?.trim() ?? `${coord.x}|${coord.y}`;
-    out.push({ villageId: vId, name, coord, troops });
-  });
+
+    if (addedThisPage === 0) break;
+    page++;
+  }
 
   return out;
 }
@@ -629,6 +651,7 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
         arrival: e.arrivalMs,
         units: e.units,
         sigilPct: e.sigilPct,
+        ntTemplate: ntTemplate !== "noNT" ? ntTemplate : null,
         note: e.name,
         status: "pending",
         createdAt: Date.now(),

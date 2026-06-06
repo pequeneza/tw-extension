@@ -245,101 +245,78 @@
         return result;
     }
 
-    /**
-     * Fetches the combined village overview and returns an array of
-     * { villageId, name, x, y, troops: { spear: N, ... } }
-     */
     async function fetchVillages(groupId = '0') {
         const vid = getCurrentVillageId();
         if (!vid) return [];
 
-        const url = `/game.php?${sitterPrefix()}village=${vid}&screen=overview_villages&mode=units&type=own_home&group=${groupId}&page=-1`;
-        try {
-            const res  = await fetch(url, { credentials: 'include' });
-            const text = await res.text();
-            const result = parseVillagesTable(text);
-            if (!result.length) {
-                const doc = new DOMParser().parseFromString(text, 'text/html');
-                const tables = doc.querySelectorAll('table');
-                console.warn('[Planeador] parseVillagesTable returned empty.',
-                    'URL:', url,
-                    'Tables found:', tables.length,
-                    Array.from(tables).map(t => ({ id: t.id, cls: t.className, rows: t.rows.length }))
-                );
+        const allResults  = [];
+        const seenIds     = new Set();
+        const headerUnits = [];
+        let page          = 0;
+
+        while (true) {
+            const url = `/game.php?${sitterPrefix()}village=${vid}&screen=overview_villages&mode=units&type=own_home&group=${groupId}&page=${page}`;
+            let text;
+            try {
+                const res = await fetch(url, { credentials: 'include' });
+                text = await res.text();
+            } catch (e) {
+                console.error('[Planeador] fetchVillages page=' + page + ':', e);
+                break;
             }
-            return result;
-        } catch (e) {
-            console.error('[Planeador] fetchVillages:', e);
-            return [];
-        }
-    }
 
-    function parseVillagesTable(html) {
-        const doc = new DOMParser().parseFromString(html, 'text/html');
+            const doc   = new DOMParser().parseFromString(text, 'text/html');
+            const table = Array.from(doc.querySelectorAll('table.vis'))
+                .find(function(t) { return t.querySelector('thead img[src*="/graphic/unit/unit_"]'); });
+            if (!table) break;
 
-        /* Pick the table most likely to be the units overview:
-           prefer explicit ids, then the vis table with the most rows */
-        let table = doc.querySelector('#units_table, #villages_table');
-        if (!table) {
-            const candidates = Array.from(doc.querySelectorAll('table.vis'));
-            table = candidates.reduce((best, t) => (t.rows.length > (best?.rows.length ?? 0) ? t : best), null);
-        }
-        if (!table) return [];
+            if (page === 0) {
+                Array.from(table.querySelectorAll('thead th')).forEach(function(th) {
+                    const img = th.querySelector('img');
+                    if (!img) return;
+                    const m = (img.getAttribute('src') || '').match(/\/unit_([a-z0-9_]+)\./i);
+                    if (!m) return;
+                    const raw = m[1].toLowerCase();
+                    if (raw === 'militia') return;
+                    headerUnits.push(raw);
+                });
+            }
 
-        /* Header cells: prefer <thead>, fall back to first <tr> of the table */
-        let headerCells = Array.from(table.querySelectorAll('thead th, thead td'));
-        if (!headerCells.length) {
-            const firstRow = table.querySelector('tr');
-            if (firstRow) headerCells = Array.from(firstRow.querySelectorAll('th, td'));
-        }
+            let addedThisPage = 0;
+            Array.from(table.querySelectorAll('tbody tr')).forEach(function(tr) {
+                const label  = tr.querySelector('.quickedit-label');
+                const rowTxt = (label ? label.textContent : tr.textContent) || '';
+                const coordM = rowTxt.match(/(\d{3})\|(\d{3})/);
+                if (!coordM) return;
+                const x = parseInt(coordM[1], 10);
+                const y = parseInt(coordM[2], 10);
 
-        const colUnit = {};
-        headerCells.forEach((th, idx) => {
-            const img = th.querySelector('img');
-            if (!img) return;
-            const src = img.getAttribute('src') || '';
-            const m   = src.match(/unit[_/](?:unit_)?([a-z]+)\./i);
-            if (m) colUnit[idx] = m[1].toLowerCase();
-        });
+                const a      = tr.querySelector('a[href*="village="]');
+                const idM    = a ? (a.getAttribute('href') || '').match(/[?&]village=(\d+)/) : null;
+                const villId = idM ? idM[1] : null;
+                if (!villId) return;
+                if (seenIds.has(villId)) return;
 
-        console.log('[Planeador] colUnit detected:', colUnit);
+                const tds = Array.from(tr.querySelectorAll('td.unit-item'));
+                if (!tds.length) return;
+                const troops = {};
+                headerUnits.forEach(function(unit, i) {
+                    const raw = (tds[i] ? tds[i].textContent : '').replace(/[^\d]/g, '');
+                    troops[unit] = raw ? parseInt(raw, 10) : 0;
+                });
 
-        const results = [];
-        table.querySelectorAll('tbody tr').forEach(tr => {
-            const tds = Array.from(tr.querySelectorAll('td'));
-
-            /* Village link — look for info_village or plain village links */
-            const link = tr.querySelector('a[href*="village="]');
-            if (!link) return;
-
-            /* Village ID: 'id=' param (info_village style) takes priority over 'village=' */
-            const href = link.getAttribute('href') || '';
-            const idM  = href.match(/[?&]id=(\d+)/) ?? href.match(/[?&]village=(\d+)/);
-            if (!idM) return;
-            const villageId = idM[1];
-
-            /* Coordinates from "(X|Y)" anywhere in the row */
-            const coordM = tr.textContent.match(/\((\d+)\|(\d+)\)/);
-            if (!coordM) return;
-            const x = parseInt(coordM[1], 10);
-            const y = parseInt(coordM[2], 10);
-
-            const name = link.textContent.trim();
-
-            /* Troop counts by detected column index */
-            const troops = {};
-            Object.entries(colUnit).forEach(([idx, unit]) => {
-                const td    = tds[parseInt(idx, 10)];
-                const count = parseInt(td?.textContent?.trim().replace(/\D/g, '') || '0', 10);
-                if (count > 0) troops[unit] = count;
+                const name = label ? label.textContent.trim() : x + '|' + y;
+                seenIds.add(villId);
+                allResults.push({ villageId: villId, name: name, x: x, y: y, troops: troops });
+                addedThisPage++;
             });
 
-            if (Object.keys(troops).length > 0) {
-                results.push({ villageId, name, x, y, troops });
-            }
-        });
+            if (addedThisPage === 0) break;
+            page++;
+        }
 
-        return results;
+        console.log('[Planeador] fetchVillages: ' + allResults.length + ' villages (' + page + ' page(s))');
+        return allResults;
     }
 
     /* ═══════════════════════════════════════════════════════════════════════
@@ -600,7 +577,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
                 : baseMs;
             const depMs  = arrivalMs - trvMs;
             if (depMs < now) continue;                                // departure already past — skip
-            rows.push({ r, d, depMs, netTroops });
+            rows.push({ r, d, depMs, trvMs, netTroops });
         }
 
         /* Sort earliest-departure first */
@@ -616,7 +593,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
             return `<th class="sim-unit-th ${on ? 'sim-u-on' : 'sim-u-off'}" data-unit="${u}" title="${UNIT_LABEL[u] || u} — clica para ${on ? 'desactivar' : 'activar'}">${unitIconHtml(u)}</th>`;
         }).join('');
 
-        const trs = rows.map(({ r, depMs, netTroops }, i) => {
+        const trs = rows.map(({ r, depMs, trvMs, netTroops }, i) => {
             const depFmt  = fmtDatetime(depMs);
             const remSec  = Math.max(0, Math.floor((depMs - Date.now()) / 1000));
             const remFmt  = fmtDuration(remSec);
@@ -647,7 +624,8 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
             const autosendEntry = { src: `${r.x}|${r.y}`, tgt: `${targetX}|${targetY}`,
                                     srcVillageId: r.villageId, tgtVillageId: targetVillageId || null,
                                     type: _cmdType.toLowerCase(),
-                                    launch: depMs, arrival: arrivalMs, units: troopsForUrl, note: r.name,
+                                    launch: depMs, arrival: arrivalMs, travelMs: trvMs,
+                                    units: troopsForUrl, note: r.name,
                                     sigilPct: sigilPct || 0,
                                     sitterT: _sitterT };
 

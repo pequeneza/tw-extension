@@ -111,6 +111,7 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
 :host([data-theme="dark"]) .stats-bar { background: #12161f; }
 :host([data-theme="dark"]) .snipe-gap-pill { background: #1a1d27; border-color: #2a2d3a; }
 :host([data-theme="dark"]) .snipe-card { background: #1a1d27; border-color: #2a2d3a; }
+:host([data-theme="dark"]) .snipe-sticky-bar { background: #0f1117; border-bottom-color: #2a2d3a; }
 :host([data-theme="dark"]) .close-btn,
 :host([data-theme="dark"]) .back-btn { background: #1e2130; border-color: #2a2d3a; }
 :host([data-theme="dark"]) .input { background: #1a1d27; border-color: #2a2d3a; color: var(--n900); }
@@ -949,19 +950,19 @@ select.input {
 .snipe-speed-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 .snipe-speed-label {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  gap: 4px;
+  font-size: 11px;
   color: var(--n400);
   white-space: nowrap;
 }
 .snipe-speed-input {
-  width: 72px !important;
+  width: 52px !important;
 }
 
 .snipe-summary-row {
@@ -1036,17 +1037,17 @@ select.input {
 .snipe-card {
   border: 1px solid var(--b-br);
   border-radius: 10px;
-  padding: 10px 12px;
-  margin-bottom: 8px;
+  padding: 6px 8px;
+  margin-bottom: 5px;
   background: var(--n0);
 }
 .snipe-card-header {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
   flex-wrap: wrap;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 .snipe-card-coord {
   font-weight: 700;
@@ -1065,9 +1066,9 @@ select.input {
 .snipe-card-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
-  margin-bottom: 10px;
+  margin-bottom: 5px;
 }
 .snipe-timer-btn {
   min-width: 52px;
@@ -1085,7 +1086,7 @@ select.input {
 
 .snipe-units {
   display: flex;
-  gap: 6px;
+  gap: 4px;
   flex-wrap: wrap;
   align-items: flex-start;
 }
@@ -1093,10 +1094,10 @@ select.input {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
-  width: 58px;
-  padding: 5px 4px;
-  border-radius: 8px;
+  gap: 2px;
+  width: 46px;
+  padding: 3px 3px;
+  border-radius: 7px;
   border: 1px solid var(--n150);
   background: var(--bg);
   transition: border-color 0.1s, background 0.1s;
@@ -1112,8 +1113,8 @@ select.input {
   background: var(--n100);
 }
 .snipe-unit-icon {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   cursor: pointer;
   border-radius: 3px;
   transition: filter 0.1s;
@@ -1122,14 +1123,14 @@ select.input {
   filter: drop-shadow(0 0 3px var(--g500));
 }
 .snipe-unit-avail {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--n400);
   line-height: 1;
 }
 .snipe-unit-input {
-  width: 54px;
-  padding: 2px 3px;
-  font-size: 11px;
+  width: 40px;
+  padding: 1px 2px;
+  font-size: 10px;
   text-align: center;
   border-radius: 5px;
   border: 1px solid var(--n150);
@@ -1140,6 +1141,87 @@ select.input {
 .snipe-unit-input:focus {
   outline: none;
   border-color: var(--b400);
+}
+
+/* Status badges */
+.snipe-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.snipe-status--ready   { background: var(--g-bg); border: 1px solid var(--g-br); color: var(--g600); }
+.snipe-status--queued  { background: var(--b-bg); border: 1px solid var(--b-br); color: var(--b500); }
+.snipe-status--past    { background: var(--r-bg); border: 1px solid var(--r-br); color: var(--r500); }
+.snipe-status--missing { background: var(--a-bg); border: 1px solid var(--a-br); color: var(--a500); }
+
+/* Sticky action bar */
+.snipe-sticky-bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--n0);
+  border-bottom: 1px solid var(--b-br);
+  padding: 6px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.snipe-metrics-row {
+  display: flex;
+  gap: 14px;
+  font-size: 11px;
+  color: var(--n400);
+  flex: 1;
+  flex-wrap: wrap;
+}
+.snipe-metrics-row strong { color: var(--n700); }
+
+/* Gap width color coding */
+.snipe-gap-pill--tight  { border-color: var(--r400) !important; }
+.snipe-gap-pill--tight  .snipe-gap-width { color: var(--r500); font-weight: 600; }
+.snipe-gap-pill--narrow { border-color: var(--a400) !important; }
+.snipe-gap-pill--narrow .snipe-gap-width { color: var(--a500); font-weight: 600; }
+
+/* Send time row inside card */
+.snipe-send-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--n400);
+  flex-wrap: wrap;
+}
+.snipe-send-time {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--n600);
+  font-weight: 600;
+}
+.snipe-relative-time {
+  font-size: 10px;
+  color: var(--n300);
+}
+
+/* Card header left group (checkbox + coord + unit + badge) */
+.snipe-card-hdr-left {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+}
+.snipe-card-checkbox {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+  accent-color: var(--b500);
 }
 
 /* ── WH Balancer ─────────────────────────────────────────────────────────── */

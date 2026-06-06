@@ -976,7 +976,12 @@
             var _sentMs   = _sentAt % 1000;
             var _gapMsLo  = cmd.gapAfterMs  % 1000;
             var _gapMsHi  = cmd.gapBeforeMs % 1000;
-            var _msOk     = _sentMs > _gapMsLo && _sentMs <= _gapMsHi;
+            // Supports have priority over attacks at the same ms, so the lower bound is
+            // inclusive: arriving at the same ms as the first attack in the gap still
+            // lands the support before that attack is processed.
+            var _msOk     = _gapMsLo === _gapMsHi
+              ? (_sentMs === _gapMsLo)
+              : (_sentMs >= _gapMsLo && _sentMs <= _gapMsHi);
             var _retryEntry = {
               src: cmd.src, tgt: cmd.tgt, srcVillageId: cmd.srcVillageId,
               type: cmd.type, units: cmd.units, note: cmd.note,
@@ -1159,6 +1164,22 @@
 
     var tickId = null;
     var done = false;
+    var _cancelScheduled = false;
+
+    // Once cancelAt is known, schedule the cancel click.
+    // Cancel only needs second-level precision (TW cancelMs is always whole seconds),
+    // so no sub-ms busy-wait is needed. Wake up 500 ms early to absorb background-tab
+    // timer jitter, then spin-wait at most 600 ms for the target second to arrive.
+    function _scheduleCancelClick() {
+      if (_cancelScheduled || cancelAt === null || done) return;
+      _cancelScheduled = true;
+      var wakeMs = Math.max(0, cancelAt - Date.now() - 500);
+      setTimeout(function() {
+        var deadline = cancelAt + 100; // allow up to 100 ms over (still same TW second)
+        while (!done && Date.now() < cancelAt && Date.now() < deadline) {}
+        doCancel();
+      }, wakeMs);
+    }
 
     // Repurpose the overlay to show a "gap missed" message + close countdown
     function showMissedFeedback(headline, detail, closeMs) {
@@ -1206,7 +1227,12 @@
         var _sentAt2        = p.sentAt || cancelClickTime;
         var _expectedReturn = cancelClickTime + (cancelClickTime - _sentAt2);
         var _gapMid = Math.floor(((p.gapAfterMs || 0) + (p.gapBeforeMs || 0)) / 2);
-        var _rl  = _expectedReturn + 10000; // 10 s after troops home
+        // Buffer must exceed the watcher's lookahead (default 40 s) so the place tab does not
+        // open before troops are back. +2 s keeps the retry fast while ensuring the new tab
+        // fires after the expected return.
+        var _lookahead  = ((_settings && _settings._openTabDelaySec) || 40) * 1000;
+        var _retryBuf   = _lookahead + 2000;
+        var _rl  = _expectedReturn + _retryBuf;
         // Adjust ms component of _rl to match midGap so the return lands exactly there
         var _targetMs = _gapMid % 1000;
         _rl += (_targetMs - (_rl % 1000) + 1000) % 1000;
@@ -1220,15 +1246,21 @@
         } else {
           console.warn('[AutoSender SC] Janela passou — sem retry.');
           document.title = '❌ Gap perdido';
-          showMissedFeedback('❌ Gap perdido', 'Sem tempo para nova tentativa.', 6000);
+          showMissedFeedback('❌ Gap perdido', 'Sem tempo para nova tentativa.', 8000);
         }
         return;
       }
 
-      // Success path
-      document.title = '✓ Cancelado — Snipe Cancel';
-      backdrop.remove(); dialog.remove();
-      setTimeout(function() { try { window.close(); } catch(e) {} }, 3000);
+      // Success path — keep overlay up briefly so the user can see the result
+      document.title = '✓ Cancelado — tropas a regressar';
+      titleEl.textContent = '✓ Snipe Cancel — concluído!';
+      titleEl.style.color = '#22c55e';
+      infoEl.textContent  = 'Tropas a regressar para ' + (p.village || 'aldeia') + (p.note ? ' · ' + p.note : '');
+      timerEl.style.fontSize = '20px';
+      timerEl.style.color    = '#4ade80';
+      timerEl.textContent    = '✓';
+      setTimeout(function() { backdrop.remove(); dialog.remove(); }, 6000);
+      setTimeout(function() { try { window.close(); } catch(e) {} }, 6500);
     }
 
     function render() {
@@ -1260,9 +1292,14 @@
       var _midGap = Math.floor(((p.gapAfterMs || 0) + (p.gapBeforeMs || 0)) / 2);
 
       if (!isNaN(actualMs) && p.gapAfterMs && p.gapBeforeMs) {
-        var _msOk = _gapLo < _gapHi
-          ? (actualMs > _gapLo && actualMs <= _gapHi)
-          : (actualMs > _gapLo || actualMs <= _gapHi); // wraparound across 1-second boundary
+        // Supports have priority over attacks at the same ms, so the lower bound is
+        // inclusive: arriving at the same ms as the first attack in the gap still
+        // lands the support before that attack is processed.
+        var _msOk = _gapLo === _gapHi
+          ? (actualMs === _gapLo)                         // exact match when both boundaries share the same ms
+          : _gapLo < _gapHi
+            ? (actualMs >= _gapLo && actualMs <= _gapHi)
+            : (actualMs >= _gapLo || actualMs <= _gapHi); // wraparound across 1-second boundary
         if (_msOk) {
           // Good ms: rename via TW's quickedit-out widget, then compute cancelAt from actual DOM ms
           if (p.note) {
@@ -1294,12 +1331,14 @@
           if (cancelAt < Date.now() + 2000) cancelAt = Date.now() + 2000;
           console.log('[AutoSender SC] ms=' + actualMs + ' ok. Cancelar em ' + Math.round(_cancelMs/1000) + 's às ' + new Date(cancelAt).toLocaleTimeString('pt-PT'));
           titleEl.textContent = '🔄 Snipe Cancel — Aguardando cancelamento';
+          _scheduleCancelClick();
         } else {
           // Bad ms: cancel immediately, retry after troops return
           _retrying = true;
           cancelAt  = Date.now() + 2000;
           console.warn('[AutoSender SC] ms=' + actualMs + ' fora da janela (' + _gapLo + '-' + _gapHi + ']. Cancelar e tentar novamente.');
           titleEl.textContent = '🔄 Snipe Cancel — ms fora da janela, a cancelar…';
+          _scheduleCancelClick();
         }
       } else {
         _applyEstimate();
@@ -1308,12 +1347,13 @@
 
     // Fallback when actual ms is unavailable: use sentAt estimate
     function _applyEstimate() {
-      if (!p.gapAfterMs || !p.sentAt) { cancelAt = Date.now() + Math.max(2000, p.cancelMs || 2000); return; }
+      if (!p.gapAfterMs || !p.sentAt) { cancelAt = Date.now() + Math.max(2000, p.cancelMs || 2000); _scheduleCancelClick(); return; }
       var _midGap = Math.floor((p.gapAfterMs + p.gapBeforeMs) / 2);
       var _est    = Math.max(2000, Math.round((_midGap - p.sentAt) / 2 / 1000) * 1000);
       cancelAt    = p.sentAt + _est;
       if (cancelAt < Date.now() + 2000) cancelAt = Date.now() + 2000;
       titleEl.textContent = '🔄 Snipe Cancel — Aguardando cancelamento';
+      _scheduleCancelClick();
     }
 
     render();

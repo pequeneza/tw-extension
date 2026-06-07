@@ -14,6 +14,7 @@
     botToken: "",
     chatId: "",
     notifyOnCaptcha: true,
+    notifyOnSend: true,
     cooldownMs: 5 * 60 * 1000,
   };
 
@@ -171,6 +172,53 @@
     const world = gd.world ?? "?";
     const time = new Date().toLocaleTimeString("pt-PT");
     sendTelegram(`✅ xBot: Teste de notificacao!\nMundo: ${world}\nHora: ${time}`);
+  });
+
+  function fmtTime(ms) {
+    if (!ms) return "—";
+    const d = new Date(ms);
+    const p2 = (n) => String(n).padStart(2, "0");
+    const p3 = (n) => String(n).padStart(3, "0");
+    return `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}.${p3(d.getMilliseconds())}`;
+  }
+
+  function readDomArrivalMs(tgt) {
+    // Find a command-row whose quickedit-label contains the target coords
+    const rows = document.querySelectorAll(".command-row");
+    for (const row of rows) {
+      const label = row.querySelector(".quickedit-label");
+      if (!label || !label.textContent.includes(tgt)) continue;
+      const endEl = row.querySelector("[data-endtime]");
+      if (!endEl) continue;
+      const s = parseInt(endEl.getAttribute("data-endtime"), 10);
+      if (!isNaN(s) && s > 0) return s * 1000;
+    }
+    return null;
+  }
+
+  function buildSentMsg(e) {
+    const confirmedArrival = readDomArrivalMs(e.tgt);
+    const arrivalMs  = confirmedArrival || e.arrival || null;
+    const sendMs     = (arrivalMs && e.travelMs) ? arrivalMs - e.travelMs : (e.launch || null);
+    const unitsStr   = Object.entries(e.units || {})
+      .filter(([, n]) => n > 0)
+      .map(([u, n]) => `${u}:${n}`)
+      .join(", ") || "—";
+    const isSnipe   = !!e.cancelAfterMs;
+    const typeLabel = isSnipe ? "🎯 Snipe" : (e.type === "support" ? "🛡 Support" : "⚔️ Attack");
+    let msg = `${typeLabel} enviado!\nDe: ${e.src}\nPara: ${e.tgt}`;
+    msg += `\nEnvio: ${fmtTime(sendMs)}\nChegada: ${fmtTime(arrivalMs)}`;
+    if (isSnipe && e.gapAfterMs && e.gapBeforeMs) {
+      msg += `\nGap: ${fmtTime(e.gapAfterMs)} → ${fmtTime(e.gapBeforeMs)}`;
+    }
+    msg += `\nUnidades: ${unitsStr}`;
+    if (e.note) msg += `\nNota: ${e.note}`;
+    return msg;
+  }
+
+  document.addEventListener("xbot:autosender:sent", (ev) => {
+    if (!_settings.notifyOnSend) return;
+    maybeSend("autosend", buildSentMsg(ev.detail));
   });
 
   // Initial broadcast

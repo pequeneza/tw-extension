@@ -960,6 +960,14 @@
           emitState();
           hideConfirmCountdown();
           try { sessionStorage.removeItem(SS_CONF); } catch (e) {}
+          var _sp = { id: cmd.id, src: cmd.src, tgt: cmd.tgt, type: cmd.type,
+                      units: cmd.units, launch: cmd.launch, arrival: cmd.arrival,
+                      note: cmd.note || '', cancelAfterMs: cmd.cancelAfterMs || null,
+                      gapAfterMs: cmd.gapAfterMs || null, gapBeforeMs: cmd.gapBeforeMs || null,
+                      travelMs: cmd.travelMs || null };
+          setTimeout(function() {
+            document.dispatchEvent(new CustomEvent('xbot:autosender:sent', { detail: _sp }));
+          }, 0);
 
           if (cmd.gapAfterMs && cmd.gapBeforeMs) {
             // Write cancel pending state BEFORE the confirm click fires so it's

@@ -25,6 +25,7 @@ interface TelegramSettings {
   botToken: string;
   chatId: string;
   notifyOnCaptcha: boolean;
+  notifyOnSend: boolean;
   cooldownMs: number;
 }
 
@@ -38,6 +39,7 @@ const DEFAULT_SETTINGS: TelegramSettings = {
   botToken: "",
   chatId: "",
   notifyOnCaptcha: true,
+  notifyOnSend: true,
   cooldownMs: 5 * 60 * 1000,
 };
 
@@ -292,6 +294,20 @@ function SettingsTab({
               <span className="toggle-thumb" />
             </span>
           </label>
+          <label className="field-check">
+            <span className="field-check-text">
+              <span className="field-label">Comando enviado (Autosender)</span>
+              <span className="field-help">Notifica quando o Autosender disparar um ataque, suporte ou snipe</span>
+            </span>
+            <span className="toggle" onClick={(e) => e.stopPropagation()}>
+              <input
+                type="checkbox"
+                checked={settings.notifyOnSend ?? true}
+                onChange={(e) => onChange("notifyOnSend", e.target.checked)}
+              />
+              <span className="toggle-thumb" />
+            </span>
+          </label>
         </div>
 
         <div className="cfg-section">
@@ -360,6 +376,7 @@ export function TelegramView({
         botToken: state.botToken,
         chatId: state.chatId,
         notifyOnCaptcha: state.notifyOnCaptcha,
+        notifyOnSend: state.notifyOnSend ?? true,
         cooldownMs: state.cooldownMs,
       });
       setDirty(false);

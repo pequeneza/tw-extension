@@ -29,6 +29,46 @@
   var originBadgeEnabled   = _cfg.originBadgeEnabled  !== undefined ? _cfg.originBadgeEnabled  : true;
   var autoFakeEnabled      = _cfg.autoFakeEnabled      !== undefined ? _cfg.autoFakeEnabled      : false;
   var autoFakeWindowMs     = (_cfg.autoFakeWindowSec   !== undefined ? _cfg.autoFakeWindowSec    : 10) * 1000;
+  var pageDelayMs          =  _cfg.pageDelayMs         !== undefined ? _cfg.pageDelayMs          : 1500;
+
+  // ── Paged auto-label state machine ──────────────────────────────────────────
+  var AUTOLABEL_RUN_KEY = 'mlr_autolabel_run';
+
+  function getRunState() {
+    try { var r = sessionStorage.getItem(AUTOLABEL_RUN_KEY); return r ? JSON.parse(r) : null; }
+    catch (e) { return null; }
+  }
+  function setRunState(s) {
+    try {
+      if (s) sessionStorage.setItem(AUTOLABEL_RUN_KEY, JSON.stringify(s));
+      else   sessionStorage.removeItem(AUTOLABEL_RUN_KEY);
+    } catch (e) {}
+  }
+  // Returns the 0-indexed page TW actually rendered (from pagination <strong> tag).
+  // Returns -1 when there is no pagination (single page = page 0).
+  function getRenderedPage() {
+    var $items = window.$('.paged-nav-item');
+    if (!$items.length) return -1;
+    var $td = $items.first().closest('td');
+    if (!$td.length) return -1;
+    var text = window.$.trim($td.find('strong').text()).replace(/[^0-9]/g, '');
+    var n = parseInt(text, 10);
+    return isNaN(n) ? -1 : n - 1;  // TW shows 1-indexed; convert to 0-indexed
+  }
+
+  function buildIncomingsUrl(page) {
+    var vid         = (window.game_data && window.game_data.village && window.game_data.village.id) || '';
+    var search      = location.search;
+    var tMatch      = search.match(/[?&]t=(\d+)/);
+    var typeMatch   = search.match(/[?&]type=([^&]*)/);
+    var subMatch    = search.match(/[?&]subtype=([^&]*)/);
+    var tParam      = tMatch    ? '&t='       + tMatch[1]    : '';
+    var typeParam   = typeMatch ? '&type='    + typeMatch[1]  : '';
+    var subtypeParam = subMatch ? '&subtype=' + subMatch[1]   : '';
+    return location.pathname + '?village=' + vid +
+           '&screen=overview_villages&mode=incomings' +
+           typeParam + subtypeParam + '&group=0&page=' + page + tParam;
+  }
 
   // ── Change 1: Revised PALETTE — stronger, distinct two-tone colors ──────────
   var PALETTE = {
@@ -364,32 +404,13 @@
 
     setTimeout(function () {
       clearInterval(tickId);
-
-      // Change 3: remove ETA bar
       window.$('#mlr-eta-bar').remove();
-
-      // Change 5: clear deadline
-      _etiquetaDeadline = null;
-
-      /* Select all row checkboxes via TW's own helper */
-      var $selectAll = $form.find('input.selectAll, #select_all');
-      if ($selectAll.length) {
-        $selectAll.prop('checked', true);
-        if (typeof window.selectAll === 'function') {
-          window.selectAll($form[0], true);
-        }
-      } else {
-        $form.find('input[type=checkbox]').prop('checked', true);
-      }
-
-      /* Select the configured label radio */
-      var $radios = $form.find('input[type=radio]');
-      if ($radios.length > labelIndex) {
-        $radios.eq(labelIndex).prop('checked', true);
-      }
-
-      $btn[0].click();
+      _etiquetaDeadline  = null;
       _etiquetaScheduled = false;
+
+      // Start paged run: navigate to group=0&page=0; labeling happens on reload
+      setRunState({ active: true, page: 0 });
+      location.href = buildIncomingsUrl(0);
     }, delayMs);
   }
 
@@ -488,13 +509,90 @@
     });
   }
 
+  // ── Per-page label applier for the paged run ────────────────────────────────
+  var _pagedApplied = false;
+
+  function finishRun() {
+    setRunState(null);
+    location.href = buildIncomingsUrl(-1);
+  }
+
+  function applyLabelAndAdvance(state) {
+    if (_pagedApplied) return;
+    _pagedApplied = true;
+
+    var curPageMatch  = location.search.match(/[?&]page=(\d+)/);
+    var curGroupMatch = location.search.match(/[?&]group=(\d+)/);
+    var curPage  = curPageMatch  ? parseInt(curPageMatch[1],  10) : 0;
+    var curGroup = curGroupMatch ? parseInt(curGroupMatch[1], 10) : -1;
+
+    // Ensure we're on group=0
+    if (curGroup !== 0) {
+      setRunState({ active: true, page: state.page, navigatedTo: state.page });
+      location.href = buildIncomingsUrl(state.page);
+      return;
+    }
+
+    // If we explicitly navigated to a page and TW gave us a different one,
+    // it redirected (out-of-bounds) — we've passed the last page.
+    if (state.navigatedTo !== undefined && curPage !== state.navigatedTo) {
+      finishRun();
+      return;
+    }
+
+    // Not yet on the right page — navigate there after the configured delay
+    if (curPage !== state.page) {
+      setRunState({ active: true, page: state.page, navigatedTo: state.page });
+      setTimeout(function () { location.href = buildIncomingsUrl(state.page); }, pageDelayMs);
+      return;
+    }
+
+    // Confirm TW actually rendered this page (out-of-bounds pages show the last valid page's content)
+    var rendered = getRenderedPage();
+    var effective = rendered >= 0 ? rendered : 0;
+    if (effective !== state.page) {
+      finishRun();
+      return;
+    }
+
+    // We're on the correct page — stop if no rows or no label form
+    var $rows = window.$('#incomings_table tr.nowrap');
+    if (!$rows.length) $rows = window.$('#incomings_table tbody tr');
+    var $btn = window.$('input[type=submit][name=label]');
+    if (!$btn.length || !$rows.length) {
+      finishRun();
+      return;
+    }
+
+    var $form = $btn.closest('form');
+    var $sel  = $form.find('input.selectAll, #select_all');
+    if ($sel.length) {
+      $sel.prop('checked', true);
+      if (typeof window.selectAll === 'function') window.selectAll($form[0], true);
+    } else {
+      $form.find('input[type=checkbox]').prop('checked', true);
+    }
+    var $radios = $form.find('input[type=radio]');
+    if ($radios.length > labelIndex) $radios.eq(labelIndex).prop('checked', true);
+
+    // Advance page; clear navigatedTo so the TW reload isn't mistaken for a redirect
+    setRunState({ active: true, page: state.page + 1 });
+    $btn[0].click();
+    // TW reloads to this same page → next tick sees page mismatch → navigates forward with navigatedTo set
+  }
+
   // ── Main polling loop (incomings table) ─────────────────────────────────────
   function runIncomingsTable() {
     function tick() {
       var $rows = window.$('#incomings_table tr.nowrap');
       if (!$rows.length) $rows = window.$('#incomings_table tbody tr');
 
-      scheduleAutoEtiqueta();
+      var _runState = getRunState();
+      if (_runState && _runState.active) {
+        applyLabelAndAdvance(_runState);
+      } else {
+        scheduleAutoEtiqueta();
+      }
 
       $rows.each(function (nr, row) {
         var $row     = window.$(row);
@@ -739,6 +837,8 @@
 
     var isIncomingsTable = location.href.indexOf('screen=overview_villages') !== -1 &&
                            location.href.indexOf('mode=incomings') !== -1;
+
+    if (!isIncomingsTable && getRunState()) setRunState(null);
 
     if (isIncomingsTable) {
       runIncomingsTable();

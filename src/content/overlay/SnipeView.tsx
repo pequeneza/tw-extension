@@ -464,6 +464,8 @@ function computeCandidates(
   troops: VillageTroops[],
   target: Coord,
   speedFactor: number,
+  maxCandidates = 15,
+  minTroops = 0,
 ): Candidate[] {
   const a = incomings[gapIdx];
   const b = incomings[gapIdx + 1];
@@ -498,11 +500,15 @@ function computeCandidates(
     const allowedUnits = UNIT_ORDER_FAST_TO_SLOW
       .filter((u) => UNIT_MIN_PER_FIELD[u]! <= chosenMpf)
       .filter((u) => (src.troops[u] ?? 0) > 0);
+    if (minTroops > 0) {
+      const total = allowedUnits.reduce((s, u) => s + (src.troops[u] ?? 0), 0);
+      if (total < minTroops) continue;
+    }
     out.push({ src, chosenSlowestUnit: chosen.unit, sendMs: chosen.sendMs, arrivalMs: chosen.arrivalMs, allowedUnits });
   }
 
   out.sort((x, y) => x.sendMs - y.sendMs);
-  return out.slice(0, 15);
+  return out.slice(0, maxCandidates);
 }
 
 /* ─── Recall computation ──────────────────────────────────────────────────── */
@@ -826,11 +832,15 @@ function useCountdown(sendMs: number, active: boolean) {
 }
 
 /* ─── CandidateCard ───────────────────────────────────────────────────────── */
-function CandidateCard({ candidate, target, midGapArrivalMs, gapLabel, onQueue, queued }: {
+function CandidateCard({ candidate, target, midGapArrivalMs, gapLabel, onQueue, queued,
+                         gapAfterMs, gapBeforeMs, speedFactor }: {
   candidate: Candidate; target: Coord; midGapArrivalMs: number;
   gapLabel: string;
   onQueue: (entry: SnipeQueueEntry) => void;
   queued: boolean;
+  gapAfterMs: number;
+  gapBeforeMs: number;
+  speedFactor: number;
 }) {
   const [amounts, setAmounts] = useState<Record<string, number>>(() =>
     Object.fromEntries(candidate.allowedUnits.map((u) => [u, 0]))
@@ -839,7 +849,29 @@ function CandidateCard({ candidate, target, midGapArrivalMs, gapLabel, onQueue, 
     Object.fromEntries(candidate.allowedUnits.map((u) => [u, "0"]))
   );
   const [timerActive, setTimerActive] = useState(false);
-  const { display, past } = useCountdown(candidate.sendMs, timerActive);
+
+  const effectiveSlowest = [...UNIT_ORDER_FAST_TO_SLOW].reverse().find((u) => (amounts[u] ?? 0) > 0) ?? null;
+  const timingMismatch   = effectiveSlowest !== null && effectiveSlowest !== candidate.chosenSlowestUnit;
+
+  const recomputedTiming = useMemo(() => {
+    if (!effectiveSlowest || effectiveSlowest === candidate.chosenSlowestUnit) return null;
+    const tMs      = travelMs(effectiveSlowest, candidate.src.coord, target, speedFactor);
+    const earliest = (gapAfterMs  + 1) - tMs;
+    const latest   = (gapBeforeMs - 1) - tMs;
+    if (earliest > latest) return null;
+    const sendForMid = midGapArrivalMs - tMs;
+    const send       = Math.min(latest, Math.max(earliest, sendForMid));
+    const arrival    = send + tMs;
+    if (!(arrival > gapAfterMs && arrival < gapBeforeMs)) return null;
+    if (send < getServerNowMs()) return null;
+    return { sendMs: send, arrivalMs: arrival };
+  }, [effectiveSlowest, candidate.src.coord, candidate.chosenSlowestUnit,
+      target, speedFactor, gapAfterMs, gapBeforeMs, midGapArrivalMs]);
+
+  const activeSendMs    = recomputedTiming?.sendMs    ?? candidate.sendMs;
+  const activeArrivalMs = recomputedTiming?.arrivalMs ?? candidate.arrivalMs;
+
+  const { display, past } = useCountdown(activeSendMs, timerActive);
 
   useEffect(() => {
     setAmounts(Object.fromEntries(candidate.allowedUnits.map((u) => [u, 0])));
@@ -886,15 +918,16 @@ function CandidateCard({ candidate, target, midGapArrivalMs, gapLabel, onQueue, 
       source: `${x}|${y}`,
       sourceVillageId: candidate.src.villageId,
       target,
-      chosenSlowestUnit: candidate.chosenSlowestUnit,
+      chosenSlowestUnit: effectiveSlowest ?? candidate.chosenSlowestUnit,
       units,
-      sendMs: candidate.sendMs,
-      arrivalMs: candidate.arrivalMs,
+      sendMs: activeSendMs,
+      arrivalMs: activeArrivalMs,
       midGapArrivalMs,
     });
     setAmounts(Object.fromEntries(candidate.allowedUnits.map((u) => [u, 0])));
     setDrafts(Object.fromEntries(candidate.allowedUnits.map((u) => [u, "0"])));
-  }, [candidate, amounts, target, gapLabel, midGapArrivalMs, onQueue]);
+  }, [candidate, amounts, target, gapLabel, midGapArrivalMs, onQueue,
+      activeSendMs, activeArrivalMs, effectiveSlowest]);
 
   const allowedSet   = new Set(candidate.allowedUnits);
   // Render in standard TW display order, not in algorithmic fast-to-slow order
@@ -906,8 +939,8 @@ function CandidateCard({ candidate, target, midGapArrivalMs, gapLabel, onQueue, 
       <div className="snipe-card-header">
         <span className="snipe-card-coord">{x}|{y}</span>
         <span className="snipe-card-meta">
-          slowest: <strong>{candidate.chosenSlowestUnit}</strong>
-          &nbsp;·&nbsp;send: <strong>{fmtDateMs(candidate.sendMs)}</strong>
+          slowest: <strong>{effectiveSlowest ?? candidate.chosenSlowestUnit}</strong>
+          &nbsp;·&nbsp;send: <strong>{fmtDateMs(activeSendMs)}</strong>
         </span>
       </div>
       <div className="snipe-card-row">
@@ -922,7 +955,7 @@ function CandidateCard({ candidate, target, midGapArrivalMs, gapLabel, onQueue, 
         <button
           className={`btn${queued ? " btn-save btn-save--saved" : " btn-save btn-save--dirty"}`}
           onClick={handleQueue}
-          disabled={past || !hasSelection}
+          disabled={past || !hasSelection || (timingMismatch && !recomputedTiming)}
         >🎯 Queue</button>
       </div>
       <div className="snipe-units">
@@ -955,6 +988,25 @@ function CandidateCard({ candidate, target, midGapArrivalMs, gapLabel, onQueue, 
           );
         })}
       </div>
+      {timingMismatch && (
+        recomputedTiming ? (
+          <div style={{
+            marginTop: 6, padding: "4px 8px", borderRadius: 5, fontSize: 11,
+            color: "var(--n300)", background: "rgba(13,148,136,0.08)",
+            border: "1px solid rgba(13,148,136,0.25)",
+          }}>
+            ↻ Send time recomputed for <strong>{effectiveSlowest}</strong>: <strong>{fmtDateMs(recomputedTiming.sendMs).split(" ")[1]}</strong>
+          </div>
+        ) : (
+          <div style={{
+            marginTop: 6, padding: "4px 8px", borderRadius: 5, fontSize: 11,
+            color: "var(--r500)", background: "rgba(198,40,40,0.08)",
+            border: "1px solid rgba(198,40,40,0.3)",
+          }}>
+            ⚠ <strong>{effectiveSlowest}</strong> cannot fit in this gap — include <strong>{candidate.chosenSlowestUnit}</strong> or select different units.
+          </div>
+        )
+      )}
     </div>
   );
 }
@@ -979,13 +1031,16 @@ function GapPill({ idx, label, afterMs, beforeMs, selected, onClick }: {
 }
 
 /* ─── ManualTab ───────────────────────────────────────────────────────────── */
-function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor, onQueue, queuedSources }: {
+function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor, onQueue, queuedSources,
+                     maxVillages, minTroops }: {
   troops: VillageTroops[];
   loadingTroops: boolean;
   onLoadTroops: () => void;
   speedFactor: number;
   onQueue: (entry: SnipeQueueEntry) => void;
   queuedSources: Set<string>;
+  maxVillages: number;
+  minTroops: number;
 }) {
   const saved = loadManualState();
 
@@ -1078,7 +1133,7 @@ function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor, onQueue, 
   const gapB       = incomings[gapIdx + 1];
   const midGapMs   = gapA && gapB ? Math.floor((gapA.arrivalMs + gapB.arrivalMs) / 2) : 0;
   const candidates = computed && target && gapA && gapB
-    ? computeCandidates(incomings, gapIdx, troops, target, speedFactor)
+    ? computeCandidates(incomings, gapIdx, troops, target, speedFactor, maxVillages, minTroops)
     : [];
 
   return (
@@ -1216,6 +1271,9 @@ function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor, onQueue, 
                 gapLabel={`Gap #${gapIdx + 1}`}
                 onQueue={onQueue}
                 queued={queuedSources.has(srcKey)}
+                gapAfterMs={gapA!.arrivalMs}
+                gapBeforeMs={gapB!.arrivalMs}
+                speedFactor={speedFactor}
               />
             );
           })}
@@ -1239,6 +1297,10 @@ export function SnipeView({ visible, onBack }: {
   const [unitSpeedDraft, setUnitSpeedDraft] = useState("1.0");
   const [sigil,          setSigil]          = useState(0);
   const [sigilDraft,     setSigilDraft]     = useState("0");
+  const [maxVillages,    setMaxVillages]    = useState(15);
+  const [maxVillagesDraft, setMaxVillagesDraft] = useState("15");
+  const [minTroops,      setMinTroops]      = useState(0);
+  const [minTroopsDraft, setMinTroopsDraft] = useState("0");
 
   // Troops shared between both tabs
   const [troops,        setTroops]        = useState<VillageTroops[]>([]);
@@ -1366,7 +1428,7 @@ export function SnipeView({ visible, onBack }: {
   const sigilRatio  = 1 + sigil / 100;
   const speedFactor = 1 / (gameSpeed * unitSpeed * sigilRatio);
   const candidates  = target && filteredIncomings.length >= 2
-    ? computeCandidates(filteredIncomings, gapIdx, effectiveTroops, target, speedFactor)
+    ? computeCandidates(filteredIncomings, gapIdx, effectiveTroops, target, speedFactor, maxVillages, minTroops)
     : [];
 
   const gapA     = filteredIncomings[gapIdx];
@@ -1472,6 +1534,24 @@ export function SnipeView({ visible, onBack }: {
                 value={sigilDraft}
                 onChange={(e) => { setSigilDraft(e.target.value); const n = parseFloat(e.target.value); if (Number.isFinite(n) && n >= 0) setSigil(n); }}
                 onBlur={() => { const n = parseFloat(sigilDraft); if (!Number.isFinite(n) || n < 0) setSigilDraft(String(sigil)); }}
+              />
+            </label>
+            <label className="snipe-speed-label">
+              Max villages
+              <input className="input snipe-speed-input" type="number" step={1} min={1} max={200}
+                title="Maximum number of candidate villages to show per gap"
+                value={maxVillagesDraft}
+                onChange={(e) => { setMaxVillagesDraft(e.target.value); const n = parseInt(e.target.value, 10); if (Number.isFinite(n) && n >= 1) setMaxVillages(n); }}
+                onBlur={() => { const n = parseInt(maxVillagesDraft, 10); if (!Number.isFinite(n) || n < 1) setMaxVillagesDraft(String(maxVillages)); }}
+              />
+            </label>
+            <label className="snipe-speed-label">
+              Min troops
+              <input className="input snipe-speed-input" type="number" step={1} min={0}
+                title="Hide villages with fewer total troops than this value"
+                value={minTroopsDraft}
+                onChange={(e) => { setMinTroopsDraft(e.target.value); const n = parseInt(e.target.value, 10); if (Number.isFinite(n) && n >= 0) setMinTroops(n); }}
+                onBlur={() => { const n = parseInt(minTroopsDraft, 10); if (!Number.isFinite(n) || n < 0) setMinTroopsDraft(String(minTroops)); }}
               />
             </label>
             {tab === "auto" && (
@@ -1586,6 +1666,9 @@ export function SnipeView({ visible, onBack }: {
                           gapLabel={filteredIncomings[gapIdx + 1]?.label || `Gap #${gapIdx + 1}`}
                           onQueue={addToSnipeQueue}
                           queued={queuedSources.has(srcKey)}
+                          gapAfterMs={gapA!.arrivalMs}
+                          gapBeforeMs={gapB!.arrivalMs}
+                          speedFactor={speedFactor}
                         />
                       );
                     })}
@@ -1605,6 +1688,8 @@ export function SnipeView({ visible, onBack }: {
             speedFactor={speedFactor}
             onQueue={addToSnipeQueue}
             queuedSources={queuedSources}
+            maxVillages={maxVillages}
+            minTroops={minTroops}
           />
         )}
 

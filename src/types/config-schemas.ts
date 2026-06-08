@@ -521,6 +521,16 @@ export const MODULE_CONFIG_SCHEMAS: ModuleConfigSchemas = {
         step: 1,
         help: "Max seconds between send times for attacks from the same origin to be treated as script-fired fakes.",
       },
+      {
+        key: "pageDelayMs",
+        label: "Page-advance delay (ms)",
+        type: "number",
+        default: 1500,
+        min: 500,
+        max: 10000,
+        step: 500,
+        help: "How long to wait before navigating to the next incomings page during the auto-label run.",
+      },
     ],
   },
 

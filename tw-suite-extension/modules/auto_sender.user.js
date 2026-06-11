@@ -1174,19 +1174,14 @@
     var done = false;
     var _cancelScheduled = false;
 
-    // Once cancelAt is known, schedule the cancel click.
-    // Cancel only needs second-level precision (TW cancelMs is always whole seconds),
-    // so no sub-ms busy-wait is needed. Wake up 500 ms early to absorb background-tab
-    // timer jitter, then spin-wait at most 600 ms for the target second to arrive.
+    // Once cancelAt is known, schedule the cancel click using the same
+    // scheduleClickAtMs precision engine as the confirm-button firing:
+    // performance.now() busy-wait, getEffectiveServerNowMs() for drift correction,
+    // visibilitychange early-entry, SharedWorker-backed coarse timer.
     function _scheduleCancelClick() {
       if (_cancelScheduled || cancelAt === null || done) return;
       _cancelScheduled = true;
-      var wakeMs = Math.max(0, cancelAt - Date.now() - 500);
-      setTimeout(function() {
-        var deadline = cancelAt + 100; // allow up to 100 ms over (still same TW second)
-        while (!done && Date.now() < cancelAt && Date.now() < deadline) {}
-        doCancel();
-      }, wakeMs);
+      scheduleClickAtMs(cancelAt, doCancel, null, null);
     }
 
     // Repurpose the overlay to show a "gap missed" message + close countdown
@@ -1335,15 +1330,19 @@
           var _sentSec    = Math.floor((p.sentAt || Date.now()) / 1000) * 1000;
           var _sentWithMs = _sentSec + actualMs;
           var _cancelMs   = Math.max(2000, Math.round((_midGap - _sentWithMs) / 2 / 1000) * 1000);
-          cancelAt = _sentWithMs + _cancelMs;
-          if (cancelAt < Date.now() + 2000) cancelAt = Date.now() + 2000;
+          // Use midGap-based formula: cancelAt = _midGap - _cancelMs + 20.
+          // This equals TW_sentAt + _cancelMs + 20 regardless of whether _sentWithMs is
+          // off by ±1000ms (local clock drift). _sentWithMs + _cancelMs + 20 is vulnerable
+          // because a 1-second error in _sentWithMs propagates directly to cancelAt.
+          cancelAt = _midGap - _cancelMs + 20;
+          if (cancelAt < Date.now() + 2000) cancelAt = Date.now() + 2020;
           console.log('[AutoSender SC] ms=' + actualMs + ' ok. Cancelar em ' + Math.round(_cancelMs/1000) + 's às ' + new Date(cancelAt).toLocaleTimeString('pt-PT'));
           titleEl.textContent = '🔄 Snipe Cancel — Aguardando cancelamento';
           _scheduleCancelClick();
         } else {
           // Bad ms: cancel immediately, retry after troops return
           _retrying = true;
-          cancelAt  = Date.now() + 2000;
+          cancelAt  = Date.now() + 2020;
           console.warn('[AutoSender SC] ms=' + actualMs + ' fora da janela (' + _gapLo + '-' + _gapHi + ']. Cancelar e tentar novamente.');
           titleEl.textContent = '🔄 Snipe Cancel — ms fora da janela, a cancelar…';
           _scheduleCancelClick();
@@ -1355,11 +1354,11 @@
 
     // Fallback when actual ms is unavailable: use sentAt estimate
     function _applyEstimate() {
-      if (!p.gapAfterMs || !p.sentAt) { cancelAt = Date.now() + Math.max(2000, p.cancelMs || 2000); _scheduleCancelClick(); return; }
+      if (!p.gapAfterMs || !p.sentAt) { cancelAt = Date.now() + Math.max(2000, p.cancelMs || 2000) + 20; _scheduleCancelClick(); return; }
       var _midGap = Math.floor((p.gapAfterMs + p.gapBeforeMs) / 2);
       var _est    = Math.max(2000, Math.round((_midGap - p.sentAt) / 2 / 1000) * 1000);
-      cancelAt    = p.sentAt + _est;
-      if (cancelAt < Date.now() + 2000) cancelAt = Date.now() + 2000;
+      cancelAt    = p.sentAt + _est + 20; // 20ms into the valid window
+      if (cancelAt < Date.now() + 2000) cancelAt = Date.now() + 2020;
       titleEl.textContent = '🔄 Snipe Cancel — Aguardando cancelamento';
       _scheduleCancelClick();
     }

@@ -15,9 +15,33 @@ import React, {
 import { computeScheduledByVillage, subtractScheduled } from "./queue-utils";
 
 /* ─── Constants ───────────────────────────────────────────────────────────── */
-const STORAGE_KEY_PLAN   = "tw_gap_snipe_plan_v12";
-const STORAGE_KEY_MANUAL = "tw_snipe_manual_timings_v1";
-const SNIPE_QUEUE_KEY    = "tw_snipe_queue_v1";
+const STORAGE_KEY_PLAN     = "tw_gap_snipe_plan_v12";
+const STORAGE_KEY_MANUAL   = "tw_snipe_manual_timings_v1";
+const SNIPE_QUEUE_KEY      = "tw_snipe_queue_v1";
+const STORAGE_KEY_SETTINGS = "tw_snipe_settings_v1";
+
+interface SnipeSettings {
+  gameSpeed: number;
+  unitSpeed: number;
+  sigil: number;
+  maxVillages: number;
+  unitMinTroops: Record<string, number>;
+}
+
+const DEFAULT_SNIPE_SETTINGS: SnipeSettings = {
+  gameSpeed: 1.0, unitSpeed: 1.0, sigil: 0, maxVillages: 15, unitMinTroops: {},
+};
+
+function loadSnipeSettings(): SnipeSettings {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_SETTINGS);
+    if (!raw) return { ...DEFAULT_SNIPE_SETTINGS };
+    return { ...DEFAULT_SNIPE_SETTINGS, ...(JSON.parse(raw) as Partial<SnipeSettings>) };
+  } catch { return { ...DEFAULT_SNIPE_SETTINGS }; }
+}
+function saveSnipeSettings(s: SnipeSettings) {
+  localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(s));
+}
 
 const UNIT_MIN_PER_FIELD: Record<string, number> = {
   spear: 18, sword: 22, axe: 18, archer: 18, spy: 9,
@@ -87,7 +111,7 @@ interface RecallGapCandidate {
   reason?: string;
 }
 
-type Tab = "auto" | "manual" | "recall";
+type Tab = "auto" | "manual" | "recall" | "settings";
 
 /* ─── Helpers ─────────────────────────────────────────────────────────────── */
 function pad2(n: number) { return String(n).padStart(2, "0"); }
@@ -465,7 +489,7 @@ function computeCandidates(
   target: Coord,
   speedFactor: number,
   maxCandidates = 15,
-  minTroops = 0,
+  unitMinTroops: Record<string, number> = {},
 ): Candidate[] {
   const a = incomings[gapIdx];
   const b = incomings[gapIdx + 1];
@@ -500,9 +524,12 @@ function computeCandidates(
     const allowedUnits = UNIT_ORDER_FAST_TO_SLOW
       .filter((u) => UNIT_MIN_PER_FIELD[u]! <= chosenMpf)
       .filter((u) => (src.troops[u] ?? 0) > 0);
-    if (minTroops > 0) {
-      const total = allowedUnits.reduce((s, u) => s + (src.troops[u] ?? 0), 0);
-      if (total < minTroops) continue;
+    {
+      let passesFilter = true;
+      for (const [unit, minAmt] of Object.entries(unitMinTroops)) {
+        if (minAmt > 0 && (src.troops[unit] ?? 0) < minAmt) { passesFilter = false; break; }
+      }
+      if (!passesFilter) continue;
     }
     out.push({ src, chosenSlowestUnit: chosen.unit, sendMs: chosen.sendMs, arrivalMs: chosen.arrivalMs, allowedUnits });
   }
@@ -1032,7 +1059,7 @@ function GapPill({ idx, label, afterMs, beforeMs, selected, onClick }: {
 
 /* ─── ManualTab ───────────────────────────────────────────────────────────── */
 function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor, onQueue, queuedSources,
-                     maxVillages, minTroops }: {
+                     maxVillages, unitMinTroops }: {
   troops: VillageTroops[];
   loadingTroops: boolean;
   onLoadTroops: () => void;
@@ -1040,7 +1067,7 @@ function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor, onQueue, 
   onQueue: (entry: SnipeQueueEntry) => void;
   queuedSources: Set<string>;
   maxVillages: number;
-  minTroops: number;
+  unitMinTroops: Record<string, number>;
 }) {
   const saved = loadManualState();
 
@@ -1133,7 +1160,7 @@ function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor, onQueue, 
   const gapB       = incomings[gapIdx + 1];
   const midGapMs   = gapA && gapB ? Math.floor((gapA.arrivalMs + gapB.arrivalMs) / 2) : 0;
   const candidates = computed && target && gapA && gapB
-    ? computeCandidates(incomings, gapIdx, troops, target, speedFactor, maxVillages, minTroops)
+    ? computeCandidates(incomings, gapIdx, troops, target, speedFactor, maxVillages, unitMinTroops)
     : [];
 
   return (
@@ -1291,16 +1318,21 @@ export function SnipeView({ visible, onBack }: {
 
   const [nobleOnly, setNobleOnly] = useState(false);
 
-  const [gameSpeed,      setGameSpeed]      = useState(1.0);
-  const [unitSpeed,      setUnitSpeed]      = useState(1.0);
-  const [gameSpeedDraft, setGameSpeedDraft] = useState("1.0");
-  const [unitSpeedDraft, setUnitSpeedDraft] = useState("1.0");
-  const [sigil,          setSigil]          = useState(0);
-  const [sigilDraft,     setSigilDraft]     = useState("0");
-  const [maxVillages,    setMaxVillages]    = useState(15);
-  const [maxVillagesDraft, setMaxVillagesDraft] = useState("15");
-  const [minTroops,      setMinTroops]      = useState(0);
-  const [minTroopsDraft, setMinTroopsDraft] = useState("0");
+  const [settings, setSettings] = useState<SnipeSettings>(loadSnipeSettings);
+
+  function updateSettings(partial: Partial<SnipeSettings>) {
+    const next = { ...settings, ...partial };
+    setSettings(next);
+    saveSnipeSettings(next);
+  }
+
+  const [gsD,  setGsD]  = useState(() => String(settings.gameSpeed));
+  const [usD,  setUsD]  = useState(() => String(settings.unitSpeed));
+  const [sigD, setSigD] = useState(() => String(settings.sigil));
+  const [mvD,  setMvD]  = useState(() => String(settings.maxVillages));
+  const [unitMinDrafts, setUnitMinDrafts] = useState<Record<string, string>>(() =>
+    Object.fromEntries(UNIT_ORDER_DISPLAY.map(u => [u, String(settings.unitMinTroops[u] ?? 0)]))
+  );
 
   // Troops shared between both tabs
   const [troops,        setTroops]        = useState<VillageTroops[]>([]);
@@ -1384,7 +1416,7 @@ export function SnipeView({ visible, onBack }: {
       commandType: "Support",
       slowestUnit: e.chosenSlowestUnit,
       units: e.units,
-      sigilPct: sigil > 0 ? sigil : undefined,
+      sigilPct: settings.sigil > 0 ? settings.sigil : undefined,
     }));
     localStorage.setItem("twKuminGluer_queue", JSON.stringify(kuminEntries));
     const vid = readCurrentVillageId();
@@ -1425,10 +1457,10 @@ export function SnipeView({ visible, onBack }: {
   const currentVillageId = readCurrentVillageId();
   const srcCoord: Coord | null = filteredIncomings[0]?.target ?? incomings[0]?.target ?? null;
 
-  const sigilRatio  = 1 + sigil / 100;
-  const speedFactor = 1 / (gameSpeed * unitSpeed * sigilRatio);
+  const sigilRatio  = 1 + settings.sigil / 100;
+  const speedFactor = 1 / (settings.gameSpeed * settings.unitSpeed * sigilRatio);
   const candidates  = target && filteredIncomings.length >= 2
-    ? computeCandidates(filteredIncomings, gapIdx, effectiveTroops, target, speedFactor, maxVillages, minTroops)
+    ? computeCandidates(filteredIncomings, gapIdx, effectiveTroops, target, speedFactor, settings.maxVillages, settings.unitMinTroops)
     : [];
 
   const gapA     = filteredIncomings[gapIdx];
@@ -1448,8 +1480,9 @@ export function SnipeView({ visible, onBack }: {
     if (!visible || speedFetchedRef.current) return;
     speedFetchedRef.current = true;
     fetchWorldSpeed().then(({ gameSpeed: gs, unitSpeed: us }) => {
-      setGameSpeed(gs);  setGameSpeedDraft(String(gs));
-      setUnitSpeed(us);  setUnitSpeedDraft(String(us));
+      updateSettings({ gameSpeed: gs, unitSpeed: us });
+      setGsD(String(gs));
+      setUsD(String(us));
     });
   }, [visible]);
 
@@ -1480,7 +1513,8 @@ export function SnipeView({ visible, onBack }: {
         <div className="cfg-header-text">
           <span className="cfg-title">Snipe Scheduler</span>
           <span className="cfg-subtitle">
-            {tab === "recall" ? "snipe cancel" :
+            {tab === "settings" ? "configuration" :
+             tab === "recall" ? "snipe cancel" :
              tab === "manual" ? "teammate support" :
              target ? `target ${target.x}|${target.y}` : "gap snipe planner"}
           </span>
@@ -1504,59 +1538,30 @@ export function SnipeView({ visible, onBack }: {
               className={`btn${tab === "recall" ? " btn-save" : " btn-ghost"}`}
               onClick={() => setTab("recall")}
             >🔄 Snipe Cancel</button>
+            <button
+              className={`btn${tab === "settings" ? " btn-save" : " btn-ghost"}`}
+              onClick={() => setTab("settings")}
+            >⚙ Settings</button>
           </div>
         </div>
 
-        {/* ── Speed settings — shared ── */}
-        <div className="cfg-section">
-          <div className="section-label">Speed settings</div>
+        {/* ── Shared slim strip: Sigil + (auto only) Refresh + Nobre only ── */}
+        <div className="cfg-section" style={{ paddingBottom: 4 }}>
           <div className="snipe-speed-row">
-            <label className="snipe-speed-label">
-              Game speed
-              <input className="input snipe-speed-input" type="number" step={0.01} min={0.1} max={10}
-                value={gameSpeedDraft}
-                onChange={(e) => { setGameSpeedDraft(e.target.value); const n = parseFloat(e.target.value); if (Number.isFinite(n) && n > 0) setGameSpeed(n); }}
-                onBlur={() => { const n = parseFloat(gameSpeedDraft); if (!Number.isFinite(n) || n <= 0) setGameSpeedDraft(String(gameSpeed)); }}
-              />
-            </label>
-            <label className="snipe-speed-label">
-              Unit speed
-              <input className="input snipe-speed-input" type="number" step={0.01} min={0.1} max={2}
-                value={unitSpeedDraft}
-                onChange={(e) => { setUnitSpeedDraft(e.target.value); const n = parseFloat(e.target.value); if (Number.isFinite(n) && n > 0) setUnitSpeed(n); }}
-                onBlur={() => { const n = parseFloat(unitSpeedDraft); if (!Number.isFinite(n) || n <= 0) setUnitSpeedDraft(String(unitSpeed)); }}
-              />
-            </label>
             <label className="snipe-speed-label">
               Sigil %
               <input className="input snipe-speed-input" type="number" step={1} min={0} max={100}
                 title="Sigil item bonus — reduces troop travel time (e.g. 20 = 20% faster)"
-                value={sigilDraft}
-                onChange={(e) => { setSigilDraft(e.target.value); const n = parseFloat(e.target.value); if (Number.isFinite(n) && n >= 0) setSigil(n); }}
-                onBlur={() => { const n = parseFloat(sigilDraft); if (!Number.isFinite(n) || n < 0) setSigilDraft(String(sigil)); }}
-              />
-            </label>
-            <label className="snipe-speed-label">
-              Max villages
-              <input className="input snipe-speed-input" type="number" step={1} min={1} max={200}
-                title="Maximum number of candidate villages to show per gap"
-                value={maxVillagesDraft}
-                onChange={(e) => { setMaxVillagesDraft(e.target.value); const n = parseInt(e.target.value, 10); if (Number.isFinite(n) && n >= 1) setMaxVillages(n); }}
-                onBlur={() => { const n = parseInt(maxVillagesDraft, 10); if (!Number.isFinite(n) || n < 1) setMaxVillagesDraft(String(maxVillages)); }}
-              />
-            </label>
-            <label className="snipe-speed-label">
-              Min troops
-              <input className="input snipe-speed-input" type="number" step={1} min={0}
-                title="Hide villages with fewer total troops than this value"
-                value={minTroopsDraft}
-                onChange={(e) => { setMinTroopsDraft(e.target.value); const n = parseInt(e.target.value, 10); if (Number.isFinite(n) && n >= 0) setMinTroops(n); }}
-                onBlur={() => { const n = parseInt(minTroopsDraft, 10); if (!Number.isFinite(n) || n < 0) setMinTroopsDraft(String(minTroops)); }}
+                value={sigD}
+                onChange={(e) => { setSigD(e.target.value); const n = parseFloat(e.target.value); if (Number.isFinite(n) && n >= 0) updateSettings({ sigil: n }); }}
+                onBlur={() => { const n = parseFloat(sigD); if (!Number.isFinite(n) || n < 0) setSigD(String(settings.sigil)); }}
               />
             </label>
             {tab === "auto" && (
               <>
-                <button className="btn btn-ghost" onClick={loadIncomings}>↺ Refresh</button>
+                <button className="btn btn-ghost"
+                  style={{ fontSize: 11, padding: "2px 8px" }}
+                  onClick={loadIncomings}>↺ Refresh</button>
                 <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, cursor: "pointer", userSelect: "none" }}>
                   <input type="checkbox" checked={nobleOnly} onChange={(e) => setNobleOnly(e.target.checked)} />
                   Nobre only
@@ -1688,8 +1693,8 @@ export function SnipeView({ visible, onBack }: {
             speedFactor={speedFactor}
             onQueue={addToSnipeQueue}
             queuedSources={queuedSources}
-            maxVillages={maxVillages}
-            minTroops={minTroops}
+            maxVillages={settings.maxVillages}
+            unitMinTroops={settings.unitMinTroops}
           />
         )}
 
@@ -1704,6 +1709,89 @@ export function SnipeView({ visible, onBack }: {
             loadingTroops={loadingTroops}
             onLoadTroops={loadTroops}
           />
+        )}
+
+        {/* ── SETTINGS TAB ── */}
+        {tab === "settings" && (
+          <>
+            <div className="cfg-section">
+              <div className="section-label">Speed &amp; timing</div>
+              <div className="snipe-speed-row">
+                <label className="snipe-speed-label">
+                  Game speed
+                  <input className="input snipe-speed-input" type="number" step={0.01} min={0.1} max={10}
+                    value={gsD}
+                    onChange={(e) => { setGsD(e.target.value); const n = parseFloat(e.target.value); if (Number.isFinite(n) && n > 0) updateSettings({ gameSpeed: n }); }}
+                    onBlur={() => { const n = parseFloat(gsD); if (!Number.isFinite(n) || n <= 0) setGsD(String(settings.gameSpeed)); }}
+                  />
+                </label>
+                <label className="snipe-speed-label">
+                  Unit speed
+                  <input className="input snipe-speed-input" type="number" step={0.01} min={0.1} max={2}
+                    value={usD}
+                    onChange={(e) => { setUsD(e.target.value); const n = parseFloat(e.target.value); if (Number.isFinite(n) && n > 0) updateSettings({ unitSpeed: n }); }}
+                    onBlur={() => { const n = parseFloat(usD); if (!Number.isFinite(n) || n <= 0) setUsD(String(settings.unitSpeed)); }}
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="cfg-section">
+              <div className="section-label">Filters</div>
+              <div className="snipe-speed-row">
+                <label className="snipe-speed-label">
+                  Max villages
+                  <input className="input snipe-speed-input" type="number" step={1} min={1} max={200}
+                    title="Maximum number of candidate villages to show per gap"
+                    value={mvD}
+                    onChange={(e) => { setMvD(e.target.value); const n = parseInt(e.target.value, 10); if (Number.isFinite(n) && n >= 1) updateSettings({ maxVillages: n }); }}
+                    onBlur={() => { const n = parseInt(mvD, 10); if (!Number.isFinite(n) || n < 1) setMvD(String(settings.maxVillages)); }}
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="cfg-section">
+              <div className="section-label">
+                Min troops per unit
+                <span style={{ fontSize: 10, fontWeight: 400, marginLeft: 6, color: "var(--n400)", textTransform: "none" }}>
+                  villages below these minimums are hidden (0 = no filter)
+                </span>
+              </div>
+              <div className="snipe-units" style={{ padding: "4px 14px 8px" }}>
+                {UNIT_ORDER_DISPLAY.map(unit => (
+                  <div key={unit} className={`snipe-unitbox${(settings.unitMinTroops[unit] ?? 0) > 0 ? " snipe-unitbox--on" : ""}`}>
+                    <img src={unitIconUrl(unit)} alt={unit} className="snipe-unit-icon"
+                      onClick={() => {
+                        const cur = settings.unitMinTroops[unit] ?? 0;
+                        const next = cur > 0 ? 0 : 1;
+                        setUnitMinDrafts(p => ({ ...p, [unit]: String(next) }));
+                        updateSettings({ unitMinTroops: { ...settings.unitMinTroops, [unit]: next } });
+                      }}
+                    />
+                    <input
+                      className="snipe-unit-input"
+                      type="number" min={0} step={1}
+                      value={unitMinDrafts[unit] ?? "0"}
+                      onChange={e => {
+                        const raw = e.target.value;
+                        setUnitMinDrafts(p => ({ ...p, [unit]: raw }));
+                        const n = parseInt(raw, 10);
+                        if (Number.isFinite(n) && n >= 0)
+                          updateSettings({ unitMinTroops: { ...settings.unitMinTroops, [unit]: n } });
+                      }}
+                      onBlur={() => {
+                        const n = parseInt(unitMinDrafts[unit] ?? "0", 10);
+                        const val = Number.isFinite(n) && n >= 0 ? n : 0;
+                        setUnitMinDrafts(p => ({ ...p, [unit]: String(val) }));
+                        updateSettings({ unitMinTroops: { ...settings.unitMinTroops, [unit]: val } });
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
         )}
 
         {/* Snipe queue */}

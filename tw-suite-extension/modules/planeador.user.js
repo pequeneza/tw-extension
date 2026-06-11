@@ -6,14 +6,6 @@
 // @match        https://*.tribalwars.com.pt/game.php*
 // ==/UserScript==
 
-/* ── Standalone injection (bookmarklet) ────────────────────────────────────
-   Paste in the browser address bar or save as a bookmark:
-
-   javascript:$.getScript('RAW_URL_TO_planeador.user.js');void(0);
-
-   Replace RAW_URL_TO_planeador.user.js with the direct URL to this file
-   (e.g. a Dropbox raw link, GitHub raw URL, or your own server).
-   ─────────────────────────────────────────────────────────────────────── */
 
 (function () {
     'use strict';

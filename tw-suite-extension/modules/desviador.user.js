@@ -19,6 +19,10 @@
     const ALERT_SEC_KEY        = 'twDesviador_alertSec';
     const TAB_CMD_KEY          = 'twDesviador_tabCmdId';  /* sessionStorage — per tab  */
     const LAST_CANCEL_KEY      = 'twDesviador_lastCancel';/* cross-tab cancel signal   */
+    const MUTE_KEY             = 'twDesviador_muteSound'; /* beep mute flag             */
+    const ALL_COMMANDS_KEY     = 'twDesviador_allCommands';/* ignore [Desviar] filter   */
+    const BLACKLIST_KEY        = 'twDesviador_blacklist'; /* comma-sep act-upon tags    */
+    const WHITELIST_KEY        = 'twDesviador_whitelist'; /* comma-sep ignore tags      */
     const RECOVERY_STAGGER_MS  = 3_000;  /* inter-tab delay during missed-fire recovery  */
     const POPUP_TIMEOUT_MS     = 6_000;  /* max wait for popup rows / support btn        */
 
@@ -153,7 +157,15 @@
         function dispatchState() {
             updateTitle();
             document.dispatchEvent(new CustomEvent('xbot:desviador:state', {
-                detail: { active, scheduled: Array.from(scheduledDetails.values()), notifPermission: Notification.permission },
+                detail: {
+                    active,
+                    scheduled: Array.from(scheduledDetails.values()),
+                    notifPermission: Notification.permission,
+                    muted: localStorage.getItem(MUTE_KEY) === '1',
+                    allCommands: localStorage.getItem(ALL_COMMANDS_KEY) === '1',
+                    blacklist: localStorage.getItem(BLACKLIST_KEY) ?? '[Desviar]',
+                    whitelist: localStorage.getItem(WHITELIST_KEY) ?? '',
+                },
             }));
         }
 
@@ -162,9 +174,26 @@
             if (type === 'start' && !active)   startMonitoring();
             else if (type === 'stop' && active) stopAll();
             else if (type === 'requestNotif')   Notification.requestPermission().then(dispatchState);
+            else if (type === 'toggleMute') {
+                localStorage.setItem(MUTE_KEY, localStorage.getItem(MUTE_KEY) === '1' ? '0' : '1');
+                dispatchState();
+            }
+            else if (type === 'setAllCommands') {
+                localStorage.setItem(ALL_COMMANDS_KEY, e.detail.value ? '1' : '0');
+                dispatchState();
+            }
+            else if (type === 'setBlacklist') {
+                localStorage.setItem(BLACKLIST_KEY, e.detail.value ?? '');
+                dispatchState();
+            }
+            else if (type === 'setWhitelist') {
+                localStorage.setItem(WHITELIST_KEY, e.detail.value ?? '');
+                dispatchState();
+            }
         });
 
         function playBeep() {
+            if (localStorage.getItem(MUTE_KEY) === '1') return;
             try {
                 const ctx  = new (window.AudioContext || window.webkitAudioContext)();
                 const osc  = ctx.createOscillator();
@@ -219,8 +248,11 @@
             if (!active) return;
 
             const cancelSec      = parseInt(localStorage.getItem(CANCEL_SEC_KEY) || '300', 10);
-            const cancelMs       = cancelSec * 1000;
+            const cancelMs       = Math.min(cancelSec * 1000, 600_000);
             const alertSec       = parseInt(localStorage.getItem(ALERT_SEC_KEY)  || '60',  10);
+            const allCommands    = localStorage.getItem(ALL_COMMANDS_KEY) === '1';
+            const blacklist      = (localStorage.getItem(BLACKLIST_KEY) ?? '[Desviar]').split(',').map(t => t.trim()).filter(Boolean);
+            const whitelist      = (localStorage.getItem(WHITELIST_KEY) ?? '').split(',').map(t => t.trim()).filter(Boolean);
             const BASE_OFFSET_MS = 35_000;
 
             const serverNowMs = (
@@ -240,7 +272,8 @@
                 const labelText = Array.from(labelEl.childNodes)
                     .filter(n => n.nodeType === Node.TEXT_NODE)
                     .map(n => n.textContent).join('').trim();
-                if (!labelText.includes('[Desviar]')) return;
+                if (whitelist.length > 0 && whitelist.some(tag => labelText.includes(tag))) return;
+                if (!allCommands && !blacklist.some(tag => labelText.includes(tag))) return;
 
                 const directTds = Array.from(row.querySelectorAll(':scope > td'));
                 const arrivalTd = directTds[5];
@@ -341,11 +374,25 @@
                  * Sort ascending by fireAt; walk backwards so each entry fires
                  * at least STAGGER_MS before the one after it.
                  * The latest keeps its natural time; earlier ones are pushed back. */
-                const STAGGER_MS = 20_000;
+                const STAGGER_MS = 30_000;
                 newEntries.sort((a, b) => a.fireAt - b.fireAt);
                 for (let i = newEntries.length - 2; i >= 0; i--) {
                     const max = newEntries[i + 1].fireAt - STAGGER_MS;
                     if (newEntries[i].fireAt > max) newEntries[i].fireAt = max;
+                }
+
+                /* ── 4b. Clamp: prevent fires outside the cancel window ──────────────
+                 * If the backward stagger pushed entry[i] before
+                 * (arrivalMs - cancelMs + 5s), the cancel fires before the attack
+                 * lands. Clamp up, then forward-propagate to restore stagger gaps. */
+                const CANCEL_SAFETY_MS = 5_000;
+                newEntries.forEach(e => {
+                    const earliest = e.arrivalMs - e.cancelMs + CANCEL_SAFETY_MS;
+                    if (e.fireAt < earliest) e.fireAt = earliest;
+                });
+                for (let i = 1; i < newEntries.length; i++) {
+                    const min = newEntries[i - 1].fireAt + STAGGER_MS;
+                    if (newEntries[i].fireAt < min) newEntries[i].fireAt = min;
                 }
 
                 /* ── 5. Schedule timers ── */
@@ -433,7 +480,16 @@
         /* Skip "Anterior" — it almost always picks the current village (invalid support
          * target) which leaves a stale "Alvo inválido" message on the page.
          * Go straight to the own-villages popup and iterate until one works. */
-        setTimeout(() => tryOwnVillage(p, new Set()), 600);
+        setTimeout(() => {
+            const errBox = document.querySelector('.error_box .content');
+            if (errBox && /unidades suficientes|sem unidades/i.test(errBox.textContent || '')) {
+                console.warn('[Desviador] Sem unidades para desviar — a fechar.');
+                clearPending(p.cmdId);
+                window.close();
+                return;
+            }
+            tryOwnVillage(p, new Set());
+        }, 600);
     }
 
     function tryOwnVillage(p, tried) {
@@ -525,6 +581,15 @@
                     if (coord) next.add(coord);
                     tryOwnVillage(p, next);
                     return;
+                }
+                if (elapsed > 500 && document.querySelector('.error_box')) {
+                    const errText = document.querySelector('.error_box .content')?.textContent || '';
+                    if (/unidades suficientes|sem unidades/i.test(errText)) {
+                        console.warn('[Desviador] Sem unidades para desviar — a fechar.');
+                        clearPending(p.cmdId);
+                        window.close();
+                        return;
+                    }
                 }
                 if (elapsed > POPUP_TIMEOUT_MS) {
                     console.error('[Desviador] Timeout a aguardar botão de apoio. A abortar.');
@@ -754,6 +819,14 @@
         if (!cmdId) return;
         const p = getPending(cmdId);
         if (!p || p.phase !== 'confirm') return;
+
+        const errBox = document.querySelector('.error_box .content');
+        if (errBox && /unidades suficientes|sem unidades/i.test(errBox.textContent || '')) {
+            console.warn('[Desviador] Sem unidades para desviar (confirm) — a fechar.');
+            clearPending(p.cmdId);
+            window.close();
+            return;
+        }
 
         const btn = document.querySelector('#troop_confirm_submit');
         if (!btn) {

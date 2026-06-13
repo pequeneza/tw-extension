@@ -1,21 +1,12 @@
-/**
- * DesviadorView — in-overlay panel for the Desviador userscript.
- *
- * Communication with the main-world userscript uses CustomEvents:
- *   xbot:desviador:state  (userscript → React)  — pushes active state every ~1 s
- *   xbot:desviador:cmd    (React → userscript)  — start / stop / requestNotif
- *
- * Config values (cancelSec, alertSec) are persisted in localStorage and read
- * directly by the userscript; no need to send them via CustomEvent.
- */
-
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
-/* ─── Storage keys (must match desviador.user.js) ────────────────────────── */
-const CANCEL_SEC_KEY = "twDesviador_cancelSec";
-const ALERT_SEC_KEY  = "twDesviador_alertSec";
+const CANCEL_SEC_KEY    = "twDesviador_cancelSec";
+const ALERT_SEC_KEY     = "twDesviador_alertSec";
+const MUTE_KEY          = "twDesviador_muteSound";
+const ALL_COMMANDS_KEY  = "twDesviador_allCommands";
+const BLACKLIST_KEY     = "twDesviador_blacklist";
+const WHITELIST_KEY     = "twDesviador_whitelist";
 
-/* ─── Types ───────────────────────────────────────────────────────────────── */
 interface ScheduledEntry {
   cmdId: string;
   label: string;
@@ -29,6 +20,10 @@ interface DesvState {
   active: boolean;
   scheduled: ScheduledEntry[];
   notifPermission: "granted" | "denied" | "default";
+  muted: boolean;
+  allCommands: boolean;
+  blacklist: string;
+  whitelist: string;
 }
 
 interface CancelToast {
@@ -36,7 +31,6 @@ interface CancelToast {
   village: string;
 }
 
-/* ─── Helpers ─────────────────────────────────────────────────────────────── */
 function useMountAnim(trigger: boolean) {
   const [anim, setAnim] = useState(false);
   useEffect(() => {
@@ -57,6 +51,61 @@ function fmtCountdown(ms: number) {
   return h > 0 ? `${h}:${pad2(m)}:${pad2(s)}` : `${pad2(m)}:${pad2(s)}`;
 }
 
+function parseTags(raw: string): string[] {
+  return raw.split(",").map(t => t.trim()).filter(Boolean);
+}
+
+function serializeTags(tags: string[]): string {
+  return tags.join(",");
+}
+
+/* ─── TagInput ── chip-based tag editor ─────────────────────────────────── */
+function TagInput({
+  tags,
+  placeholder,
+  variant,
+  onChange,
+}: {
+  tags: string[];
+  placeholder: string;
+  variant: "black" | "white";
+  onChange: (tags: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+
+  const commit = () => {
+    const t = draft.trim();
+    if (t && !tags.includes(t)) onChange([...tags, t]);
+    setDraft("");
+  };
+
+  return (
+    <div className={`desv-tag-input desv-tag-input--${variant}`}>
+      {tags.map(tag => (
+        <span key={tag} className="desv-tag-chip">
+          {tag}
+          <button
+            className="desv-tag-chip-x"
+            onClick={() => onChange(tags.filter(x => x !== tag))}
+          >×</button>
+        </span>
+      ))}
+      <input
+        className="desv-tag-draft"
+        value={draft}
+        placeholder={tags.length === 0 ? placeholder : ""}
+        onChange={e => setDraft(e.target.value)}
+        onKeyDown={e => {
+          if (e.key === "Enter" || e.key === ",") { e.preventDefault(); commit(); }
+          if (e.key === "Backspace" && draft === "" && tags.length > 0)
+            onChange(tags.slice(0, -1));
+        }}
+        onBlur={commit}
+      />
+    </div>
+  );
+}
+
 /* ─── DesviadorView ───────────────────────────────────────────────────────── */
 export function DesviadorView({
   visible,
@@ -67,11 +116,15 @@ export function DesviadorView({
 }) {
   const anim = useMountAnim(visible);
 
-  const [desvState, setDesvState] = useState<DesvState>({
+  const [desvState, setDesvState] = useState<DesvState>(() => ({
     active: false,
     scheduled: [],
     notifPermission: "default",
-  });
+    muted: localStorage.getItem(MUTE_KEY) === "1",
+    allCommands: localStorage.getItem(ALL_COMMANDS_KEY) === "1",
+    blacklist: localStorage.getItem(BLACKLIST_KEY) ?? "[Desviar]",
+    whitelist: localStorage.getItem(WHITELIST_KEY) ?? "",
+  }));
 
   const [cancelSec, setCancelSec] = useState(() =>
     parseInt(localStorage.getItem(CANCEL_SEC_KEY) || "300", 10)
@@ -79,18 +132,17 @@ export function DesviadorView({
   const [alertSec, setAlertSec] = useState(() =>
     parseInt(localStorage.getItem(ALERT_SEC_KEY) || "60", 10)
   );
+  const [showCfg, setShowCfg] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [toasts, setToasts] = useState<CancelToast[]>([]);
   const toastIdRef = useRef(0);
 
-  /* Clock tick for countdown columns */
   useEffect(() => {
     if (!visible) return;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [visible]);
 
-  /* Receive state from the userscript */
   useEffect(() => {
     const handler = (e: Event) =>
       setDesvState((e as CustomEvent<DesvState>).detail);
@@ -98,7 +150,6 @@ export function DesviadorView({
     return () => document.removeEventListener("xbot:desviador:state", handler);
   }, []);
 
-  /* Cancel confirmation toasts */
   useEffect(() => {
     const handler = (e: Event) => {
       const { village } = (e as CustomEvent<{ village: string }>).detail;
@@ -110,7 +161,6 @@ export function DesviadorView({
     return () => document.removeEventListener("xbot:desviador:canceled", handler);
   }, []);
 
-  /* Send command to the userscript */
   const sendCmd = useCallback((detail: Record<string, unknown>) => {
     document.dispatchEvent(new CustomEvent("xbot:desviador:cmd", { detail }));
   }, []);
@@ -129,7 +179,16 @@ export function DesviadorView({
     localStorage.setItem(ALERT_SEC_KEY, String(v));
   };
 
-  /* Unfired entries sorted by fireAt (next to fire first), fired entries at the bottom */
+  const handleBlacklistChange = (tags: string[]) => {
+    const value = serializeTags(tags);
+    sendCmd({ type: "setBlacklist", value });
+  };
+
+  const handleWhitelistChange = (tags: string[]) => {
+    const value = serializeTags(tags);
+    sendCmd({ type: "setWhitelist", value });
+  };
+
   const sorted = [...desvState.scheduled].sort((a, b) => {
     if (a.fired !== b.fired) return a.fired ? 1 : -1;
     return a.fireAt - b.fireAt;
@@ -138,6 +197,9 @@ export function DesviadorView({
   const isOnIncomings = /screen=overview_villages.*mode=incomings.*subtype=attacks/.test(
     window.location.href
   );
+
+  const blacklistTags = parseTags(desvState.blacklist);
+  const whitelistTags = parseTags(desvState.whitelist);
 
   return (
     <div
@@ -167,62 +229,120 @@ export function DesviadorView({
           </span>
         </div>
         <button
+          className={`desv-cfg-btn${showCfg ? " desv-cfg-btn--open" : ""}`}
+          onClick={() => setShowCfg(v => !v)}
+          title="Configurações"
+        >⚙</button>
+        <button
           className={`desv-toggle-btn${desvState.active ? " desv-toggle-btn--stop" : ""}`}
-          onClick={() =>
-            sendCmd({ type: desvState.active ? "stop" : "start" })
-          }
+          onClick={() => sendCmd({ type: desvState.active ? "stop" : "start" })}
         >
           {desvState.active ? "■ Parar" : "▶ Desviar"}
         </button>
       </div>
 
-      {/* ── Controls ── */}
-      <div className="desv-controls">
-        <div className="desv-input-row">
-          <span className="desv-row-label">Cancelar após</span>
-          <input
-            className="input desv-num-input"
-            type="number"
-            value={cancelSec}
-            min={60}
-            max={3600}
-            onChange={(e) => handleCancelSec(e.target.value)}
-          />
-          <span className="desv-row-unit">seg</span>
-        </div>
-
-        <div className="desv-input-row">
-          <span className="desv-row-label">Alertar</span>
-          <input
-            className="input desv-num-input"
-            type="number"
-            value={alertSec}
-            min={5}
-            max={300}
-            onChange={(e) => handleAlertSec(e.target.value)}
-          />
-          <span className="desv-row-unit">seg antes</span>
-          <span
-            className={`desv-notif-badge desv-notif-badge--${desvState.notifPermission}`}
-            onClick={() =>
-              desvState.notifPermission === "default" &&
-              sendCmd({ type: "requestNotif" })
-            }
-          >
-            {desvState.notifPermission === "granted"
-              ? "🔔 ativo"
-              : desvState.notifPermission === "denied"
-              ? "🔕 bloqueado"
-              : "sem permissão"}
-          </span>
-        </div>
-
-        {!isOnIncomings && (
-          <div className="desv-page-warn">
-            Navega para os ataques recebidos para usar o Desviador.
+      {/* ── Config panel ── */}
+      {showCfg && (
+        <div className="desv-controls">
+          <div className="desv-input-row">
+            <span className="desv-row-label">Cancelar após</span>
+            <input
+              className="input desv-num-input"
+              type="number"
+              value={cancelSec}
+              min={60}
+              max={600}
+              onChange={e => handleCancelSec(e.target.value)}
+            />
+            <span className="desv-row-unit">seg</span>
           </div>
-        )}
-      </div>
+
+          <div className="desv-input-row">
+            <span className="desv-row-label">Alertar</span>
+            <input
+              className="input desv-num-input"
+              type="number"
+              value={alertSec}
+              min={5}
+              max={300}
+              onChange={e => handleAlertSec(e.target.value)}
+            />
+            <span className="desv-row-unit">seg antes</span>
+            <span
+              className={`desv-notif-badge desv-notif-badge--${desvState.notifPermission}`}
+              onClick={() =>
+                desvState.notifPermission === "default" &&
+                sendCmd({ type: "requestNotif" })
+              }
+            >
+              {desvState.notifPermission === "granted"
+                ? "🔔 ativo"
+                : desvState.notifPermission === "denied"
+                ? "🔕 bloqueado"
+                : "sem permissão"}
+            </span>
+            <button
+              className={`desv-mute-btn${desvState.muted ? " desv-mute-btn--muted" : ""}`}
+              onClick={() => sendCmd({ type: "toggleMute" })}
+              title={desvState.muted ? "Ativar som" : "Silenciar"}
+            >
+              {desvState.muted ? "🔇" : "🔊"}
+            </button>
+          </div>
+
+          <div className="desv-input-row">
+            <span className="desv-row-label">Todos os ataques</span>
+            <input
+              type="checkbox"
+              checked={desvState.allCommands}
+              onChange={e => sendCmd({ type: "setAllCommands", value: e.target.checked })}
+            />
+            <span className="desv-row-unit">ignorar filtro de tags</span>
+          </div>
+
+          {/* Blacklist */}
+          <div className="desv-tag-section">
+            <div className="desv-tag-section-header">
+              <span className="desv-tag-section-label desv-tag-section-label--black">
+                Agir sobre
+              </span>
+              <span className="desv-tag-section-hint">
+                etiquetas que ativam o desvio
+              </span>
+            </div>
+            <TagInput
+              tags={blacklistTags}
+              placeholder="ex: [Desviar]"
+              variant="black"
+              onChange={handleBlacklistChange}
+            />
+          </div>
+
+          {/* Whitelist */}
+          <div className="desv-tag-section">
+            <div className="desv-tag-section-header">
+              <span className="desv-tag-section-label desv-tag-section-label--white">
+                Ignorar
+              </span>
+              <span className="desv-tag-section-hint">
+                etiquetas que bloqueiam o desvio
+              </span>
+            </div>
+            <TagInput
+              tags={whitelistTags}
+              placeholder="ex: [Morto]"
+              variant="white"
+              onChange={handleWhitelistChange}
+            />
+          </div>
+
+          {!isOnIncomings && (
+            <div className="desv-page-warn">
+              Navega para os ataques recebidos para usar o Desviador.
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Cancel toasts ── */}
       {toasts.length > 0 && (
@@ -251,22 +371,14 @@ export function DesviadorView({
               </tr>
             </thead>
             <tbody>
-              {sorted.map((d) => (
+              {sorted.map(d => (
                 <tr key={d.cmdId} className="desv-row">
                   <td className="desv-td desv-td--dot">
-                    <span
-                      className={`desv-dot${d.fired ? " desv-dot--fired" : ""}`}
-                    />
+                    <span className={`desv-dot${d.fired ? " desv-dot--fired" : ""}`} />
                   </td>
-                  <td className="desv-td desv-td--label" title={d.label}>
-                    {d.label}
-                  </td>
+                  <td className="desv-td desv-td--label" title={d.label}>{d.label}</td>
                   <td className="desv-td desv-td--village">{d.villageName}</td>
-                  <td
-                    className={`desv-td desv-mono${
-                      d.fired ? " desv-mono--fired" : ""
-                    }`}
-                  >
+                  <td className={`desv-td desv-mono${d.fired ? " desv-mono--fired" : ""}`}>
                     {d.fired ? "—" : fmtCountdown(d.fireAt - now)}
                   </td>
                   <td className="desv-td desv-mono desv-mono--muted">

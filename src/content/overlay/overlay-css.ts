@@ -1555,6 +1555,30 @@ select.input {
 .desv-notif-badge--granted { background: var(--g-bg); color: var(--g600); border-color: var(--g-br); }
 .desv-notif-badge--denied  { background: var(--r-bg); color: var(--r500); border-color: var(--r-br); }
 
+.desv-mute-btn { padding: 2px 6px; font-size: 12px; line-height: 1.4; background: var(--n100); border: 1px solid var(--n200); border-radius: 4px; color: var(--n500); cursor: pointer; transition: background var(--ease); white-space: nowrap; }
+.desv-mute-btn:hover { background: var(--n200); }
+.desv-mute-btn--muted { background: var(--r-bg); border-color: var(--r-br); color: var(--r500); }
+
+.desv-cfg-btn { padding: 3px 7px; font-size: 13px; background: var(--n100); border: 1px solid var(--n200); border-radius: 4px; color: var(--n500); cursor: pointer; transition: background var(--ease); }
+.desv-cfg-btn:hover { background: var(--n200); }
+.desv-cfg-btn--open { background: var(--b-bg); border-color: var(--b-br); color: var(--b500); }
+
+.desv-tag-section { display: flex; flex-direction: column; gap: 4px; }
+.desv-tag-section-header { display: flex; align-items: center; gap: 6px; }
+.desv-tag-section-label { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 10px; }
+.desv-tag-section-label--black { background: var(--b-bg); color: var(--b500); border: 1px solid var(--b-br); }
+.desv-tag-section-label--white { background: var(--r-bg); color: var(--r500); border: 1px solid var(--r-br); }
+.desv-tag-section-hint { font-size: 11px; color: var(--n400); }
+
+.desv-tag-input { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 28px; padding: 3px 6px; background: var(--n50); border: 1px solid var(--n200); border-radius: 6px; cursor: text; }
+.desv-tag-input:focus-within { border-color: var(--b400); }
+.desv-tag-input--black .desv-tag-chip { background: var(--b-bg); border-color: var(--b-br); color: var(--b500); }
+.desv-tag-input--white .desv-tag-chip { background: var(--r-bg); border-color: var(--r-br); color: var(--r500); }
+.desv-tag-chip { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; padding: 1px 6px; border-radius: 10px; border: 1px solid transparent; font-weight: 500; }
+.desv-tag-chip-x { background: none; border: none; padding: 0 0 0 2px; cursor: pointer; font-size: 13px; line-height: 1; opacity: 0.6; color: inherit; }
+.desv-tag-chip-x:hover { opacity: 1; }
+.desv-tag-draft { flex: 1; min-width: 80px; background: transparent; border: none; outline: none; font-size: 12px; color: var(--n700); padding: 0 2px; }
+
 .desv-page-warn {
   font-size: 11px;
   color: var(--a500);

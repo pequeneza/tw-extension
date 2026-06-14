@@ -103,6 +103,7 @@
          * when multiple past-due entries are recovered simultaneously. */
         toRecover.forEach((d, i) => {
             setTimeout(() => {
+                if (getPending(d.cmdId)) return;
                 setPending({ phase: 'send', village: d.village, cancelMs: d.cancelMs, cmdId: d.cmdId });
                 window.open(`/game.php?${sitterPrefix()}village=${d.village}&screen=place&__desv=${d.cmdId}`, '_blank');
             }, i * RECOVERY_STAGGER_MS);
@@ -265,6 +266,7 @@
             document.querySelectorAll('span.quickedit[data-id]').forEach(qeSpan => {
                 const cmdId = qeSpan.getAttribute('data-id');
                 if (scheduled.has(cmdId)) return;
+                if (getPending(cmdId)) { scheduled.add(cmdId); return; }
                 const row = qeSpan.closest('tr');
                 if (!row) return;
                 const labelEl = qeSpan.querySelector('.quickedit-label');

@@ -376,6 +376,7 @@
         if (typeof s.pendingSendsTTLHours === "undefined") s.pendingSendsTTLHours = 2;
         if (typeof s.hqNormalQueueMaxHours === "undefined" || isNaN(+s.hqNormalQueueMaxHours)) s.hqNormalQueueMaxHours = 6;
         if (typeof s.sendAllIntervalMs === "undefined") s.sendAllIntervalMs = 500;
+        if (typeof s.sendAllJitterMs   === "undefined") s.sendAllJitterMs   = 0;
 
         if (typeof s.settingsOpen === "undefined") s.settingsOpen = false;
         if (typeof s.premiumOptionsOpen === "undefined") s.premiumOptionsOpen = false;
@@ -400,6 +401,7 @@
         s.premiumMaxPlansHardCap = Math.max(1, Math.min(50, parseInt(s.premiumMaxPlansHardCap, 10) || 12));
 
         s.sendAllIntervalMs = Math.max(100, parseInt(s.sendAllIntervalMs, 10) || 500);
+        s.sendAllJitterMs   = Math.max(0,   parseInt(s.sendAllJitterMs,   10) || 0);
 
         s.highPoints = parseInt(s.highPoints, 10) || 12000;
         s.highFarm = parseInt(s.highFarm, 10) || 23000;
@@ -519,15 +521,16 @@
     }
 
     function getOverviewUrls() {
+      const vid = game_data.village.id;
       if (game_data.player.sitter > 0) {
         return {
-          inc: makeURL({ t: game_data.player.id, screen: "overview_villages", mode: "trader", type: "inc", page: "-1" }),
-          prod: makeURL({ t: game_data.player.id, screen: "overview_villages", mode: "prod", page: "-1" })
+          inc:  makeURL({ village: vid, t: game_data.player.id, screen: "overview_villages", mode: "trader", type: "inc" }),
+          prod: makeURL({ village: vid, t: game_data.player.id, screen: "overview_villages", mode: "prod" })
         };
       }
       return {
-        inc: makeURL({ screen: "overview_villages", mode: "trader", type: "inc", page: "-1" }),
-        prod: makeURL({ screen: "overview_villages", mode: "prod", page: "-1" })
+        inc:  makeURL({ village: vid, screen: "overview_villages", mode: "trader", type: "inc" }),
+        prod: makeURL({ village: vid, screen: "overview_villages", mode: "prod" })
       };
     }
 
@@ -630,174 +633,219 @@
       return maxSec;
     }
 
-    async function fetchIncomingOverview(incUrl) {
-      const html = await $.get(incUrl);
-      const $page = $(html);
+    async function fetchIncomingOverview(incBaseUrl) {
       const incomingRes = {};
-      const rows = $page.find("#trades_table tr");
+      const seenRowKeys = new Set();
+      const mobile = !!$("#mobileHeader")[0];
+      let page = 0;
 
-      for (let i = 1; i < rows.length - 1; i++) {
-        const tr = rows[i];
-        const mobile = !!$("#mobileHeader")[0];
+      while (true) {
+        let html;
+        try { html = await $.get(incBaseUrl + `&page=${page}`); }
+        catch (e) { console.warn('[WH] fetchIncomingOverview page', page, 'failed:', e); break; }
+        const $p = $(html);
+        const rows = $p.find("#trades_table tr");
 
-        let villageIDtemp = null;
-        const villageData = {};
+        if (rows.length <= 1) break;
 
-        if (mobile) {
-          const resGroups = tr.children?.[5]?.children?.[1]?.children;
-          if (!resGroups) continue;
-          for (let j = 0; j < resGroups.length; j++) {
-            const $child = $(resGroups[j]);
-            const icon = $child.find(".icon.mheader");
-            if (!icon.length) continue;
-            const classNames = icon.attr("class").split(" ");
-            const resType = classNames[classNames.length - 1];
-            const amt = parseIntSafe($child.text());
-            villageData[resType] = amt;
-            const link = tr.children?.[3]?.children?.[2]?.href;
-            if (link) {
-              const m = link.match(/id=(\d+)/);
-              if (m) villageIDtemp = m[1];
+        let addedThisPage = 0;
+
+        for (let i = 1; i < rows.length - 1; i++) {
+          const tr = rows[i];
+
+          let villageIDtemp = null;
+          const villageData = {};
+
+          if (mobile) {
+            const resGroups = tr.children?.[5]?.children?.[1]?.children;
+            if (!resGroups) continue;
+            for (let j = 0; j < resGroups.length; j++) {
+              const $child = $(resGroups[j]);
+              const icon = $child.find(".icon.mheader");
+              if (!icon.length) continue;
+              const classNames = icon.attr("class").split(" ");
+              const resType = classNames[classNames.length - 1];
+              const amt = parseIntSafe($child.text());
+              villageData[resType] = amt;
+              const link = tr.children?.[3]?.children?.[2]?.href;
+              if (link) {
+                const m = link.match(/id=(\d+)/);
+                if (m) villageIDtemp = m[1];
+              }
+            }
+          } else {
+            const resGroups = tr.children?.[8]?.children;
+            if (!resGroups) continue;
+            for (let j = 0; j < resGroups.length; j++) {
+              const $child = $(resGroups[j]);
+              let classNames;
+              if (($child[0]?.innerHTML || "").indexOf("header") > -1) classNames = $child.find(".icon.header").attr("class").split(" ");
+              else classNames = ($child.attr("class") || "").split(" ");
+              const resType = classNames[classNames.length - 1];
+              const amt = parseIntSafe($child.text());
+              if (!resType) continue;
+              villageData[resType] = amt;
+              const link = tr.children?.[4]?.children?.[0]?.href;
+              if (link) {
+                const m = link.match(/id=(\d+)/);
+                if (m) villageIDtemp = m[1];
+              }
             }
           }
-        } else {
-          const resGroups = tr.children?.[8]?.children;
-          if (!resGroups) continue;
-          for (let j = 0; j < resGroups.length; j++) {
-            const $child = $(resGroups[j]);
-            let classNames;
-            if (($child[0]?.innerHTML || "").indexOf("header") > -1) classNames = $child.find(".icon.header").attr("class").split(" ");
-            else classNames = ($child.attr("class") || "").split(" ");
-            const resType = classNames[classNames.length - 1];
-            const amt = parseIntSafe($child.text());
-            if (!resType) continue;
-            villageData[resType] = amt;
-            const link = tr.children?.[4]?.children?.[0]?.href;
-            if (link) {
-              const m = link.match(/id=(\d+)/);
-              if (m) villageIDtemp = m[1];
-            }
-          }
+
+          if (!villageIDtemp) continue;
+
+          // Deduplicate by destination+resources so page-wrap doesn't cause infinite loop
+          const rowKey = `${villageIDtemp}_${villageData.wood||0}_${villageData.stone||0}_${villageData.iron||0}`;
+          if (seenRowKeys.has(rowKey)) continue;
+          seenRowKeys.add(rowKey);
+
+          if (!incomingRes[villageIDtemp]) incomingRes[villageIDtemp] = { wood: 0, stone: 0, iron: 0 };
+          if (villageData.wood) incomingRes[villageIDtemp].wood += villageData.wood;
+          if (villageData.stone) incomingRes[villageIDtemp].stone += villageData.stone;
+          if (villageData.iron) incomingRes[villageIDtemp].iron += villageData.iron;
+          addedThisPage++;
         }
 
-        if (!villageIDtemp) continue;
-        if (!incomingRes[villageIDtemp]) incomingRes[villageIDtemp] = { wood: 0, stone: 0, iron: 0 };
-        if (villageData.wood) incomingRes[villageIDtemp].wood += villageData.wood;
-        if (villageData.stone) incomingRes[villageIDtemp].stone += villageData.stone;
-        if (villageData.iron) incomingRes[villageIDtemp].iron += villageData.iron;
+        if (addedThisPage === 0) break;
+        page++;
       }
+
       return incomingRes;
     }
 
-    async function fetchProdOverview(prodUrl) {
-      const html = await $.get(prodUrl);
-      const $page = $(html);
-
-      const uniVillage = $page.find("span.bonus_icon_33");
-      const uniRow = uniVillage.length > 0 ? (uniVillage.closest("tr").index() - 1) : -1;
-
+    async function fetchProdOverview(prodBaseUrl) {
+      const allVillagesData = [];
+      const seenIds = new Set();
       const mobile = !!$("#mobileHeader")[0];
-      let villagesData = [];
+      let page = 0;
 
-      if (mobile) {
-        let allWoodObjects = $page.find(".res.mwood,.warn_90.mwood,.warn.mwood");
-        let allClayObjects = $page.find(".res.mstone,.warn_90.mstone,.warn.mstone");
-        let allIronObjects = $page.find(".res.miron,.warn_90.miron,.warn.miron");
-        let allWarehouses = $page.find(".mheader.ressources");
-        let allVillages = $page.find(".quickedit-vn");
-        let allFarms = $page.find(".header.population");
-        let allMerchants = $page.find("#production_table a[href*=\"market\"]");
-        let productionTable = $page.find("#production_table th");
+      while (page < 500) {
+        let html;
+        try { html = await $.get(prodBaseUrl + `&page=${page}`); }
+        catch (e) { console.warn('[WH] fetchProdOverview page', page, 'failed:', e); break; }
+        const $p = $(html);
 
-        if (uniRow >= 0) {
-          allVillages.splice(uniRow, 1);
-          allWoodObjects.splice(uniRow, 1);
-          allClayObjects.splice(uniRow, 1);
-          allIronObjects.splice(uniRow, 1);
-          allWarehouses.splice(uniRow, 1);
-          allFarms.splice(uniRow, 1);
-          allMerchants.splice(uniRow, 1);
-          productionTable.splice(uniRow, 1);
+        if (!$p.find(".quickedit-vn").length) break;
+
+        const uniVillage = $p.find("span.bonus_icon_33");
+        const uniRow = uniVillage.length > 0 ? (uniVillage.closest("tr").index() - 1) : -1;
+
+        let addedThisPage = 0;
+
+        if (mobile) {
+          let allWoodObjects = $p.find(".res.mwood,.warn_90.mwood,.warn.mwood");
+          let allClayObjects = $p.find(".res.mstone,.warn_90.mstone,.warn.mstone");
+          let allIronObjects = $p.find(".res.miron,.warn_90.miron,.warn.miron");
+          let allWarehouses = $p.find(".mheader.ressources");
+          let allVillages = $p.find(".quickedit-vn");
+          let allFarms = $p.find(".header.population");
+          let allMerchants = $p.find("#production_table a[href*=\"market\"]");
+          let productionTable = $p.find("#production_table th");
+
+          if (uniRow >= 0) {
+            allVillages.splice(uniRow, 1);
+            allWoodObjects.splice(uniRow, 1);
+            allClayObjects.splice(uniRow, 1);
+            allIronObjects.splice(uniRow, 1);
+            allWarehouses.splice(uniRow, 1);
+            allFarms.splice(uniRow, 1);
+            allMerchants.splice(uniRow, 1);
+            productionTable.splice(uniRow, 1);
+          }
+
+          for (let i = 0; i < allVillages.length; i++) {
+            const vNode = allVillages[i];
+            const vid = vNode.dataset.id;
+            if (!vid || seenIds.has(vid)) continue;
+            seenIds.add(vid);
+
+            const wood = parseIntSafe(allWoodObjects[i]?.textContent);
+            const stone = parseIntSafe(allClayObjects[i]?.textContent);
+            const iron = parseIntSafe(allIronObjects[i]?.textContent);
+
+            const farmText = allFarms[i]?.parentElement?.innerText || "0/0";
+            const mFarm = farmText.match(/(\d*)\/(\d*)/);
+            const farmUsed = mFarm ? parseInt(mFarm[1], 10) : 0;
+            const farmTot = mFarm ? parseInt(mFarm[2], 10) : 0;
+
+            const wh = parseIntSafe(allWarehouses[i]?.parentElement?.innerText);
+            const availMerch = parseIntSafe(allMerchants[i]?.innerText);
+            const points = parseIntSafe(productionTable[(i * 2) + 1]?.innerText);
+
+            allVillagesData.push({
+              id: vid,
+              points,
+              url: vNode.children?.[0]?.children?.[0]?.href || "#",
+              name: (vNode.innerText || "").trim(),
+              wood, stone, iron,
+              availableMerchants: availMerch,
+              totalMerchants: 999,
+              warehouseCapacity: wh,
+              farmSpaceUsed: farmUsed,
+              farmSpaceTotal: farmTot
+            });
+            addedThisPage++;
+          }
+        } else {
+          let allWoodObjects = $p.find(".res.wood,.warn_90.wood,.warn.wood");
+          let allClayObjects = $p.find(".res.stone,.warn_90.stone,.warn.stone");
+          let allIronObjects = $p.find(".res.iron,.warn_90.iron,.warn.iron");
+          let allVillages = $p.find(".quickedit-vn");
+
+          if (uniRow >= 0) {
+            allVillages.splice(uniRow, 1);
+            allWoodObjects.splice(uniRow, 1);
+            allClayObjects.splice(uniRow, 1);
+            allIronObjects.splice(uniRow, 1);
+          }
+
+          for (let i = 0; i < allVillages.length; i++) {
+            const vNode = allVillages[i];
+            const vid = vNode.dataset.id;
+            if (!vid || seenIds.has(vid)) continue;
+            seenIds.add(vid);
+
+            const wood = parseIntSafe(allWoodObjects[i]?.textContent);
+            const stone = parseIntSafe(allClayObjects[i]?.textContent);
+            const iron = parseIntSafe(allIronObjects[i]?.textContent);
+
+            const wh = parseIntSafe(allIronObjects[i]?.parentElement?.nextElementSibling?.innerHTML);
+
+            const merchText = allIronObjects[i]?.parentElement?.nextElementSibling?.nextElementSibling?.innerText || "0/0";
+            const mMerch = merchText.match(/(\d*)\/(\d*)/);
+            const availMerch = mMerch ? parseInt(mMerch[1], 10) : 0;
+            const totalMerch = mMerch ? parseInt(mMerch[2], 10) : 0;
+
+            const farmText = allIronObjects[i]?.parentElement?.nextElementSibling?.nextElementSibling?.nextElementSibling?.innerText || "0/0";
+            const mFarm = farmText.match(/(\d*)\/(\d*)/);
+            const farmUsed = mFarm ? parseInt(mFarm[1], 10) : 0;
+            const farmTot = mFarm ? parseInt(mFarm[2], 10) : 0;
+
+            const points = parseIntSafe(allWoodObjects[i]?.parentElement?.previousElementSibling?.innerText);
+
+            allVillagesData.push({
+              id: vid,
+              points,
+              url: vNode.children?.[0]?.children?.[0]?.href || "#",
+              name: (vNode.innerText || "").trim(),
+              wood, stone, iron,
+              availableMerchants: availMerch,
+              totalMerchants: totalMerch,
+              warehouseCapacity: wh,
+              farmSpaceUsed: farmUsed,
+              farmSpaceTotal: farmTot
+            });
+            addedThisPage++;
+          }
         }
 
-        for (let i = 0; i < allVillages.length; i++) {
-          const wood = parseIntSafe(allWoodObjects[i]?.textContent);
-          const stone = parseIntSafe(allClayObjects[i]?.textContent);
-          const iron = parseIntSafe(allIronObjects[i]?.textContent);
-
-          const farmText = allFarms[i]?.parentElement?.innerText || "0/0";
-          const mFarm = farmText.match(/(\d*)\/(\d*)/);
-          const farmUsed = mFarm ? parseInt(mFarm[1], 10) : 0;
-          const farmTot = mFarm ? parseInt(mFarm[2], 10) : 0;
-
-          const wh = parseIntSafe(allWarehouses[i]?.parentElement?.innerText);
-          const availMerch = parseIntSafe(allMerchants[i]?.innerText);
-          const points = parseIntSafe(productionTable[(i * 2) + 1]?.innerText);
-
-          const vNode = allVillages[i];
-          villagesData.push({
-            id: vNode.dataset.id,
-            points,
-            url: vNode.children?.[0]?.children?.[0]?.href || "#",
-            name: (vNode.innerText || "").trim(),
-            wood, stone, iron,
-            availableMerchants: availMerch,
-            totalMerchants: 999,
-            warehouseCapacity: wh,
-            farmSpaceUsed: farmUsed,
-            farmSpaceTotal: farmTot
-          });
-        }
-      } else {
-        let allWoodObjects = $page.find(".res.wood,.warn_90.wood,.warn.wood");
-        let allClayObjects = $page.find(".res.stone,.warn_90.stone,.warn.stone");
-        let allIronObjects = $page.find(".res.iron,.warn_90.iron,.warn.iron");
-        let allVillages = $page.find(".quickedit-vn");
-
-        if (uniRow >= 0) {
-          allVillages.splice(uniRow, 1);
-          allWoodObjects.splice(uniRow, 1);
-          allClayObjects.splice(uniRow, 1);
-          allIronObjects.splice(uniRow, 1);
-        }
-
-        for (let i = 0; i < allVillages.length; i++) {
-          const wood = parseIntSafe(allWoodObjects[i]?.textContent);
-          const stone = parseIntSafe(allClayObjects[i]?.textContent);
-          const iron = parseIntSafe(allIronObjects[i]?.textContent);
-
-          const wh = parseIntSafe(allIronObjects[i]?.parentElement?.nextElementSibling?.innerHTML);
-
-          const merchText = allIronObjects[i]?.parentElement?.nextElementSibling?.nextElementSibling?.innerText || "0/0";
-          const mMerch = merchText.match(/(\d*)\/(\d*)/);
-          const availMerch = mMerch ? parseInt(mMerch[1], 10) : 0;
-          const totalMerch = mMerch ? parseInt(mMerch[2], 10) : 0;
-
-          const farmText = allIronObjects[i]?.parentElement?.nextElementSibling?.nextElementSibling?.nextElementSibling?.innerText || "0/0";
-          const mFarm = farmText.match(/(\d*)\/(\d*)/);
-          const farmUsed = mFarm ? parseInt(mFarm[1], 10) : 0;
-          const farmTot = mFarm ? parseInt(mFarm[2], 10) : 0;
-
-          const points = parseIntSafe(allWoodObjects[i]?.parentElement?.previousElementSibling?.innerText);
-
-          const vNode = allVillages[i];
-          villagesData.push({
-            id: vNode.dataset.id,
-            points,
-            url: vNode.children?.[0]?.children?.[0]?.href || "#",
-            name: (vNode.innerText || "").trim(),
-            wood, stone, iron,
-            availableMerchants: availMerch,
-            totalMerchants: totalMerch,
-            warehouseCapacity: wh,
-            farmSpaceUsed: farmUsed,
-            farmSpaceTotal: farmTot
-          });
-        }
+        if (addedThisPage === 0) break;
+        page++;
       }
 
-      villagesData.sort((a, b) => (a.points < b.points ? 1 : -1));
-      return villagesData;
+      allVillagesData.sort((a, b) => (a.points < b.points ? 1 : -1));
+      return allVillagesData;
     }
 
     // ---------------- CORE MATH ----------------
@@ -2170,7 +2218,10 @@
       }
 
       const interval = Math.max(100, parseInt(state.settings.sendAllIntervalMs, 10) || 500);
-      UI.SuccessMessage(`Send All started (${interval}ms).`);
+      const jitter   = Math.max(0,   parseInt(state.settings.sendAllJitterMs,   10) || 0);
+      UI.SuccessMessage(`Send All started (${interval}ms${jitter > 0 ? ` +0–${jitter}ms jitter` : ''}).`);
+
+      const nextDelay = () => interval + Math.floor(Math.random() * (jitter + 1));
 
       const tick = () => {
         if (!state || !state.sendAllTimer) return;
@@ -2190,10 +2241,10 @@
         }
 
         $btn.trigger("click");
-        state.sendAllTimer = setTimeout(tick, interval);
+        state.sendAllTimer = setTimeout(tick, nextDelay());
       };
 
-      state.sendAllTimer = setTimeout(tick, interval);
+      state.sendAllTimer = setTimeout(tick, nextDelay());
     }
 
     function stopSendAll() {
@@ -3588,6 +3639,7 @@
             avgDist:      mappedLinks.length
               ? (mappedLinks.reduce((s, l) => s + (l.distance || 0), 0) / mappedLinks.length).toFixed(1)
               : '—',
+            villageCount: state.villagesData?.length ?? 0,
           }
         : (window.TM_WH_BALANCER_STATE?.summary ?? null);
 

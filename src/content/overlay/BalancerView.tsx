@@ -9,7 +9,7 @@ interface BalancerSettings {
   isMinting: boolean; lowPoints: number; highPoints: number; highFarm: number;
   builtOutPercentage: number; needsMorePercentage: number; reservePerVillage: number; recruitReserve: number;
   maxDistance: number; hqPriorityEnabled: boolean; maxedOutPoints: number;
-  lowPointsLongQueueHours: number; hqNormalQueueMaxHours: number; sendAllEnabled: boolean; sendAllIntervalMs: number;
+  lowPointsLongQueueHours: number; hqNormalQueueMaxHours: number; sendAllEnabled: boolean; sendAllIntervalMs: number; sendAllJitterMs: number;
   useClusters: boolean; numClusters: number; debugMode: boolean;
   pendingSendsTTLHours: number;
   premiumInstantEnabled: boolean; premiumStagingStrategy: string; premiumThreshold: number;
@@ -29,6 +29,7 @@ interface BalancerSummary {
   totalWood: number; totalStone: number; totalIron: number;
   woodAverage: number; stoneAverage: number; ironAverage: number;
   links: number; merchants: number; avgDist: string;
+  villageCount: number;
 }
 interface CoordLock {
   key: string; wood: boolean; stone: boolean; iron: boolean;
@@ -67,7 +68,7 @@ const DEFAULT_SETTINGS: BalancerSettings = {
   isMinting: false, lowPoints: 3000, highPoints: 7000, highFarm: 23000,
   builtOutPercentage: 0.26, needsMorePercentage: 0.7, reservePerVillage: 0, recruitReserve: 20000,
   maxDistance: 9999, hqPriorityEnabled: false, maxedOutPoints: 10471,
-  lowPointsLongQueueHours: 3, hqNormalQueueMaxHours: 6, sendAllEnabled: false, sendAllIntervalMs: 250,
+  lowPointsLongQueueHours: 3, hqNormalQueueMaxHours: 6, sendAllEnabled: false, sendAllIntervalMs: 250, sendAllJitterMs: 0,
   useClusters: false, numClusters: 1, debugMode: false,
   pendingSendsTTLHours: 2,
   premiumInstantEnabled: false, premiumStagingStrategy: "weighted", premiumThreshold: 50000,
@@ -307,11 +308,12 @@ function useCountdown(etaSec: number | null | undefined, msAtFetch: number | nul
 }
 
 /* ─── PpPlanItem ─────────────────────────────────────────────────────────── */
-function PpPlanItem({ plan, onSent, onCancel, sendAllIntervalMs }: {
+function PpPlanItem({ plan, onSent, onCancel, sendAllIntervalMs, sendAllJitterMs }: {
   plan: PpPlan;
   onSent: (src:string,tgt:string,w:number,s:number,i:number)=>void;
   onCancel: (planId: string) => void;
   sendAllIntervalMs: number;
+  sendAllJitterMs: number;
 }) {
   const remaining = useCountdown(plan.lastArrivalEtaSec, plan.lastArrivalMsAtFetch);
   const [tradeAccepted, setTradeAccepted] = React.useState(false);
@@ -328,15 +330,16 @@ function PpPlanItem({ plan, onSent, onCancel, sendAllIntervalMs }: {
     setSendingAll(true);
     const shipments = plan.shipments;
     const interval = Math.max(100, sendAllIntervalMs || 400);
+    const jitter   = Math.max(0, sendAllJitterMs || 0);
     let i = 0;
     function sendNext() {
       if (i >= shipments.length) { setSendingAll(false); setAllShipmentsSent(true); return; }
       const s = shipments[i++]!;
       dispatch("xbot:balancer:send", { src: s.source, tgt: s.target, wood: s.wood, stone: s.stone, iron: s.iron, idx: -1 });
-      timerRef.current = setTimeout(sendNext, interval);
+      timerRef.current = setTimeout(sendNext, interval + Math.floor(Math.random() * (jitter + 1)));
     }
     sendNext();
-  }, [sendingAll, plan.shipments, sendAllIntervalMs]);
+  }, [sendingAll, plan.shipments, sendAllIntervalMs, sendAllJitterMs]);
 
   const handleAcceptTrade = () => {
     dispatch("xbot:balancer:acceptTrade", {
@@ -454,10 +457,11 @@ function PpPlanItem({ plan, onSent, onCancel, sendAllIntervalMs }: {
   );
 }
 
-function PpPlanRows({ plans, onSent, sendAllIntervalMs }: {
+function PpPlanRows({ plans, onSent, sendAllIntervalMs, sendAllJitterMs }: {
   plans: PpPlan[];
   onSent: (src:string,tgt:string,w:number,s:number,i:number)=>void;
   sendAllIntervalMs: number;
+  sendAllJitterMs: number;
 }) {
   const [cancelledIds, setCancelledIds] = React.useState<Set<string>>(new Set());
   const handleCancel = React.useCallback((planId: string) => {
@@ -465,7 +469,7 @@ function PpPlanRows({ plans, onSent, sendAllIntervalMs }: {
   }, []);
   const visible = plans.filter(p => !cancelledIds.has(p.id));
   if (!visible.length) return null;
-  return <>{visible.map(plan => <PpPlanItem key={plan.id} plan={plan} onSent={onSent} onCancel={handleCancel} sendAllIntervalMs={sendAllIntervalMs} />)}</>;
+  return <>{visible.map(plan => <PpPlanItem key={plan.id} plan={plan} onSent={onSent} onCancel={handleCancel} sendAllIntervalMs={sendAllIntervalMs} sendAllJitterMs={sendAllJitterMs} />)}</>;
 }
 
 function PpShipmentRow({ shipment: s, onSent }: { shipment: PpShipment; onSent:(src:string,tgt:string,w:number,st:number,i:number)=>void }) {
@@ -518,10 +522,10 @@ function ClusterMap({ data }: { data: {svg:string;legend:string;numClusters:numb
 }
 
 /* ─── SendListTab ────────────────────────────────────────────────────────── */
-function SendListTab({ links, summary, running, status, detected, clusterMap, ppPlans, sendAllIntervalMs, onRun }: {
+function SendListTab({ links, summary, running, status, detected, clusterMap, ppPlans, sendAllIntervalMs, sendAllJitterMs, onRun }: {
   links:SendLink[]; summary:BalancerSummary|null; running:boolean;
   status:string; detected:boolean; clusterMap:{svg:string;legend:string;numClusters:number}|null;
-  ppPlans:PpPlan[]; sendAllIntervalMs:number; onRun:()=>void;
+  ppPlans:PpPlan[]; sendAllIntervalMs:number; sendAllJitterMs:number; onRun:()=>void;
 }) {
   const [sentIds, setSentIds]       = useState<Set<number>>(new Set());
   const [sendingAll, setSendingAll] = useState(false);
@@ -531,16 +535,22 @@ function SendListTab({ links, summary, running, status, detected, clusterMap, pp
   const handleSendAll = () => {
     const pending = links.map((l,i) => ({l,i})).filter(({i}) => !sentIds.has(i));
     if (!pending.length) return;
-    const interval = sendAllIntervalMs || 250;
+    const interval = Math.max(100, sendAllIntervalMs || 250);
+    const jitter   = Math.max(0, sendAllJitterMs || 0);
     setSendingAll(true); let ptr = 0;
-    iRef.current = setInterval(() => {
-      if (ptr >= pending.length) { clearInterval(iRef.current!); setSendingAll(false); return; }
-      const { l, i } = pending[ptr++]!;
-      const srcId = l.sourceUrl?.match(/village=(\d+)/)?.[1] ?? l.source;
-      const tgtId = l.targetUrl?.match(/village=(\d+)/)?.[1] ?? l.target;
-      dispatch("xbot:balancer:send", { src:srcId, tgt:tgtId, wood:l.wood, stone:l.stone, iron:l.iron, idx:i });
-      setSentIds(p => new Set([...p,i]));
-    }, interval);
+    function scheduleNext() {
+      const delay = interval + Math.floor(Math.random() * (jitter + 1));
+      iRef.current = setTimeout(() => {
+        if (ptr >= pending.length) { setSendingAll(false); return; }
+        const { l, i } = pending[ptr++]!;
+        const srcId = l.sourceUrl?.match(/village=(\d+)/)?.[1] ?? l.source;
+        const tgtId = l.targetUrl?.match(/village=(\d+)/)?.[1] ?? l.target;
+        dispatch("xbot:balancer:send", { src:srcId, tgt:tgtId, wood:l.wood, stone:l.stone, iron:l.iron, idx:i });
+        setSentIds(p => new Set([...p,i]));
+        scheduleNext();
+      }, delay) as unknown as ReturnType<typeof setInterval>;
+    }
+    scheduleNext();
   };
   useEffect(() => () => { if (iRef.current) clearInterval(iRef.current); }, []);
   const unsent = links.filter((_,i) => !sentIds.has(i)).length;
@@ -573,6 +583,10 @@ function SendListTab({ links, summary, running, status, detected, clusterMap, pp
                 <strong>{summary.links}</strong> · <strong>{summary.merchants}</strong> merchants · avg <strong>{summary.avgDist}</strong>
               </span>
             </div>
+            <div className="bal-summary-row">
+              <span className="bal-summary-label">Villages</span>
+              <span className="bal-summary-val"><strong>{summary.villageCount}</strong></span>
+            </div>
           </div>
         </div>
       )}
@@ -602,7 +616,7 @@ function SendListTab({ links, summary, running, status, detected, clusterMap, pp
           </div>
         </div>
       )}
-      <PpPlanRows plans={ppPlans} onSent={() => {}} sendAllIntervalMs={sendAllIntervalMs} />
+      <PpPlanRows plans={ppPlans} onSent={() => {}} sendAllIntervalMs={sendAllIntervalMs} sendAllJitterMs={sendAllJitterMs} />
       {links.length > 0 && (
         <div className="cfg-section" style={{ padding:0 }}>
           <table className="bal-table">
@@ -783,6 +797,7 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
         <div className="section-label">Send All</div>
         {checkField("Enable Send All automation", "sendAllEnabled")}
         {numField("Interval between sends (ms)", "sendAllIntervalMs")}
+        {numField("Send jitter (ms)", "sendAllJitterMs")}
       </div>
       <div className="cfg-section cfg-section-checks">
         <div className="section-label">Developer</div>
@@ -1188,7 +1203,7 @@ export function BalancerView({ visible, onBack }: { visible:boolean; onBack:()=>
           {tabBtn("hq","🏗 HQ")}
         </div>
       </div>
-      {tab==="sendlist" && <SendListTab links={links} summary={summary} running={running} status={status} detected={detected} clusterMap={clusterMap} ppPlans={ppPlans} sendAllIntervalMs={settings.sendAllIntervalMs} onRun={handleRun}/>}
+      {tab==="sendlist" && <SendListTab links={links} summary={summary} running={running} status={status} detected={detected} clusterMap={clusterMap} ppPlans={ppPlans} sendAllIntervalMs={settings.sendAllIntervalMs} sendAllJitterMs={settings.sendAllJitterMs} onRun={handleRun}/>}
       {tab==="settings" && <SettingsTab onSaved={refreshSettings}/>}
       {tab==="locks"    && <LocksTab/>}
       {tab==="hq"       && <HQTab hqEnabled={settings.hqPriorityEnabled} hqNormalQueueMaxHours={settings.hqNormalQueueMaxHours}/>}

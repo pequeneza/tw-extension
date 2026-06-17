@@ -816,6 +816,24 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
     return () => clearInterval(id);
   }, [asNextLaunch]);
 
+  // Resource Buyer next action countdown — polls localStorage written by userscript
+  const [buyerNextAt, setBuyerNextAt] = useState<number | null>(null);
+  const [buyerNow,    setBuyerNow]    = useState(() => Date.now());
+  useEffect(() => {
+    const update = () => {
+      const v = parseInt(localStorage.getItem("tw_buyer_next_action_at") ?? "", 10);
+      setBuyerNextAt(!isNaN(v) && v > Date.now() ? v : null);
+    };
+    update();
+    const id = setInterval(update, 500);
+    return () => clearInterval(id);
+  }, []);
+  useEffect(() => {
+    if (buyerNextAt === null) return;
+    const id = setInterval(() => setBuyerNow(Date.now()), 200);
+    return () => clearInterval(id);
+  }, [buyerNextAt]);
+
   const isIncomingsPage = /screen=overview_villages.*mode=incomings.*subtype=attacks/.test(
     window.location.href
   );
@@ -853,6 +871,7 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
     if (v === "balancer")  return { type: "balancer" };
     if (v === "desviador") return { type: "desviador" };
     if (v === "gluer")      return { type: "gluer" };
+    if (v === "buyer")      return { type: "buyer" };
     if (v === "autosender") return { type: "autosender" };
     if (v === "twutils")    return { type: "twutils" };
     if (v === "telegram")   return { type: "telegram" };
@@ -984,7 +1003,14 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
         {isExchangePage && isOn("resource_buyer") && (
           <button className="trigger trigger--buyer"
             onClick={() => { setViewP({ type: "buyer" }); setOpen(true); }}
-            title="Resource Buyer" aria-label="Resource Buyer">🛒</button>
+            title="Resource Buyer" aria-label="Resource Buyer">
+            🛒
+            {buyerNextAt !== null && (
+              <span className="trigger-timer">
+                {fmtTriggerTimer(Math.max(0, buyerNextAt - buyerNow))}
+              </span>
+            )}
+          </button>
         )}
 
         {isLabelPage && isOn("mass_label_renamer") && (

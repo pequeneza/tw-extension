@@ -1327,13 +1327,14 @@
               }, 400);
             }
           }
-          var _sentSec    = Math.floor((p.sentAt || Date.now()) / 1000) * 1000;
-          var _sentWithMs = _sentSec + actualMs;
+          // Reconstruct TW_sentAt: the confirm click (p.sentAt) may be in the second BEFORE
+          // TW records the departure when latency crosses a second boundary. Flooring to
+          // the click second would make _cancelMs 1000ms too large → cancelAt 1000ms early
+          // → return misses by 2 s. Fix: SnipeView always uses even N, so
+          // (_midGap - TW_sentAt) % 2000 === 0. Use that to pick the correct second.
+          var _sentCandA  = Math.floor((p.sentAt || Date.now()) / 1000) * 1000 + actualMs;
+          var _sentWithMs = ((_midGap - _sentCandA) % 2000 === 0) ? _sentCandA : _sentCandA + 1000;
           var _cancelMs   = Math.max(2000, Math.round((_midGap - _sentWithMs) / 2 / 1000) * 1000);
-          // Use midGap-based formula: cancelAt = _midGap - _cancelMs + 20.
-          // This equals TW_sentAt + _cancelMs + 20 regardless of whether _sentWithMs is
-          // off by ±1000ms (local clock drift). _sentWithMs + _cancelMs + 20 is vulnerable
-          // because a 1-second error in _sentWithMs propagates directly to cancelAt.
           cancelAt = _midGap - _cancelMs + 20;
           if (cancelAt < Date.now() + 2000) cancelAt = Date.now() + 2020;
           console.log('[AutoSender SC] ms=' + actualMs + ' ok. Cancelar em ' + Math.round(_cancelMs/1000) + 's às ' + new Date(cancelAt).toLocaleTimeString('pt-PT'));

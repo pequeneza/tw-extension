@@ -734,7 +734,7 @@ function KuminV2Tab({ queue, now, onSend, onRemove }: {
     borderRadius: 5, color: "var(--n700)", fontFamily: "var(--mono)",
   };
 
-  const COL = 9;
+  const COL = 10;
 
   return (
     <>
@@ -785,6 +785,7 @@ function KuminV2Tab({ queue, now, onSend, onRemove }: {
                 <th style={{ padding: "5px 6px", textAlign: "left", color: "var(--n500)", fontWeight: 600, whiteSpace: "nowrap" }}>Origem</th>
                 <th style={{ padding: "5px 6px", textAlign: "left", color: "var(--n500)", fontWeight: 600, whiteSpace: "nowrap" }}>Alvo</th>
                 <th style={{ padding: "5px 6px", textAlign: "left", color: "var(--n500)", fontWeight: 600, whiteSpace: "nowrap" }}>Partida</th>
+                <th style={{ padding: "5px 6px", textAlign: "left", color: "var(--n500)", fontWeight: 600, whiteSpace: "nowrap" }}>Chegada</th>
                 <th style={{ padding: "5px 4px", width: 20 }} title="Unidade mais lenta" />
                 <th style={{ padding: "5px 6px", width: 54 }} />
                 <th style={{ padding: "5px 4px", width: 46 }} />
@@ -872,6 +873,15 @@ function KuminV2Tab({ queue, now, onSend, onRemove }: {
                             {label}
                           </span>
                         </div>
+                      </td>
+                      <td style={{ padding: "4px 6px", whiteSpace: "nowrap" }}>
+                        {entry.arrival > 0 ? (
+                          <span style={{ fontSize: 10, color: "var(--n400)", fontFamily: "var(--mono)" }}>
+                            {fmtPtDate(entry.arrival)}
+                          </span>
+                        ) : (
+                          <span style={{ color: "var(--n300)" }}>—</span>
+                        )}
                       </td>
                       <td style={{ padding: "4px 4px", textAlign: "center" }}>
                         {slow && (

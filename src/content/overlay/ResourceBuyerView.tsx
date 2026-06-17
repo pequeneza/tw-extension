@@ -26,17 +26,27 @@ interface BuyerConfig {
   buy_stone: boolean;
   buy_iron: boolean;
   priority: Array<"wood" | "stone" | "iron">;
-  MAX_PREMIUM_POINTS: number;
-  PREMIUM_POINTS_TIMEOUT: number;   // ms
+  MIN_PP_TO_BUY: number;
   PURCHASE_PERCENTAGE: number;      // 0–1
   MIN_STOCK_THRESHOLD: number;
   PAGE_RELOAD_INTERVAL: number;     // ms
 }
 
+interface BuyerStats {
+  ppSpent: number;
+  wood: number;
+  stone: number;
+  iron: number;
+}
+
 interface BuyerState {
   running: boolean;
   config: BuyerConfig;
+  stats: BuyerStats;
+  minTrade?: { wood?: number | null; stone?: number | null; iron?: number | null };
 }
+
+const DEFAULT_STATS: BuyerStats = { ppSpent: 0, wood: 0, stone: 0, iron: 0 };
 
 const DEFAULT_CONFIG: BuyerConfig = {
   ENABLED: true,
@@ -44,12 +54,13 @@ const DEFAULT_CONFIG: BuyerConfig = {
   buy_stone: true,
   buy_iron: true,
   priority: ["wood", "stone", "iron"],
-  MAX_PREMIUM_POINTS: 5000,
-  PREMIUM_POINTS_TIMEOUT: 600000,
+  MIN_PP_TO_BUY: 100,
   PURCHASE_PERCENTAGE: 0.70,
   MIN_STOCK_THRESHOLD: 50,
-  PAGE_RELOAD_INTERVAL: 10000,
+  PAGE_RELOAD_INTERVAL: 30000,
 };
+
+const RES_LABEL: Record<string, string> = { wood: "Madeira", stone: "Barro", iron: "Ferro" };
 
 /* ─── Helpers ────────────────────────────────────────────────────────────── */
 function dispatch(name: string, detail?: unknown) {
@@ -108,6 +119,7 @@ function useBuyerState() {
   const [state, setState] = useState<BuyerState>({
     running: false,
     config: { ...DEFAULT_CONFIG },
+    stats: { ...DEFAULT_STATS },
   });
   const [detected, setDetected] = useState(false);
 
@@ -145,8 +157,6 @@ function PriorityList({
     [next[idx], next[swap]] = [next[swap]!, next[idx]!];
     onChange(next);
   };
-
-  const RES_LABEL: Record<string, string> = { wood: "Madeira", stone: "Barro", iron: "Ferro" };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -304,7 +314,6 @@ export function ResourceBuyerView({
           <div className="section-label">Recursos</div>
           {(["buy_wood", "buy_stone", "buy_iron"] as const).map((key) => {
             const res = key.replace("buy_", "") as "wood" | "stone" | "iron";
-            const RES_LABEL: Record<string, string> = { wood: "Madeira", stone: "Barro", iron: "Ferro" };
             return (
               <label key={key} className="field-check">
                 <span className="field-check-text">
@@ -341,11 +350,10 @@ export function ResourceBuyerView({
         <div className="cfg-section">
           <div className="section-label">Configuracao</div>
           {([
-            { key: "MAX_PREMIUM_POINTS",     label: "Max PP a gastar",        step: 100,   tip: "Pausa a compra quando os PP excedem este valor." },
+            { key: "MIN_PP_TO_BUY",          label: "PP mínimos para comprar", step: 50,    tip: "Não compra se tiveres menos PP do que este valor. Usa 0 para desativar a verificação." },
             { key: "PURCHASE_PERCENTAGE",    label: "Objetivo de enchimento",  step: 0.05,  tip: "Compra ate a aldeia atingir esta fracao do armazem. Ex: 0.7 = 70%." },
             { key: "MIN_STOCK_THRESHOLD",    label: "Stock minimo no mercado", step: 10,    tip: "Ignora um recurso se o mercado tiver menos do que este valor disponivel." },
-            { key: "PREMIUM_POINTS_TIMEOUT", label: "Cooldown PP (ms)",        step: 60000, tip: "Tempo de espera antes de voltar a tentar quando os PP estao acima do maximo." },
-            { key: "PAGE_RELOAD_INTERVAL",   label: "Recarregar pagina (ms)",  step: 1000,  tip: "Recarrega a pagina periodicamente enquanto corre para evitar estado obsoleto." },
+            { key: "PAGE_RELOAD_INTERVAL",   label: "Espera sem compras (ms)", step: 5000,  tip: "Aguarda este tempo antes de recarregar a página quando não há nada a comprar. Padrão: 30 000 ms (30 s)." },
           ] as { key: keyof BuyerConfig; label: string; step: number; tip: string }[]).map(({ key, label, step, tip }) => (
             <div className="field" key={key}>
               <div className="field-top">
@@ -363,6 +371,48 @@ export function ResourceBuyerView({
               />
             </div>
           ))}
+        </div>
+        {/* Current exchange rates */}
+        {state.minTrade && (
+          <div className="cfg-section">
+            <div className="section-label">Taxas actuais (por 1 PP)</div>
+            <div style={{ display: "flex", gap: 16, padding: "6px 14px 10px" }}>
+              {(["wood", "stone", "iron"] as const).map((res) => (
+                <span key={res} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12 }}>
+                  <ResIcon res={res} />
+                  <span style={{ color: "var(--n700)", fontFamily: "var(--mono)" }}>
+                    {state.minTrade![res] ?? "—"}
+                  </span>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Session stats */}
+        <div className="cfg-section">
+          <div className="section-label">Sessão</div>
+          <div style={{ padding: "6px 14px 10px", display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+              <span style={{ color: "var(--n500)" }}>PP gastos</span>
+              <span style={{ color: "var(--n900)", fontFamily: "var(--mono)" }}>{state.stats.ppSpent}</span>
+            </div>
+            {(["wood", "stone", "iron"] as const).map((res) => (
+              <div key={res} style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--n500)" }}>
+                  <ResIcon res={res} />{RES_LABEL[res]}
+                </span>
+                <span style={{ color: "var(--n900)", fontFamily: "var(--mono)" }}>{state.stats[res] ?? 0}</span>
+              </div>
+            ))}
+            <button
+              className="btn btn-ghost"
+              style={{ marginTop: 4, fontSize: 11 }}
+              onClick={() => dispatch("xbot:buyer:resetStats")}
+            >
+              Resetar estatísticas
+            </button>
+          </div>
         </div>
       </div>{/* end cfg-body */}
 

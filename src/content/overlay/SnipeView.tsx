@@ -1399,6 +1399,7 @@ export function SnipeView({ visible, onBack }: {
           arrival: e.arrivalMs,
           units: e.units,
           note: e.label,
+          sigilPct: settings.sigil,
           sitterT,
         },
       }}));

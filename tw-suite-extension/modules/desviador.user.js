@@ -105,7 +105,8 @@
             setTimeout(() => {
                 if (getPending(d.cmdId)) return;
                 setPending({ phase: 'send', village: d.village, cancelMs: d.cancelMs, cmdId: d.cmdId });
-                window.open(`/game.php?${sitterPrefix()}village=${d.village}&screen=place&__desv=${d.cmdId}`, '_blank');
+                window.open(`/game.php?${sitterPrefix()}village=${d.village}&screen=place&__desv=${d.cmdId}`, '_blank', 'toolbar=no,location=no,menubar=no,scrollbars=no,status=no,width=1,height=1,left=0,top=0');
+                window.focus();
             }, i * RECOVERY_STAGGER_MS);
         });
     }
@@ -370,6 +371,7 @@
                 /* ── 3. Assign fireAt: 35–40 s before arrival ── */
                 newEntries.forEach(e => {
                     e.fireAt = e.arrivalMs - BASE_OFFSET_MS - Math.random() * 5_000;
+                    e._naturalFireAt = e.fireAt;
                 });
 
                 /* ── 4. Stagger simultaneous fires ──────────────────────────
@@ -383,6 +385,14 @@
                     if (newEntries[i].fireAt > max) newEntries[i].fireAt = max;
                 }
 
+                /* ── 4a-ext. Extend cancelMs by however much stagger pushed fireAt back,
+                 * capped at 10 min so the cancel never stays open forever. */
+                const MAX_CANCEL_MS = 600_000;
+                newEntries.forEach(e => {
+                    const pushBack = Math.max(0, e._naturalFireAt - e.fireAt);
+                    e.cancelMs = Math.min(e.cancelMs + pushBack, MAX_CANCEL_MS);
+                });
+
                 /* ── 4b. Clamp: prevent fires outside the cancel window ──────────────
                  * If the backward stagger pushed entry[i] before
                  * (arrivalMs - cancelMs + 5s), the cancel fires before the attack
@@ -395,6 +405,18 @@
                 for (let i = 1; i < newEntries.length; i++) {
                     const min = newEntries[i - 1].fireAt + STAGGER_MS;
                     if (newEntries[i].fireAt < min) newEntries[i].fireAt = min;
+                }
+
+                /* ── 4c. Drop entries where stagger/propagation pushed fireAt past arrival ──
+                 * Forward propagation can cascade entries beyond their own arrivalMs when
+                 * there are too many attacks to stagger within the available time window.
+                 * These cannot be usefully scheduled — discard them. */
+                for (let i = newEntries.length - 1; i >= 0; i--) {
+                    if (newEntries[i].fireAt >= newEntries[i].arrivalMs - CANCEL_SAFETY_MS) {
+                        scheduled.add(newEntries[i].cmdId);
+                        console.warn(`[Desviador] ${newEntries[i].cmdId}: janela inatingível após stagger — ignorado.`);
+                        newEntries.splice(i, 1);
+                    }
                 }
 
                 /* ── 5. Schedule timers ── */
@@ -413,7 +435,11 @@
                     if (td1) td1.style.outline = '2px solid #22c55e';
 
                     if (delay <= 0) {
-                        if (getPending(cmdId)) return; /* already claimed by recovery or another tab */
+                        if (getPending(cmdId)) {
+                            const detail = scheduledDetails.get(cmdId);
+                            if (detail) detail.fired = true;
+                            return;
+                        }
                         console.warn(`[Desviador] ${cmdId}: tempo insuficiente — a abrir imediatamente.`);
                         const detail = scheduledDetails.get(cmdId);
                         if (detail) detail.fired = true;
@@ -560,10 +586,11 @@
         const coord = m ? `${parseInt(m[1], 10)},${parseInt(m[2], 10)}` : null;
         pick.click();
 
+        let _lastTmplClick = 0;
         setTimeout(() => {
             /* Re-apply template after target change so troop fields stay populated */
             const tmpl = findDesviarTemplate();
-            if (tmpl) tmpl.click();
+            if (tmpl) { tmpl.click(); _lastTmplClick = Date.now(); }
 
             /* Poll for the support button.
              * Only check "Alvo inválido" after a 500 ms grace period — the stale
@@ -598,10 +625,15 @@
                     clearPending(p.cmdId);
                     return;
                 }
+                /* Retry template click every 600 ms in case the AJAX update cleared it */
+                if (Date.now() - _lastTmplClick > 600) {
+                    const tmpl2 = findDesviarTemplate();
+                    if (tmpl2) { tmpl2.click(); _lastTmplClick = Date.now(); }
+                }
                 setTimeout(poll, 200);
             };
             setTimeout(poll, 200);
-        }, 400);
+        }, 1200);
     }
 
     function doScheduleCancel(p) {

@@ -1332,12 +1332,30 @@
           // the click second would make _cancelMs 1000ms too large → cancelAt 1000ms early
           // → return misses by 2 s. Fix: SnipeView always uses even N, so
           // (_midGap - TW_sentAt) % 2000 === 0. Use that to pick the correct second.
-          var _sentCandA  = Math.floor((p.sentAt || Date.now()) / 1000) * 1000 + actualMs;
-          var _sentWithMs = ((_midGap - _sentCandA) % 2000 === 0) ? _sentCandA : _sentCandA + 1000;
-          var _cancelMs   = Math.max(2000, Math.round((_midGap - _sentWithMs) / 2 / 1000) * 1000);
-          cancelAt = _midGap - _cancelMs + 20;
-          if (cancelAt < Date.now() + 2000) cancelAt = Date.now() + 2020;
-          console.log('[AutoSender SC] ms=' + actualMs + ' ok. Cancelar em ' + Math.round(_cancelMs/1000) + 's às ' + new Date(cancelAt).toLocaleTimeString('pt-PT'));
+          var _sentCandA = Math.floor((p.sentAt || Date.now()) / 1000) * 1000 + actualMs;
+          var _sentCandB = _sentCandA + 1000;
+          function _tryCand(cand) {
+            var cm = Math.max(2000, Math.round((_midGap - cand) / 2 / 1000) * 1000);
+            var ws = Math.floor((cand + cm) / 1000) + ((cand + cm) % 1000 > 200 ? 1 : 0);
+            return { cancelMs: cm, cancelAt: ws * 1000 + 200, ret: cand + 2 * cm };
+          }
+          var _rA = _tryCand(_sentCandA);
+          var _rB = _tryCand(_sentCandB);
+          var _inGapA = _rA.ret > p.gapAfterMs && _rA.ret <= p.gapBeforeMs;
+          var _inGapB = _rB.ret > p.gapAfterMs && _rB.ret <= p.gapBeforeMs;
+          var _useB   = !_inGapA && _inGapB;
+          var _sentWithMs = _useB ? _sentCandB : _sentCandA;
+          var _cancelMs   = _useB ? _rB.cancelMs : _rA.cancelMs;
+          cancelAt        = _useB ? _rB.cancelAt : _rA.cancelAt;
+          if (cancelAt < Date.now() + 2000) cancelAt = Date.now() + 2200;
+          function _fmtTs(ms) { var d = new Date(ms); return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2)+'.'+('00'+d.getMilliseconds()).slice(-3); }
+          console.log(
+            '[AutoSender SC] Enviado ≈ ' + _fmtTs(_sentWithMs) +
+            ' | Retorno alvo: ' + _fmtTs(_midGap) +
+            ' | Cancelar: ' + _fmtTs(cancelAt) + ' (+' + Math.round(_cancelMs/1000) + 's)' +
+            ' | Gap: ' + _fmtTs(p.gapAfterMs) + ' → ' + _fmtTs(p.gapBeforeMs) +
+            ' | ms DOM=' + actualMs + ' cand=' + (_useB ? 'B' : 'A') + ' (A-inGap=' + _inGapA + ' B-inGap=' + _inGapB + ')'
+          );
           titleEl.textContent = '🔄 Snipe Cancel — Aguardando cancelamento';
           _scheduleCancelClick();
         } else {
@@ -1355,11 +1373,23 @@
 
     // Fallback when actual ms is unavailable: use sentAt estimate
     function _applyEstimate() {
-      if (!p.gapAfterMs || !p.sentAt) { cancelAt = Date.now() + Math.max(2000, p.cancelMs || 2000) + 20; _scheduleCancelClick(); return; }
+      function _fmtTs(ms) { var d = new Date(ms); return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2)+'.'+('00'+d.getMilliseconds()).slice(-3); }
+      if (!p.gapAfterMs || !p.sentAt) {
+        cancelAt = Date.now() + Math.max(2000, p.cancelMs || 2000) + 20;
+        console.warn('[AutoSender SC] _applyEstimate (sem gap) — cancelar: ' + _fmtTs(cancelAt));
+        _scheduleCancelClick(); return;
+      }
       var _midGap = Math.floor((p.gapAfterMs + p.gapBeforeMs) / 2);
       var _est    = Math.max(2000, Math.round((_midGap - p.sentAt) / 2 / 1000) * 1000);
       cancelAt    = p.sentAt + _est + 20; // 20ms into the valid window
       if (cancelAt < Date.now() + 2000) cancelAt = Date.now() + 2020;
+      console.warn(
+        '[AutoSender SC] _applyEstimate (sem ms DOM)' +
+        ' | Enviado ≈ ' + _fmtTs(p.sentAt) +
+        ' | Retorno alvo: ' + _fmtTs(_midGap) +
+        ' | Cancelar: ' + _fmtTs(cancelAt) + ' (+' + Math.round(_est/1000) + 's)' +
+        ' | Gap: ' + _fmtTs(p.gapAfterMs) + ' → ' + _fmtTs(p.gapAfterMs)
+      );
       titleEl.textContent = '🔄 Snipe Cancel — Aguardando cancelamento';
       _scheduleCancelClick();
     }

@@ -374,47 +374,47 @@
                     e._naturalFireAt = e.fireAt;
                 });
 
-                /* ── 4. Stagger simultaneous fires ──────────────────────────
-                 * Sort ascending by fireAt; walk backwards so each entry fires
-                 * at least STAGGER_MS before the one after it.
-                 * The latest keeps its natural time; earlier ones are pushed back. */
-                const STAGGER_MS = 30_000;
-                newEntries.sort((a, b) => a.fireAt - b.fireAt);
-                for (let i = newEntries.length - 2; i >= 0; i--) {
-                    const max = newEntries[i + 1].fireAt - STAGGER_MS;
-                    if (newEntries[i].fireAt > max) newEntries[i].fireAt = max;
+                /* ── 4. Rate-limit: max 5 popup windows per 45 s ─────────────────────
+                 * Entries fire at their natural time or are pushed *forward* when the
+                 * cap is hit. A gap of ≥ 45 s with no fires resets the count to 0.
+                 * Existing scheduled-but-not-yet-fired entries seed the slot list so
+                 * cross-scan bursts are also throttled. cancelMs is NOT modified —
+                 * forward-pushed entries depart later, so the original cancelMs still
+                 * fires after the attack arrives. */
+                const RATE_WINDOW_MS   = 45_000;
+                const MAX_PER_WINDOW   = 5;
+                const CANCEL_SAFETY_MS = 30_000;  /* must fire ≥ 30 s before arrival */
+                const now2 = Date.now();
+
+                const recentSlots = Array.from(scheduledDetails.values())
+                    .filter(d => !d.fired && d.fireAt > now2)
+                    .map(d => d.fireAt)
+                    .sort((a, b) => a - b);
+
+                newEntries.sort((a, b) => a._naturalFireAt - b._naturalFireAt);
+                let prevFireAt = recentSlots.length ? recentSlots[recentSlots.length - 1] : -Infinity;
+
+                for (const e of newEntries) {
+                    let t = Math.max(e._naturalFireAt, prevFireAt);
+
+                    const inWindow = recentSlots.filter(s => t - s < RATE_WINDOW_MS);
+                    if (inWindow.length >= MAX_PER_WINDOW) {
+                        t = inWindow[0] + RATE_WINDOW_MS;
+                        t = Math.max(t, prevFireAt);
+                    }
+
+                    e.fireAt  = t;
+                    prevFireAt = t;
+                    recentSlots.push(t);
                 }
 
-                /* ── 4a-ext. Extend cancelMs by however much stagger pushed fireAt back,
-                 * capped at 10 min so the cancel never stays open forever. */
-                const MAX_CANCEL_MS = 600_000;
-                newEntries.forEach(e => {
-                    const pushBack = Math.max(0, e._naturalFireAt - e.fireAt);
-                    e.cancelMs = Math.min(e.cancelMs + pushBack, MAX_CANCEL_MS);
-                });
-
-                /* ── 4b. Clamp: prevent fires outside the cancel window ──────────────
-                 * If the backward stagger pushed entry[i] before
-                 * (arrivalMs - cancelMs + 5s), the cancel fires before the attack
-                 * lands. Clamp up, then forward-propagate to restore stagger gaps. */
-                const CANCEL_SAFETY_MS = 5_000;
-                newEntries.forEach(e => {
-                    const earliest = e.arrivalMs - e.cancelMs + CANCEL_SAFETY_MS;
-                    if (e.fireAt < earliest) e.fireAt = earliest;
-                });
-                for (let i = 1; i < newEntries.length; i++) {
-                    const min = newEntries[i - 1].fireAt + STAGGER_MS;
-                    if (newEntries[i].fireAt < min) newEntries[i].fireAt = min;
-                }
-
-                /* ── 4c. Drop entries where stagger/propagation pushed fireAt past arrival ──
-                 * Forward propagation can cascade entries beyond their own arrivalMs when
-                 * there are too many attacks to stagger within the available time window.
-                 * These cannot be usefully scheduled — discard them. */
+                /* ── 4c. Drop entries where rate-limiting pushed fireAt too close to arrival ──
+                 * Entry must fire at least 30 s before arrival so the popup has time to
+                 * fill and submit the command. */
                 for (let i = newEntries.length - 1; i >= 0; i--) {
                     if (newEntries[i].fireAt >= newEntries[i].arrivalMs - CANCEL_SAFETY_MS) {
                         scheduled.add(newEntries[i].cmdId);
-                        console.warn(`[Desviador] ${newEntries[i].cmdId}: janela inatingível após stagger — ignorado.`);
+                        console.warn(`[Desviador] ${newEntries[i].cmdId}: janela inatingível após rate-limit — ignorado.`);
                         newEntries.splice(i, 1);
                     }
                 }

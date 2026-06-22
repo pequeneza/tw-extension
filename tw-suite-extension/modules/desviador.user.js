@@ -383,7 +383,7 @@
                  * after the attack arrives. Existing scheduled-but-not-yet-fired
                  * entries from this session seed the assigned list. */
                 const RATE_WINDOW_MS   = 45_000;
-                const MAX_PER_WINDOW   = 5;
+                const MAX_PER_WINDOW   = 8;
                 const CANCEL_SAFETY_MS = 30_000;  /* must fire ≥ 30 s before arrival */
                 const now2 = Date.now();
 
@@ -392,6 +392,7 @@
                     .map(d => d.fireAt);
 
                 newEntries.sort((a, b) => b._naturalFireAt - a._naturalFireAt);
+                const windowCounts = new Map(); /* window base time → entries placed so far */
 
                 for (const e of newEntries) {
                     let t = e._naturalFireAt;
@@ -403,11 +404,16 @@
                         inWindow = assignedFires.filter(at => at >= t && at < t + RATE_WINDOW_MS);
                     }
 
-                    const pullBack = e._naturalFireAt - t;
-                    e.fireAt    = t;
-                    e.cancelMs += pullBack;   /* extend so cancel fires after attack */
+                    /* Spread entries within the window 1 s apart */
+                    const slotIndex = windowCounts.get(t) || 0;
+                    const fireAt    = t + slotIndex * 1_000;
+                    windowCounts.set(t, slotIndex + 1);
 
-                    assignedFires.push(t);
+                    const pullBack  = e._naturalFireAt - fireAt;
+                    e.fireAt    = fireAt;
+                    e.cancelMs += Math.max(0, pullBack);   /* extend if pulled back */
+
+                    assignedFires.push(fireAt);
                 }
 
                 /* ── 4c. Drop entries where rate-limiting pushed fireAt too close to arrival ──

@@ -375,37 +375,39 @@
                 });
 
                 /* ── 4. Rate-limit: max 5 popup windows per 45 s ─────────────────────
-                 * Entries fire at their natural time or are pushed *forward* when the
-                 * cap is hit. A gap of ≥ 45 s with no fires resets the count to 0.
-                 * Existing scheduled-but-not-yet-fired entries seed the slot list so
-                 * cross-scan bursts are also throttled. cancelMs is NOT modified —
-                 * forward-pushed entries depart later, so the original cancelMs still
-                 * fires after the attack arrives. */
+                 * Sort entries by natural fire time DESCENDING — latest entries keep
+                 * their natural time; earlier entries are pulled BACK (earlier) when
+                 * the window is full. For each entry, count already-assigned fires in
+                 * [t, t + 45 s). If ≥ MAX_PER_WINDOW, pull t back by one full window
+                 * and extend cancelMs by the same amount so the cancel still fires
+                 * after the attack arrives. Existing scheduled-but-not-yet-fired
+                 * entries from this session seed the assigned list. */
                 const RATE_WINDOW_MS   = 45_000;
                 const MAX_PER_WINDOW   = 5;
                 const CANCEL_SAFETY_MS = 30_000;  /* must fire ≥ 30 s before arrival */
                 const now2 = Date.now();
 
-                const recentSlots = Array.from(scheduledDetails.values())
+                const assignedFires = Array.from(scheduledDetails.values())
                     .filter(d => !d.fired && d.fireAt > now2)
-                    .map(d => d.fireAt)
-                    .sort((a, b) => a - b);
+                    .map(d => d.fireAt);
 
-                newEntries.sort((a, b) => a._naturalFireAt - b._naturalFireAt);
-                let prevFireAt = recentSlots.length ? recentSlots[recentSlots.length - 1] : -Infinity;
+                newEntries.sort((a, b) => b._naturalFireAt - a._naturalFireAt);
 
                 for (const e of newEntries) {
-                    let t = Math.max(e._naturalFireAt, prevFireAt);
+                    let t = e._naturalFireAt;
 
-                    const inWindow = recentSlots.filter(s => t - s < RATE_WINDOW_MS);
-                    if (inWindow.length >= MAX_PER_WINDOW) {
-                        t = inWindow[0] + RATE_WINDOW_MS;
-                        t = Math.max(t, prevFireAt);
+                    /* Walk backward through windows until a slot is available */
+                    let inWindow = assignedFires.filter(at => at >= t && at < t + RATE_WINDOW_MS);
+                    while (inWindow.length >= MAX_PER_WINDOW) {
+                        t = Math.min(...inWindow) - RATE_WINDOW_MS;
+                        inWindow = assignedFires.filter(at => at >= t && at < t + RATE_WINDOW_MS);
                     }
 
-                    e.fireAt  = t;
-                    prevFireAt = t;
-                    recentSlots.push(t);
+                    const pullBack = e._naturalFireAt - t;
+                    e.fireAt    = t;
+                    e.cancelMs += pullBack;   /* extend so cancel fires after attack */
+
+                    assignedFires.push(t);
                 }
 
                 /* ── 4c. Drop entries where rate-limiting pushed fireAt too close to arrival ──

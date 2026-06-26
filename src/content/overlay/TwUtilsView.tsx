@@ -7,6 +7,8 @@ interface TwUtilsCfg {
   quickbarCollapse: boolean;
   bulkCancel: boolean;
   showDrawer: boolean;
+  bcDelayMin: number;
+  bcDelayMax: number;
 }
 
 const STORAGE_KEY    = "tw_suite_cfg_tw_utils";
@@ -34,6 +36,8 @@ const DEFAULTS: TwUtilsCfg = {
   quickbarCollapse: true,
   bulkCancel:      true,
   showDrawer:      true,
+  bcDelayMin:      100,
+  bcDelayMax:      200,
 };
 
 const FEATURES: Array<{ key: keyof TwUtilsCfg; label: string; help: string }> = [
@@ -151,6 +155,12 @@ export function TwUtilsView({
       onShowDrawerChange(next.showDrawer);
     }
   }, [cfg, onShowDrawerChange]);
+
+  const setNumField = useCallback(async (key: keyof TwUtilsCfg, value: number) => {
+    const next = { ...cfg, [key]: value };
+    setCfg(next);
+    await storageSet({ [STORAGE_KEY]: next });
+  }, [cfg]);
 
   const triggerCancelAll = useCallback(() => {
     if (!cancelCount || cancelling) return;
@@ -349,6 +359,26 @@ export function TwUtilsView({
               >
                 {cancelling ? "Cancelling…" : "Cancel All"}
               </button>
+            </div>
+            <div style={{ display: "flex", gap: "12px", padding: "4px 14px 8px",
+                          alignItems: "center" }}>
+              {(["bcDelayMin", "bcDelayMax"] as const).map((key, i) => (
+                <label key={key} style={{ display: "flex", alignItems: "center",
+                                          gap: "6px", fontSize: "11px", flex: 1 }}>
+                  <span style={{ color: "var(--n500)", whiteSpace: "nowrap" }}>
+                    {i === 0 ? "Min delay (ms)" : "Max delay (ms)"}
+                  </span>
+                  <input
+                    type="number" min="50" max="5000" step="10"
+                    value={cfg[key]}
+                    onChange={(e) => setNumField(key, Math.max(50, parseInt(e.target.value, 10) || 50))}
+                    style={{ width: "60px", padding: "2px 4px", fontSize: "11px",
+                             border: "1px solid var(--n200)", borderRadius: "3px",
+                             background: "var(--n0)", color: "var(--n700)",
+                             textAlign: "right" }}
+                  />
+                </label>
+              ))}
             </div>
           </div>
         )}

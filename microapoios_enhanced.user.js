@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Micro Apoios — Support Sender
 // @namespace    http://tampermonkey.net/
-// @version      2.0.0
+// @version      2.0.7
 // @description  Send support templates to multiple target coordinates with batch automation
 // @author       Enhanced from original by Costache Madalin
 // @match        https://*.tribalwars.com.pt/game.php*
@@ -36,31 +36,22 @@
     function setBatch(b)  { localStorage.setItem(BATCH_KEY, JSON.stringify(b)); }
     function clearBatch() { localStorage.removeItem(BATCH_KEY); }
 
-    // ─── Confirm page: auto-confirm and advance batch ────────────────────────────
+    // ─── Confirm page (safety net — mass support usually doesn't redirect here) ───
     if (isConfirm) {
-        const batch = getBatch();
-        if (batch && batch.running) {
+        var _cb = getBatch();
+        if (_cb && _cb.running) {
             setTimeout(function () {
-                const btn = document.querySelector('.btn-confirm-yes, input[type=submit][name=action], input[value="Confirmar"], a.btn-confirm-yes');
-                if (!btn) return;
-                batch.index++;
-                if (batch.index >= batch.targets.length) {
-                    batch.running  = false;
-                    batch.finished = true;
-                } else {
-                    batch.state = 'filling';
-                }
-                setBatch(batch);
-                btn.click();
-            }, 700);
+                var btn = document.querySelector('#place_call_form_submit, .btn-confirm-yes, input[value="Enviar apoio"]');
+                if (btn) btn.click();
+            }, 1500);
         }
-        return; // no UI on confirm page
+        return;
     }
 
     // ─── From here: isMassPage only ─────────────────────────────────────────────
 
     // ─── Troop configuration ─────────────────────────────────────────────────────
-    const SKIP_UNITS = ['snob', 'militia', 'knight', 'axe', 'light', 'ram', 'catapult', 'marcher'];
+    const SKIP_UNITS = ['snob', 'militia', 'knight', 'marcher'];
     var units = Array.from(game_data.units).filter(function (u) { return !SKIP_UNITS.includes(u); });
     var heavyCav = 4;
 
@@ -72,7 +63,7 @@
     var backgroundHeader     = '#2C365E';
     var backgroundMainTable  = '#484D6D';
     var backgroundInnerTable = '#4B8F8C';
-    var widthInterface       = 50;
+    var widthInterface       = 70;
     var headerColorAlternateTable = -30;
     var backgroundAlternateTableEven;
     var backgroundAlternateTableOdd;
@@ -84,13 +75,12 @@
         var batch = getBatch();
         if (!batch || !batch.running) return;
 
-        var expectedTarget = batch.targets[batch.index];
-        var currentTarget  = getCurrentTargetCoord();
-
-        if (currentTarget && normalizeCoord(currentTarget) === normalizeCoord(expectedTarget)) {
-            setTimeout(function () { autoFillAndSend(batch); }, 900);
+        if (batch.state === 'filling') {
+            // Target was selected; fill troops and send
+            setTimeout(function () { autoFillAndSend(batch); }, 2000);
         } else {
-            setTimeout(function () { navigateToTarget(expectedTarget, batch.group); }, 400);
+            // Need to select the next target via autocomplete
+            setTimeout(function () { navigateToTarget(batch.targets[batch.index], batch.group, batch); }, 800);
         }
     })();
 
@@ -111,26 +101,58 @@
         return null;
     }
 
-    function navigateToTarget(coord, group) {
+    function navigateToTarget(coord, group, batch) {
+        // Step 1: clear current target if one is shown
+        var delBtn = document.querySelector('img.village-delete');
+        if (delBtn) delBtn.click();
+
+        setTimeout(function () {
+            // Step 2: type coord into the autocomplete input
+            var inp = document.querySelector('input.target-input-field, input.target-input-autocomplete, input.ui-autocomplete-input');
+            if (!inp) { _urlNavigate(coord, group); return; }
+
+            inp.value = coord;
+            // Trigger jQuery UI autocomplete via key events
+            $(inp).trigger('focus').trigger('keydown').trigger('keyup').trigger('input');
+
+            // Step 3: poll for the autocomplete dropdown to appear
+            var waited = 0, maxWait = 4000, pollMs = 200;
+            var poll = setInterval(function () {
+                waited += pollMs;
+                var item = document.querySelector('.target-select-autocomplete .village-item');
+                if (item) {
+                    clearInterval(poll);
+
+                    // Step 4: save state='filling' BEFORE clicking (survives page reload)
+                    batch.state = 'filling';
+                    setBatch(batch);
+
+                    // Click the village name (not village-delete inside it)
+                    var clickTarget = item.querySelector('.village-name') || item.querySelector('.village-picture') || item;
+                    clickTarget.click();
+
+                    // Fallback: if page doesn't reload in 2s, fill directly
+                    setTimeout(function () {
+                        var b = getBatch();
+                        if (b && b.running && b.state === 'filling') autoFillAndSend(b);
+                    }, 2500);
+
+                } else if (waited >= maxWait) {
+                    clearInterval(poll);
+                    logBatch('[Batch] Autocomplete timeout for ' + coord + ' — falling back to URL nav');
+                    _urlNavigate(coord, group);
+                }
+            }, pollMs);
+        }, 500);
+    }
+
+    function _urlNavigate(coord, group) {
         var myVid = game_data.village.id;
-        var parts = coord.split('|');
-
-        // Try mobile coord inputs first (no full reload)
-        var ix = document.getElementById('inputx'), iy = document.getElementById('inputy');
-        if (ix && iy) {
-            ix.value = parts[0].trim();
-            iy.value = parts[1].trim();
-            var form = ix.closest ? ix.closest('form') : ix.form;
-            if (form) { form.submit(); return; }
-        }
-
-        // URL navigation — TW PT resolves "target=X|Y" on the server
-        var url = '/game.php?village=' + myVid +
-                  '&screen=place&order=distance&dir=1' +
-                  '&target=' + encodeURIComponent(coord) +
-                  '&mode=call' +
-                  (group ? '&group=' + encodeURIComponent(group) : '');
-        location.href = url;
+        location.href = '/game.php?village=' + myVid +
+            '&screen=place&order=distance&dir=1' +
+            '&target=' + encodeURIComponent(coord) +
+            '&mode=call' +
+            (group ? '&group=' + encodeURIComponent(group) : '');
     }
 
     function autoFillAndSend(batch) {
@@ -156,7 +178,8 @@
                 var input = row.querySelector('.call-unit-box-' + unit);
                 if (!input) return;
                 var availEl = row.querySelector("[data-unit='" + unit + "']");
-                var avail = availEl ? (parseInt(availEl.textContent, 10) || 0) : amount;
+                // Strip non-digit chars: TW PT uses '.' as thousands sep ("1.000" → 1000)
+                var avail = availEl ? (parseInt(availEl.textContent.replace(/\D/g, ''), 10) || 0) : amount;
                 input.value = Math.min(amount, avail);
             });
         });
@@ -164,6 +187,7 @@
         // Find and click the send/submit button
         setTimeout(function () {
             var submitBtn = (
+                document.getElementById('place_call_form_submit') ||
                 document.querySelector('#place_call_send input[type=submit]') ||
                 document.querySelector('form[id*=call] input[type=submit]') ||
                 document.querySelector('input[type=submit][name=action]') ||
@@ -171,16 +195,21 @@
                     .find(function (b) { return b.offsetParent !== null; })
             );
             if (submitBtn) {
-                batch.state = 'confirming';
+                // Advance index BEFORE clicking — submit causes a page reload
+                logBatch('Enviando alvo ' + (batch.index + 1) + '/' + batch.targets.length + ': ' + (batch.targets[batch.index] || ''));
+                batch.index++;
+                if (batch.index >= batch.targets.length) {
+                    batch.running  = false;
+                    batch.finished = true;
+                } else {
+                    batch.state = 'selecting';
+                }
                 setBatch(batch);
                 submitBtn.click();
             } else {
-                showBatchNotice(
-                    'Batch: template filled — click Send manually (' +
-                    (batch.index + 1) + '/' + batch.targets.length + ')'
-                );
+                showBatchNotice('Batch: tropas preenchidas — clica Enviar manualmente (' + (batch.index + 1) + '/' + batch.targets.length + ')');
             }
-        }, 600);
+        }, 1500);
     }
 
     function showBatchNotice(msg) {
@@ -292,13 +321,11 @@
 
     // ─── Main interface ───────────────────────────────────────────────────────────
     function createMainInterface() {
-        var hasArcher = game_data.units.includes('archer');
-        var rowsButtons   = hasArcher ? 7 : 6;
-        var rowsDatetimes = hasArcher ? 4 : 3;
-
         var dispUnits = units.filter(function (u) {
-            return !['knight','snob','militia','axe','light','ram','catapult','marcher'].includes(u);
+            return !['knight','snob','militia','marcher'].includes(u);
         });
+        var rowsButtons   = dispUnits.length + 2; // label + units + pop
+        var rowsDatetimes = dispUnits.length - 1; // total - label(1) - checkbox(2)
 
         function unitImgCells() {
             return dispUnits.map(function (u) {
@@ -317,79 +344,83 @@
             // Header
             '<div class="mapoios-header" style="background:' + backgroundHeader + '">' +
             '<h2 style="color:' + textColor + '">Support Sender</h2>' +
-            '<div style="position:absolute;top:10px;right:10px"><a href="#" onclick="$(\'#div_container\').remove();return false;"><img src="https://img.icons8.com/emoji/24/000000/cross-mark-button-emoji.png"/></a></div>' +
+            '<div style="position:absolute;top:10px;right:10px"><a id="btn_close_panel" href="#"><img src="https://img.icons8.com/emoji/24/000000/cross-mark-button-emoji.png"/></a></div>' +
             '<div style="position:absolute;top:8px;right:35px" id="div_minimize"><a href="#"><img src="https://img.icons8.com/plasticine/28/000000/minimize-window.png"/></a></div>' +
-            '<div style="position:absolute;top:10px;right:60px"><a href="#" onclick="$(\'#theme_settings\').toggle();return false;"><img src="https://img.icons8.com/material-sharp/24/fa314a/change-theme.png"/></a></div>' +
+            '<div style="position:absolute;top:10px;right:60px"><a id="btn_toggle_theme" href="#"><img src="https://img.icons8.com/material-sharp/24/fa314a/change-theme.png"/></a></div>' +
             '</div>' +
             '<div id="theme_settings" style="background:' + backgroundMainTable + '"></div>' +
             '<div id="mapoios-body">' +
             // Tabs
             '<div class="mapoios-tabs" style="background:' + backgroundHeader + '">' +
-            '<button class="mapoios-tab-btn active" data-tab="tab_troops" style="background:' + backgroundMainTable + ';color:' + textColor + '">Troops</button>' +
-            '<button class="mapoios-tab-btn" data-tab="tab_templates" style="background:' + backgroundContainer + ';color:' + textColor + '">Templates</button>' +
-            '<button class="mapoios-tab-btn" data-tab="tab_batch" style="background:' + backgroundContainer + ';color:' + textColor + '">Batch Send</button>' +
+            '<button class="mapoios-tab-btn active" data-tab="tab_troops" style="background:' + backgroundMainTable + ';color:' + textColor + '">Tropas</button>' +
+            '<button class="mapoios-tab-btn" data-tab="tab_templates" style="background:' + backgroundContainer + ';color:' + textColor + '">Modelos</button>' +
+            '<button class="mapoios-tab-btn" data-tab="tab_batch" style="background:' + backgroundContainer + ';color:' + textColor + '">Envio em Lote</button>' +
             '</div>' +
 
             // ── Tab 1: Troops ──────────────────────────────────────────────────
             '<div id="tab_troops" class="mapoios-panel active" style="background:' + backgroundMainTable + '">' +
             '<table id="table_upload" class="scriptTable">' +
-            '<tr style="background:' + backgroundInnerTable + '"><td style="color:' + textColor + '">troops</td>' + unitImgCells() + '<td style="color:' + textColor + '">pop</td></tr>' +
-            '<tr><td style="color:' + textColor + '">total</td>' + inputRowCells('total', 'totalTroops', 'text') +
+            '<tr style="background:' + backgroundInnerTable + '"><td style="color:' + textColor + '">Tropas</td>' + unitImgCells() + '<td style="color:' + textColor + '">Pop</td></tr>' +
+            '<tr><td style="color:' + textColor + '">Total</td>' + inputRowCells('total', 'totalTroops', 'text') +
             '<td><input id="packets_total" value="0" type="text" class="scriptInput" disabled style="width:48px"> <span class="hideMobile" style="color:' + textColor + '">k</span></td></tr>' +
-            '<tr><td style="color:' + textColor + '">send</td>' + inputRowCells('total', 'sendTroops', 'number') +
+            '<tr><td style="color:' + textColor + '">Enviar</td>' + inputRowCells('total', 'sendTroops', 'number') +
             '<td><input id="packets_send" value="0" type="number" class="scriptInput" style="width:48px"> <span class="hideMobile" style="color:' + textColor + '">k</span></td></tr>' +
-            '<tr><td style="color:' + textColor + '">reserve</td>' + inputRowCells('Reserve', 'reserveTroops', 'number') +
+            '<tr><td style="color:' + textColor + '">Reserva</td>' + inputRowCells('Reserve', 'reserveTroops', 'number') +
             '<td><input id="packets_reserve" value="0" type="text" class="scriptInput" disabled style="width:48px"> <span class="hideMobile" style="color:' + textColor + '">k</span></td></tr>' +
             '<tr>' +
-            '<td colspan="1"><center><span style="color:' + textColor + '">sigil:</span><input type="number" id="flag_boost" class="scriptInput" min="0" max="100" value="0" style="width:40px;text-align:center"></center></td>' +
-            '<td colspan="2"><center><input type="checkbox" id="checkbox_window"> <span style="color:' + textColor + '">land between:</span></center></td>' +
-            '<td colspan="' + rowsDatetimes + '"><center style="margin:4px">start: <input type="datetime-local" id="start_window" class="scriptInput" style="width:auto"></center>' +
-            '<center style="margin:4px">end: <input type="datetime-local" id="stop_window" class="scriptInput" style="width:auto"></center></td>' +
+            '<td colspan="1"><center><span style="color:' + textColor + '">Sigilia:</span><input type="number" id="flag_boost" class="scriptInput" min="0" max="100" value="0" style="width:40px;text-align:center"></center></td>' +
+            '<td colspan="2"><center><input type="checkbox" id="checkbox_window"> <span style="color:' + textColor + '">aterrar entre:</span></center></td>' +
+            '<td colspan="' + rowsDatetimes + '"><div style="display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;padding:2px 0">' +
+            '<span style="color:' + textColor + ';white-space:nowrap">início: <input type="datetime-local" id="start_window" class="scriptInput" style="width:auto"></span>' +
+            '<span style="color:' + textColor + ';white-space:nowrap">fim: <input type="datetime-local" id="stop_window" class="scriptInput" style="width:auto"></span>' +
+            '</div></td>' +
             '</tr>' +
             '<tr><td colspan="' + rowsButtons + '" align="center">' +
-            '<button class="btn evt-confirm-btn btn-confirm-yes" id="btn_fill_inputs">Fill inputs</button> ' +
-            '<button class="btn evt-confirm-btn btn-confirm-yes" id="btn_calculate">Calculate</button>' +
+            '<button class="btn evt-confirm-btn btn-confirm-yes" id="btn_fill_inputs">Preencher</button> ' +
+            '<button class="btn evt-confirm-btn btn-confirm-yes" id="btn_calculate">Calcular</button>' +
             '</td></tr>' +
             '</table></div>' +
 
             // ── Tab 2: Templates ───────────────────────────────────────────────
             '<div id="tab_templates" class="mapoios-panel" style="background:' + backgroundMainTable + ';color:' + textColor + ';padding:8px">' +
-            '<p style="margin:0 0 6px;font-size:11px">Save the current <b>send</b> row as a named template.</p>' +
+            '<p style="margin:0 0 6px;font-size:11px">Guarda a linha de <b>envio</b> como modelo com nome.</p>' +
             '<div style="display:flex;gap:4px;align-items:center;margin-bottom:6px">' +
-            '<input type="text" id="tmpl_name" class="scriptInput" placeholder="Template name" style="width:110px;flex:none;background:' + backgroundInput + ';color:' + textColor + ';border:1px solid ' + borderColor + '">' +
-            '<button class="btn evt-confirm-btn btn-confirm-yes" id="btn_save_tmpl">Save</button>' +
+            '<input type="text" id="tmpl_name" class="scriptInput" placeholder="Nome do modelo" style="width:110px;flex:none;background:' + backgroundInput + ';color:' + textColor + ';border:1px solid ' + borderColor + '">' +
+            '<button class="btn evt-confirm-btn btn-confirm-yes" id="btn_save_tmpl">Guardar</button>' +
             '</div>' +
             '<div style="display:flex;gap:4px;align-items:center;margin-bottom:6px">' +
-            '<select id="tmpl_select" class="scriptInput" style="width:130px;flex:none;background:' + backgroundInput + ';color:' + textColor + ';border:1px solid ' + borderColor + '"><option value="">— select —</option></select>' +
-            '<button class="btn evt-confirm-btn btn-confirm-yes" id="btn_load_tmpl">Load</button>' +
-            '<button id="btn_del_tmpl" style="background:#833;color:#fff;border:none;border-radius:3px;padding:3px 8px;cursor:pointer;font-size:11px">Delete</button>' +
+            '<select id="tmpl_select" class="scriptInput" style="width:130px;flex:none;background:' + backgroundInput + ';color:' + textColor + ';border:1px solid ' + borderColor + '"><option value="">— selecionar —</option></select>' +
+            '<button class="btn evt-confirm-btn btn-confirm-yes" id="btn_load_tmpl">Carregar</button>' +
+            '<button id="btn_del_tmpl" style="background:#833;color:#fff;border:none;border-radius:3px;padding:3px 8px;cursor:pointer;font-size:11px">Eliminar</button>' +
             '</div>' +
             '<div id="tmpl_preview" class="tmpl-preview" style="background:' + backgroundContainer + ';border:1px solid ' + borderColor + '"></div>' +
             '</div>' +
 
             // ── Tab 3: Batch Send ──────────────────────────────────────────────
             '<div id="tab_batch" class="mapoios-panel" style="background:' + backgroundMainTable + ';color:' + textColor + ';padding:8px">' +
-            '<p style="margin:0 0 4px;font-size:11px">Enter target coords (type → Enter). Script fills & sends each in turn.</p>' +
+            '<p style="margin:0 0 4px;font-size:11px">Insere coordenadas alvo (escreve → Enter). O script preenche e envia cada uma.</p>' +
             // Chip coord input
             '<div id="batch_chips" class="chip-input-wrap" style="background:' + backgroundInput + ';border:1px solid ' + borderColor + ';border-radius:4px"></div>' +
-            // Group + template row
+            // Group + template + delay row
             '<div style="display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap">' +
-            '<span style="font-size:11px">Group ID:</span>' +
+            '<span style="font-size:11px">ID do Grupo:</span>' +
             '<input type="text" id="batch_group" class="scriptInput" placeholder="72789" style="width:70px;background:' + backgroundInput + ';color:' + textColor + ';border:1px solid ' + borderColor + '">' +
-            '<span style="font-size:11px">Template:</span>' +
-            '<select id="batch_tmpl" class="scriptInput" style="width:110px;background:' + backgroundInput + ';color:' + textColor + ';border:1px solid ' + borderColor + '"><option value="__send_row__">— use send row —</option></select>' +
+            '<span style="font-size:11px">Modelo:</span>' +
+            '<select id="batch_tmpl" class="scriptInput" style="width:110px;background:' + backgroundInput + ';color:' + textColor + ';border:1px solid ' + borderColor + '"><option value="__send_row__">— usar linha de envio —</option></select>' +
+            '<span style="font-size:11px">Pausa (s):</span>' +
+            '<input type="number" id="batch_delay" class="scriptInput" value="3" min="1" max="30" style="width:50px;background:' + backgroundInput + ';color:' + textColor + ';border:1px solid ' + borderColor + '">' +
             '</div>' +
             // Buttons
             '<div style="display:flex;gap:6px;align-items:center;margin-top:6px">' +
-            '<button class="btn evt-confirm-btn btn-confirm-yes" id="btn_start_batch">&#9654; Start</button>' +
-            '<button id="btn_stop_batch" style="display:none;background:#833;color:#fff;border:none;border-radius:3px;padding:4px 10px;cursor:pointer;font-size:11px">&#9632; Stop</button>' +
+            '<button class="btn evt-confirm-btn btn-confirm-yes" id="btn_start_batch">&#9654; Iniciar</button>' +
+            '<button id="btn_stop_batch" style="display:none;background:#833;color:#fff;border:none;border-radius:3px;padding:4px 10px;cursor:pointer;font-size:11px">&#9632; Parar</button>' +
             '<span id="batch_progress" class="batch-progress" style="background:' + backgroundContainer + ';color:' + textColor + '"></span>' +
             '</div>' +
             '<div id="batch_log" class="batch-log" style="background:' + backgroundContainer + ';border:1px solid ' + borderColor + '"></div>' +
             '</div>' +
 
             '</div>' + // mapoios-body
-            '<div class="mapoios-footer" style="background:' + backgroundHeader + ';color:' + textColor + '">made by Costache | enhanced v2</div>' +
+            '<div class="mapoios-footer" style="background:' + backgroundHeader + ';color:' + textColor + '">by Costache | melhorado v2</div>' +
             '</div>';
 
         $('#div_container').remove();
@@ -444,6 +475,8 @@
         // Bind action buttons via jQuery (avoids Tampermonkey inline-onclick scoping issues)
         $('#btn_fill_inputs').on('click', fillInputs);
         $('#btn_calculate').on('click', countTotalTroops);
+        $('#btn_close_panel').on('click', function(e) { e.preventDefault(); $('#div_container').remove(); });
+        $('#btn_toggle_theme').on('click', function(e) { e.preventDefault(); $('#theme_settings').toggle(); });
 
         // Initialize sub-systems
         initTemplateTab();
@@ -463,7 +496,7 @@
         }).join('');
 
         var html =
-            '<h3 style="color:' + textColor + ';padding:8px 10px 4px;margin:0">Theme (re-run script after saving)</h3>' +
+            '<h3 style="color:' + textColor + ';padding:8px 10px 4px;margin:0">Tema (recarrega após guardar)</h3>' +
             '<table class="scriptTable" style="background:' + backgroundMainTable + '">' +
             '<tr><td style="color:' + textColor + '"><select id="select_theme" style="background:' + backgroundInput + ';color:' + textColor + '">' +
             themeNames.map(function(n){ return '<option value="'+n+'">'+n+'</option>'; }).join('') +
@@ -471,8 +504,8 @@
             rows +
             '<tr><td style="color:' + textColor + '">width %</td>' +
             '<td colspan="2"><input type="range" min="25" max="100" class="slider input_theme" id="input_slider_width" value="' + widthInterface + '"> <span id="td_width">' + widthInterface + '%</span></td></tr>' +
-            '<tr><td><button class="btn evt-confirm-btn btn-confirm-yes" id="btn_save_theme">Save</button></td>' +
-            '<td><button class="btn evt-confirm-btn btn-confirm-yes" id="btn_reset_theme">Reset</button></td><td></td></tr>' +
+            '<tr><td><button class="btn evt-confirm-btn btn-confirm-yes" id="btn_save_theme">Guardar</button></td>' +
+            '<td><button class="btn evt-confirm-btn btn-confirm-yes" id="btn_reset_theme">Repor</button></td><td></td></tr>' +
             '</table>';
 
         $('#theme_settings').append(html).hide();
@@ -634,9 +667,9 @@
 
         $('#btn_save_tmpl').on('click', function () {
             var name = $('#tmpl_name').val().trim();
-            if (!name) { alert('Enter a template name.'); return; }
+            if (!name) { alert('Insere um nome para o modelo.'); return; }
             var tpl = getTemplateFromSendRow();
-            if (Object.keys(tpl).length === 0) { alert('Send row is empty.'); return; }
+            if (Object.keys(tpl).length === 0) { alert('A linha de envio está vazia.'); return; }
             var all = getTemplates(); all[name] = tpl; saveTemplates(all);
             refreshTemplateDropdowns();
             $('#tmpl_name').val('');
@@ -687,7 +720,7 @@
                 placeholder: '123|456 then Enter',
                 validate: function (v) {
                     if (!/^\d+\|\d+$/.test(v)) {
-                        alert('Invalid coord format. Use: 123|456');
+                        alert('Formato de coordenada inválido. Usa: 123|456');
                         return false;
                     }
                     return true;
@@ -706,7 +739,7 @@
 
         $('#btn_start_batch').on('click', function () {
             var targets = _coordChips.slice();
-            if (targets.length === 0) { alert('Add at least one target coordinate.'); return; }
+            if (targets.length === 0) { alert('Adiciona pelo menos uma coordenada alvo.'); return; }
 
             var group   = $('#batch_group').val().trim();
             var tmplKey = $('#batch_tmpl').val();
@@ -714,17 +747,18 @@
 
             if (tmplKey === '__send_row__') {
                 tpl = getTemplateFromSendRow();
-                if (Object.keys(tpl).length === 0) { alert('Send row is empty — fill troop amounts or load a template.'); return; }
+                if (Object.keys(tpl).length === 0) { alert('Linha de envio vazia — preenche quantidades ou carrega um modelo.'); return; }
             } else {
                 tpl = getTemplates()[tmplKey];
-                if (!tpl) { alert('Template not found.'); return; }
+                if (!tpl) { alert('Modelo não encontrado.'); return; }
             }
 
-            var batch = { running: true, targets: targets, index: 0, template: tpl, group: group, state: 'filling' };
+            var delayS = Math.max(1, parseInt($('#batch_delay').val(), 10) || 3);
+            var batch = { running: true, targets: targets, index: 0, template: tpl, group: group, state: 'selecting', delay: delayS * 1000 };
             setBatch(batch);
-            logBatch('Starting batch: ' + targets.length + ' targets. First: ' + targets[0]);
+            logBatch('A iniciar lote: ' + targets.length + ' alvos. Primeiro: ' + targets[0]);
             updateBatchUI(batch);
-            navigateToTarget(targets[0], group);
+            navigateToTarget(targets[0], group, batch);
         });
 
         $('#btn_stop_batch').on('click', function () {
@@ -826,32 +860,19 @@
             mapVillages.set(coord, objTroops);
         });
 
-        var objTotal = { spear:0, sword:0, archer:0, spy:0, heavy:0 };
+        // Sum all units across all villages (raw available count after reserve subtraction)
+        var objTotal = {};
+        units.forEach(function(u) { objTotal[u] = 0; });
         Array.from(mapVillages.keys()).forEach(function (key) {
             var obj = mapVillages.get(key);
-            if (obj.ram_speed || obj.catapult_speed || obj.sword_speed) {
-                objTotal.spear += obj.spear || 0; objTotal.sword += obj.sword || 0;
-                objTotal.spy += obj.spy || 0; objTotal.heavy += obj.heavy || 0;
-                if (obj.archer != null) objTotal.archer += obj.archer;
-            } else if (obj.spear_speed || obj.archer_speed) {
-                objTotal.spear += obj.spear || 0; objTotal.heavy += obj.heavy || 0; objTotal.spy += obj.spy || 0;
-                if (obj.archer != null) objTotal.archer += obj.archer;
-            } else if (obj.heavy_speed) {
-                objTotal.heavy += obj.heavy || 0; objTotal.spy += obj.spy || 0;
-            } else if (obj.spy_speed) {
-                objTotal.spy += obj.spy || 0;
-            }
+            units.forEach(function(u) { objTotal[u] += obj[u] || 0; });
         });
 
-        if (!game_data.units.includes('archer')) delete objTotal.archer;
-
         var totalPop = 0;
-        Object.keys(objTotal).forEach(function (key) {
-            if (units.includes(key)) {
-                var inp = document.getElementById(key + 'total');
-                if (inp && inp.classList.contains('totalTroops')) inp.value = (objTotal[key] / 1000).toFixed(2);
-            }
-            if (['spear','sword','archer'].includes(key)) totalPop += objTotal[key];
+        units.forEach(function (key) {
+            var inp = document.getElementById(key + 'total');
+            if (inp && inp.classList.contains('totalTroops')) inp.value = (objTotal[key] / 1000).toFixed(2);
+            if (['spear','sword','axe','archer'].includes(key)) totalPop += objTotal[key];
             else if (key === 'heavy') totalPop += objTotal[key] * heavyCav;
         });
 
@@ -871,11 +892,11 @@
         sendTotal.forEach(function (e) { sendTotalObj[e.troopName] = e.value; });
 
         for (var i = 0; i < troopsTotal.length; i++) {
-            if (troopsTotal[i] < sendTotal[i].value) { alert('Not enough troops.'); return; }
+            if (troopsTotal[i] < sendTotal[i].value) { alert('Tropas insuficientes.'); return; }
         }
 
         var checkbox = document.getElementById('village_troup_list').children[0].children[0].getElementsByTagName('input');
-        var troops   = ['spear','sword','archer','spy','heavy','ram','catapult'];
+        var troops   = ['spear','sword','axe','archer','spy','light','heavy','ram','catapult'];
         for (var j = 0; j < checkbox.length - 1; j++) {
             checkbox[j].checked = troops.includes(checkbox[j].id.split('_')[1]);
         }
@@ -885,33 +906,11 @@
         var listTotal = [];
         Array.from(mapVillages.keys()).forEach(function (key) {
             var obj = mapVillages.get(key);
-            var ot  = { coord: key, axe: 0, light: 0 };
-            if (obj.marcher != null) ot.marcher = 0;
-
-            function pick(u) { return (sendTotalObj[u] > 0) ? obj[u] || 0 : 0; }
-
-            if (obj.ram_speed) {
-                ot.ram=1;ot.catapult=0;ot.sword=pick('sword');ot.spear=pick('spear');ot.heavy=pick('heavy');ot.spy=pick('spy');ot.speedTroop='ram';
-                if (obj.archer!=null) ot.archer=pick('archer');
-            } else if (obj.catapult_speed) {
-                ot.ram=0;ot.catapult=1;ot.sword=pick('sword');ot.spear=pick('spear');ot.heavy=pick('heavy');ot.spy=pick('spy');ot.speedTroop='catapult';
-                if (obj.archer!=null) ot.archer=pick('archer');
-            } else if (obj.sword_speed) {
-                ot.ram=0;ot.catapult=0;ot.sword=pick('sword');ot.spear=pick('spear');ot.heavy=pick('heavy');ot.spy=pick('spy');ot.speedTroop='sword';
-                if (obj.archer!=null) ot.archer=pick('archer');
-            } else if (obj.spear_speed) {
-                ot.ram=0;ot.catapult=0;ot.sword=0;ot.spear=pick('spear');ot.heavy=pick('heavy');ot.spy=pick('spy');ot.speedTroop='spear';
-                if (obj.archer!=null) ot.archer=pick('archer');
-            } else if (obj.archer_speed) {
-                ot.ram=0;ot.catapult=0;ot.sword=0;ot.spear=pick('spear');ot.heavy=pick('heavy');ot.spy=pick('spy');ot.speedTroop='archer';
-                if (obj.archer!=null) ot.archer=pick('archer');
-            } else if (obj.heavy_speed) {
-                ot.ram=0;ot.catapult=0;ot.sword=0;ot.spear=0;ot.spy=obj.spy||0;ot.heavy=pick('heavy');ot.speedTroop='heavy';
-                if (obj.archer!=null) ot.archer=0;
-            } else if (obj.spy_speed) {
-                ot.ram=0;ot.catapult=0;ot.sword=0;ot.spear=0;ot.heavy=0;ot.spy=pick('spy');ot.speedTroop='spy';
-                if (obj.archer!=null) ot.archer=0;
-            }
+            // Support script: distribute all requested units across all villages regardless of speed
+            var ot = { coord: key, speedTroop: 'support' };
+            units.forEach(function (u) { ot[u] = (sendTotalObj[u] > 0) ? obj[u] || 0 : 0; });
+            var tw2 = document.getElementById('checkbox_window').checked;
+            if (!tw2) { ot.ram = 0; ot.catapult = 0; }
             listTotal.push(ot);
         });
 

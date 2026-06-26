@@ -428,7 +428,12 @@
     ═══════════════════════════════════════════════════════════════════════ */
 
     const DELETE_FRAGMENT = 'graphic/delete.webp';
-    const BC_DELAY_MS = 200;
+
+    function bcDelay() {
+        const lo = Number(cfg.bcDelayMin ?? 100);
+        const hi = Number(cfg.bcDelayMax ?? 200);
+        return lo + Math.random() * (hi - lo);
+    }
 
     function deleteIconUrl() {
         const base = (typeof game_data !== 'undefined' && game_data.graphic_path)
@@ -454,7 +459,7 @@
             try { await fetch(a.href, { credentials: 'include' }); } catch (_) {}
             done++;
             counter.textContent = `${done}/${links.length}`;
-            if (done < links.length) await sleep(BC_DELAY_MS);
+            if (done < links.length) await sleep(bcDelay());
         }
 
         counter.textContent = '✓';

@@ -53,7 +53,37 @@
     // ─── Troop configuration ─────────────────────────────────────────────────────
     const SKIP_UNITS = ['snob', 'militia', 'knight', 'marcher'];
     var units = Array.from(game_data.units).filter(function (u) { return !SKIP_UNITS.includes(u); });
-    var heavyCav = 4;
+
+    // ─── Pop weights ──────────────────────────────────────────────────────────────
+    var POP_KEY = W + '_mapoios_pop_v1';
+    var DEFAULT_POP_WEIGHTS = (function () {
+        var w = {};
+        units.forEach(function (u) { w[u] = 1; });
+        w.heavy = 4;
+        w.catapult = 2;
+        return w;
+    })();
+    function getPopWeights() {
+        try {
+            var s = JSON.parse(localStorage.getItem(POP_KEY) || 'null');
+            if (!s) return Object.assign({}, DEFAULT_POP_WEIGHTS);
+            units.forEach(function (u) { if (!(u in s)) s[u] = DEFAULT_POP_WEIGHTS[u] !== undefined ? DEFAULT_POP_WEIGHTS[u] : 1; });
+            return s;
+        } catch (e) { return Object.assign({}, DEFAULT_POP_WEIGHTS); }
+    }
+    function savePopWeights(w) { localStorage.setItem(POP_KEY, JSON.stringify(w)); }
+
+    // ─── Unit selection ───────────────────────────────────────────────────────────
+    var UNIT_SEL_KEY = W + '_mapoios_unitsel_v1';
+    function getUnitSelection() {
+        try {
+            var s = JSON.parse(localStorage.getItem(UNIT_SEL_KEY) || 'null');
+            if (!s) { var d = {}; units.forEach(function (u) { d[u] = true; }); return d; }
+            units.forEach(function (u) { if (!(u in s)) s[u] = true; });
+            return s;
+        } catch (e) { var d2 = {}; units.forEach(function (u) { d2[u] = true; }); return d2; }
+    }
+    function saveUnitSelection(sel) { localStorage.setItem(UNIT_SEL_KEY, JSON.stringify(sel)); }
 
     // ─── Theme variables ─────────────────────────────────────────────────────────
     var textColor            = '#ffffff';
@@ -102,6 +132,16 @@
     }
 
     function navigateToTarget(coord, group, batch) {
+        // If the page already has this target selected, skip navigation and fill directly
+        var cur = getCurrentTargetCoord();
+        if (cur && normalizeCoord(cur) === normalizeCoord(coord)) {
+            logBatch('[Batch] Alvo já ativo: ' + coord + ' — a preencher diretamente');
+            batch.state = 'filling';
+            setBatch(batch);
+            setTimeout(function () { autoFillAndSend(getBatch()); }, 800);
+            return;
+        }
+
         // Step 1: clear current target if one is shown
         var delBtn = document.querySelector('img.village-delete');
         if (delBtn) delBtn.click();
@@ -109,7 +149,7 @@
         setTimeout(function () {
             // Step 2: type coord into the autocomplete input
             var inp = document.querySelector('input.target-input-field, input.target-input-autocomplete, input.ui-autocomplete-input');
-            if (!inp) { _urlNavigate(coord, group); return; }
+            if (!inp) { _urlNavigate(coord, group, batch); return; }
 
             inp.value = coord;
             // Trigger jQuery UI autocomplete via key events
@@ -131,7 +171,7 @@
                     var clickTarget = item.querySelector('.village-name') || item.querySelector('.village-picture') || item;
                     clickTarget.click();
 
-                    // Fallback: if page doesn't reload in 2s, fill directly
+                    // Fallback: if page didn't reload in 2.5s, fill directly
                     setTimeout(function () {
                         var b = getBatch();
                         if (b && b.running && b.state === 'filling') autoFillAndSend(b);
@@ -140,13 +180,14 @@
                 } else if (waited >= maxWait) {
                     clearInterval(poll);
                     logBatch('[Batch] Autocomplete timeout for ' + coord + ' — falling back to URL nav');
-                    _urlNavigate(coord, group);
+                    _urlNavigate(coord, group, batch);
                 }
             }, pollMs);
         }, 500);
     }
 
-    function _urlNavigate(coord, group) {
+    function _urlNavigate(coord, group, batch) {
+        if (batch) { batch.state = 'filling'; setBatch(batch); }
         var myVid = game_data.village.id;
         location.href = '/game.php?village=' + myVid +
             '&screen=place&order=distance&dir=1' +
@@ -173,7 +214,7 @@
         // Template values are stored in thousands (send row UX: 1 = 1000 troops).
         document.querySelectorAll('#village_troup_list tbody tr').forEach(function (row) {
             Object.keys(tpl).forEach(function (unit) {
-                var amount = (parseInt(tpl[unit], 10) || 0) * 1000; // k → actual count
+                var amount = Math.round((parseFloat(tpl[unit]) || 0) * 1000); // k → actual count
                 if (!amount) return;
                 var input = row.querySelector('.call-unit-box-' + unit);
                 if (!input) return;
@@ -184,8 +225,25 @@
             });
         });
 
+        // Collect actual filled amounts (capped by availability) across all village rows
+        var sentTotals = {};
+        document.querySelectorAll('#village_troup_list tbody tr').forEach(function (row) {
+            Object.keys(tpl).forEach(function (unit) {
+                var input = row.querySelector('.call-unit-box-' + unit);
+                if (input) sentTotals[unit] = (sentTotals[unit] || 0) + (parseInt(input.value, 10) || 0);
+            });
+        });
+        var sentStr = Object.keys(sentTotals)
+            .filter(function (u) { return sentTotals[u] > 0; })
+            .map(function (u) { return u + ':' + sentTotals[u].toLocaleString(); })
+            .join(' | ');
+
         // Find and click the send/submit button
         setTimeout(function () {
+            // Re-read from storage to guard against stale-closure double-execution
+            var fb = getBatch();
+            if (!fb || !fb.running || fb.state !== 'filling') return;
+
             var submitBtn = (
                 document.getElementById('place_call_form_submit') ||
                 document.querySelector('#place_call_send input[type=submit]') ||
@@ -196,18 +254,23 @@
             );
             if (submitBtn) {
                 // Advance index BEFORE clicking — submit causes a page reload
-                logBatch('Enviando alvo ' + (batch.index + 1) + '/' + batch.targets.length + ': ' + (batch.targets[batch.index] || ''));
-                batch.index++;
-                if (batch.index >= batch.targets.length) {
-                    batch.running  = false;
-                    batch.finished = true;
+                logBatch('[' + (fb.index + 1) + '/' + fb.targets.length + '] ' + (fb.targets[fb.index] || '') + (sentStr ? ' → ' + sentStr : ''));
+                // Accumulate grand total
+                if (!fb.totalSent) fb.totalSent = {};
+                Object.keys(sentTotals).forEach(function (u) {
+                    fb.totalSent[u] = (fb.totalSent[u] || 0) + sentTotals[u];
+                });
+                fb.index++;
+                if (fb.index >= fb.targets.length) {
+                    fb.running  = false;
+                    fb.finished = true;
                 } else {
-                    batch.state = 'selecting';
+                    fb.state = 'selecting';
                 }
-                setBatch(batch);
+                setBatch(fb);
                 submitBtn.click();
             } else {
-                showBatchNotice('Batch: tropas preenchidas — clica Enviar manualmente (' + (batch.index + 1) + '/' + batch.targets.length + ')');
+                showBatchNotice('Batch: tropas preenchidas — clica Enviar manualmente (' + (fb.index + 1) + '/' + fb.targets.length + ')');
             }
         }, 1500);
     }
@@ -246,7 +309,11 @@
         var batch = getBatch();
         if (batch && batch.finished) {
             setTimeout(function () {
-                if (typeof UI !== 'undefined') UI.SuccessMessage('Batch complete! Sent to all ' + batch.targets.length + ' targets.', 3000);
+                var totStr = batch.totalSent
+                    ? Object.keys(batch.totalSent).filter(function (u) { return batch.totalSent[u] > 0; })
+                          .map(function (u) { return u + ':' + batch.totalSent[u].toLocaleString(); }).join(' | ')
+                    : '';
+                if (typeof UI !== 'undefined') UI.SuccessMessage('Batch completo! ' + batch.targets.length + ' alvos. Total: ' + (totStr || '—'), 5000);
                 clearBatch();
             }, 500);
         }
@@ -258,14 +325,14 @@
         var s = document.createElement('style');
         s.id = 'mapoios-css';
         s.textContent = [
-            '.mapoios-wrap{position:fixed;top:20px;left:20px;z-index:10000;border-radius:5px;width:50%;min-width:360px;font-size:12px;font-family:Arial,sans-serif;box-shadow:0 4px 24px rgba(0,0,0,.7);}',
+            '.mapoios-wrap{position:fixed;top:20px;left:20px;z-index:10000;border-radius:5px;width:50%;min-width:360px;font-size:12px;font-family:Arial,sans-serif;box-shadow:0 4px 24px rgba(0,0,0,.7);overflow:hidden;}',
             '.mapoios-header{padding:8px 10px;position:relative;border-radius:5px 5px 0 0;cursor:move;text-align:center;}',
             '.mapoios-header h2{margin:2px 0;font-size:15px;}',
             '.mapoios-body{}',
             '.mapoios-tabs{display:flex;padding:4px 6px 0;gap:2px;}',
             '.mapoios-tab-btn{cursor:pointer;padding:5px 10px;border:none;border-radius:3px 3px 0 0;font-size:11px;opacity:.75;}',
             '.mapoios-tab-btn.active{opacity:1;font-weight:bold;}',
-            '.mapoios-panel{display:none;padding:6px;}',
+            '.mapoios-panel{display:none;padding:6px;overflow-x:auto;}',
             '.mapoios-panel.active{display:block;}',
             '.mapoios-footer{padding:4px;text-align:center;border-radius:0 0 5px 5px;font-size:10px;opacity:.6;}',
             '.scriptTable{width:100%;border-collapse:collapse;}',
@@ -335,7 +402,7 @@
 
         function inputRowCells(suffix, cls, type) {
             return dispUnits.map(function (u) {
-                return '<td align="center"><input id="' + u + suffix + '" value="0" type="' + type + '" class="scriptInput ' + cls + '" style="width:48px"' + (type === 'text' ? ' disabled' : '') + '></td>';
+                return '<td align="center"><input id="' + u + suffix + '" value="0" type="' + type + '" class="scriptInput ' + cls + '" style="width:48px"' + (type === 'text' ? ' disabled' : ' step="any"') + '></td>';
             }).join('');
         }
 
@@ -361,12 +428,25 @@
             '<div id="tab_troops" class="mapoios-panel active" style="background:' + backgroundMainTable + '">' +
             '<table id="table_upload" class="scriptTable">' +
             '<tr style="background:' + backgroundInnerTable + '"><td style="color:' + textColor + '">Tropas</td>' + unitImgCells() + '<td style="color:' + textColor + '">Pop</td></tr>' +
+            '<tr style="background:' + backgroundInnerTable + '"><td style="color:' + textColor + ';font-size:10px">Usar</td>' +
+            dispUnits.map(function (u) { return '<td align="center"><input type="checkbox" id="use_unit_' + u + '" checked></td>'; }).join('') +
+            '<td></td></tr>' +
             '<tr><td style="color:' + textColor + '">Total</td>' + inputRowCells('total', 'totalTroops', 'text') +
             '<td><input id="packets_total" value="0" type="text" class="scriptInput" disabled style="width:48px"> <span class="hideMobile" style="color:' + textColor + '">k</span></td></tr>' +
             '<tr><td style="color:' + textColor + '">Enviar</td>' + inputRowCells('total', 'sendTroops', 'number') +
-            '<td><input id="packets_send" value="0" type="number" class="scriptInput" style="width:48px"> <span class="hideMobile" style="color:' + textColor + '">k</span></td></tr>' +
+            '<td><input id="packets_send" value="0" type="number" step="any" class="scriptInput" style="width:48px"> <span class="hideMobile" style="color:' + textColor + '">k</span></td></tr>' +
             '<tr><td style="color:' + textColor + '">Reserva</td>' + inputRowCells('Reserve', 'reserveTroops', 'number') +
             '<td><input id="packets_reserve" value="0" type="text" class="scriptInput" disabled style="width:48px"> <span class="hideMobile" style="color:' + textColor + '">k</span></td></tr>' +
+            '<tr id="tr_pop_toggle_row"><td colspan="' + (dispUnits.length + 2) + '" style="text-align:center;padding:2px">' +
+            '<button id="btn_toggle_pop" style="font-size:10px;padding:2px 8px;background:' + backgroundContainer + ';color:' + textColor + ';border:1px solid ' + borderColor + ';border-radius:3px;cursor:pointer">⚙ Pesos de Pop</button>' +
+            '</td></tr>' +
+            '<tr id="tr_pop_weights" style="display:none;background:' + backgroundInnerTable + '">' +
+            '<td style="color:' + textColor + ';font-size:10px">Pop/unid</td>' +
+            dispUnits.map(function (u) {
+                return '<td align="center"><input id="pop_w_' + u + '" type="number" step="any" min="0" value="0" class="scriptInput" style="width:40px;background:' + backgroundInput + ';color:' + textColor + ';border:1px solid ' + borderColor + '"></td>';
+            }).join('') +
+            '<td><button id="btn_save_pop" style="font-size:10px;padding:2px 6px;background:' + backgroundContainer + ';color:' + textColor + ';border:1px solid ' + borderColor + ';border-radius:3px;cursor:pointer">✓</button></td>' +
+            '</tr>' +
             '<tr>' +
             '<td colspan="1"><center><span style="color:' + textColor + '">Sigilia:</span><input type="number" id="flag_boost" class="scriptInput" min="0" max="100" value="0" style="width:40px;text-align:center"></center></td>' +
             '<td colspan="2"><center><input type="checkbox" id="checkbox_window"> <span style="color:' + textColor + '">aterrar entre:</span></center></td>' +
@@ -481,6 +561,55 @@
         // Initialize sub-systems
         initTemplateTab();
         initBatchTab();
+        initPopWeightsUI();
+        initUnitSelection();
+    }
+
+    function initUnitSelection() {
+        var sel = getUnitSelection();
+        units.forEach(function (u) {
+            var cb  = document.getElementById('use_unit_' + u);
+            var inp = document.getElementById(u + 'total');
+            if (!cb) return;
+            cb.checked = sel[u] !== false;
+            if (inp && inp.classList.contains('sendTroops')) {
+                inp.disabled = !cb.checked;
+                inp.style.opacity = cb.checked ? '' : '0.35';
+            }
+            cb.addEventListener('change', function () {
+                sel[u] = cb.checked;
+                saveUnitSelection(sel);
+                if (inp && inp.classList.contains('sendTroops')) {
+                    inp.disabled = !cb.checked;
+                    inp.style.opacity = cb.checked ? '' : '0.35';
+                    if (!cb.checked) inp.value = 0;
+                }
+                countTotalTroops();
+            });
+        });
+    }
+
+    function initPopWeightsUI() {
+        var w = getPopWeights();
+        units.forEach(function (u) {
+            var inp = document.getElementById('pop_w_' + u);
+            if (inp) inp.value = w[u] !== undefined ? w[u] : 1;
+        });
+        $('#btn_toggle_pop').on('click', function (e) {
+            e.preventDefault();
+            $('#tr_pop_weights').toggle();
+        });
+        $('#btn_save_pop').on('click', function () {
+            var w2 = {};
+            units.forEach(function (u) {
+                var inp = document.getElementById('pop_w_' + u);
+                w2[u] = inp ? (parseFloat(inp.value) || 0) : (DEFAULT_POP_WEIGHTS[u] || 1);
+            });
+            savePopWeights(w2);
+            if (typeof UI !== 'undefined') UI.SuccessMessage('Pesos de Pop guardados.', 1000);
+            $('#tr_pop_weights').hide();
+            countTotalTroops();
+        });
     }
 
     // ─── Theme panel ──────────────────────────────────────────────────────────────
@@ -611,6 +740,19 @@
                     onChangeCallback(state.slice());
                 }
             });
+            input.addEventListener('paste', function (e) {
+                e.preventDefault();
+                var text = (e.clipboardData || window.clipboardData).getData('text');
+                var parts = text.split(/[\n\r,]+/).map(function (s) { return s.trim(); }).filter(Boolean);
+                var changed = false;
+                parts.forEach(function (part) {
+                    if (/^\d+\|\d+$/.test(part) && state.indexOf(part) === -1) {
+                        state.push(part);
+                        changed = true;
+                    }
+                });
+                if (changed) { render(); onChangeCallback(state.slice()); }
+            });
             container.appendChild(input);
             container.addEventListener('click', function () { input.focus(); });
         }
@@ -630,11 +772,12 @@
     function saveTemplates(t) { localStorage.setItem(TEMPLATES_KEY, JSON.stringify(t)); }
 
     function getTemplateFromSendRow() {
+        var sel = getUnitSelection();
         var tpl = {};
         document.querySelectorAll('.sendTroops').forEach(function (inp) {
             var unit = inp.id.replace('total', '');
-            var val  = parseInt(inp.value, 10) || 0;
-            if (val > 0) tpl[unit] = val;
+            var val  = parseFloat(inp.value) || 0;
+            if (val > 0 && sel[unit] !== false) tpl[unit] = val;
         });
         return tpl;
     }
@@ -728,13 +871,20 @@
             }
         );
 
-        // Restore chip input if batch was running
+        // Restore chip input and log if batch was running
         var existingBatch = getBatch();
         if (existingBatch && existingBatch.running) {
             if (existingBatch.targets && _coordChipInput) {
                 _coordChipInput.setChips(existingBatch.targets);
             }
             updateBatchUI(existingBatch);
+            if (existingBatch.log && existingBatch.log.length) {
+                var logEl = document.getElementById('batch_log');
+                if (logEl) {
+                    logEl.innerHTML = existingBatch.log.map(function (l) { return '<div>' + l + '</div>'; }).join('');
+                    logEl.scrollTop = logEl.scrollHeight;
+                }
+            }
         }
 
         $('#btn_start_batch').on('click', function () {
@@ -778,7 +928,11 @@
             $('#btn_start_batch').show();
             $('#btn_stop_batch').hide();
             if (batch && batch.finished) {
-                $('#batch_progress').text('Done! All ' + batch.targets.length + ' targets sent.');
+                var totStr = batch.totalSent
+                    ? Object.keys(batch.totalSent).filter(function (u) { return batch.totalSent[u] > 0; })
+                          .map(function (u) { return u + ':' + batch.totalSent[u].toLocaleString(); }).join(' | ')
+                    : '';
+                $('#batch_progress').text('Concluído! ' + batch.targets.length + ' alvos. Total: ' + (totStr || '—'));
             } else {
                 $('#batch_progress').text('');
             }
@@ -786,9 +940,17 @@
     }
 
     function logBatch(msg) {
+        var line = new Date().toLocaleTimeString() + ' — ' + msg;
+        // Persist to batch state so log survives page reloads
+        var b = getBatch();
+        if (b) {
+            if (!b.log) b.log = [];
+            b.log.push(line);
+            setBatch(b);
+        }
         var el = document.getElementById('batch_log');
         if (!el) return;
-        el.innerHTML += '<div>' + new Date().toLocaleTimeString() + ' — ' + msg + '</div>';
+        el.innerHTML += '<div>' + line + '</div>';
         el.scrollTop = el.scrollHeight;
     }
 
@@ -868,12 +1030,12 @@
             units.forEach(function(u) { objTotal[u] += obj[u] || 0; });
         });
 
+        var popWeights = getPopWeights();
         var totalPop = 0;
         units.forEach(function (key) {
             var inp = document.getElementById(key + 'total');
             if (inp && inp.classList.contains('totalTroops')) inp.value = (objTotal[key] / 1000).toFixed(2);
-            if (['spear','sword','axe','archer'].includes(key)) totalPop += objTotal[key];
-            else if (key === 'heavy') totalPop += objTotal[key] * heavyCav;
+            totalPop += (objTotal[key] || 0) * (popWeights[key] || 0);
         });
 
         document.getElementById('packets_total').value = (totalPop / 1000).toFixed(2);
@@ -962,11 +1124,12 @@
     // ─── Original: addEvents ──────────────────────────────────────────────────────
     function addEvents() {
         $('.sendTroops').off('input').on('input', function () {
+            var popWeights = getPopWeights();
             var pop = 0;
             Array.from(document.getElementsByClassName('sendTroops')).forEach(function (inp) {
                 var val = parseFloat(inp.value) || 0;
-                if (inp.id.includes('spear') || inp.id.includes('sword') || inp.id.includes('archer')) pop += val * 1000;
-                if (inp.id.includes('heavy')) pop += val * 1000 * heavyCav;
+                var unit = inp.id.replace('total', '');
+                pop += val * 1000 * (popWeights[unit] || 0);
             });
             document.getElementById('packets_send').value = (pop / 1000).toFixed(2);
         });

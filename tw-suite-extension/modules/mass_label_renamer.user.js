@@ -18,18 +18,19 @@
   var _cfg          = (window.__twSuiteCfg && window.__twSuiteCfg('mass_label_renamer')) || {};
   var minDelayMs    = (_cfg.minDelaySeconds  !== undefined ? _cfg.minDelaySeconds  : 120) * 1000;
   var randomExtraMs = (_cfg.randomExtraMax   !== undefined ? _cfg.randomExtraMax   : 30)  * 1000;
-  var labelIndex    =  _cfg.labelIndex       !== undefined ? _cfg.labelIndex       : 0;
 
   // ── User preferences ────────────────────────────────────────────────────────
-  var tamanho_letra     = 8;
+  var tamanho_letra     = 10;
 
-  // Change 7: Read highlightMode and kbEnabled from config
   var pagina_de_ataques    = _cfg.highlightMode || 'coluna';
   var kbEnabled            = _cfg.kbEnabled !== undefined ? _cfg.kbEnabled : true;
   var originBadgeEnabled   = _cfg.originBadgeEnabled  !== undefined ? _cfg.originBadgeEnabled  : true;
   var autoFakeEnabled      = _cfg.autoFakeEnabled      !== undefined ? _cfg.autoFakeEnabled      : false;
   var autoFakeWindowMs     = (_cfg.autoFakeWindowSec   !== undefined ? _cfg.autoFakeWindowSec    : 10) * 1000;
   var pageDelayMs          =  _cfg.pageDelayMs         !== undefined ? _cfg.pageDelayMs          : 1500;
+
+  var isIncomingsPage = location.href.indexOf('screen=overview_villages') !== -1 &&
+                        location.href.indexOf('mode=incomings') !== -1;
 
   // ── Paged auto-label state machine ──────────────────────────────────────────
   var AUTOLABEL_RUN_KEY = 'mlr_autolabel_run';
@@ -70,59 +71,73 @@
            typeParam + subtypeParam + '&group=0&page=' + page + tParam;
   }
 
-  // ── Change 1: Revised PALETTE — stronger, distinct two-tone colors ──────────
+  // ── PALETTE — [bg, priorityBg]  (priorityBg ≈ 12% darker, used for high-priority badges) ──
   var PALETTE = {
-    red:     ['#e63030', '#b31f1f'],  // vivid red / dark red
-    green:   ['#31c908', '#1f8a03'],  // bright green / dark green
-    blue:    ['#1a8fe3', '#0d5fa3'],  // sky blue / deep blue
-    yellow:  ['#ffd91c', '#c9a808'],  // yellow / dark amber
-    orange:  ['#ef8b10', '#a85c06'],  // orange / dark burnt orange
-    lblue:   ['#22e5db', '#0a9e96'],  // cyan / dark teal-cyan
-    white:   ['#ffffff', '#c8c8c8'],  // white / light gray
-    black:   ['#3a3a3a', '#111111'],  // dark charcoal / near-black
-    gray:    ['#adb6c6', '#717b8a'],  // cool gray / dark cool gray
-    purple:  ['#9232a8', '#611870'],  // purple / dark purple  (was "dorange")
-    Pink:    ['#ffb6c1', '#e07585'],  // light pink / dark rose
-    dblue:   ['#1e40af', '#0f2266'],  // indigo-blue / deep navy
-    dgreen:  ['#16a34a', '#0d6630'],  // forest green / dark forest green
-    teal:    ['#0d9488', '#0a7a6e'],  // teal / dark teal  (new, for [Retirar])
-    lgreen:  ['#93cf82', '#5a9e48'],  // light green / medium green
+    //              bg          priorityBg
+    green:  ['#CDEFCF', '#B5DFBA'],  // mint         → Morto (priority)
+    orange: ['#F6D4A7', '#F6D4A7'],  // peach        → Desviado
+    purple: ['#DCCEF6', '#DCCEF6'],  // violet       → Desviar
+    gray:   ['#E7E7E7', '#E7E7E7'],  // cool gray    → Reconquistar
+    white:  ['#EEF0F5', '#EEF0F5'],  // blue-white   → Reconquistado (distinct from gray)
+    lblue:  ['#CFEFF5', '#CFEFF5'],  // cyan         → Snipado
+    blue:   ['#CFE2FF', '#CFE2FF'],  // sky blue     → Snipar
+    dgreen: ['#CEEED8', '#CEEED8'],  // soft forest  → Fubar (distinct from green)
+    red:    ['#F2CACA', '#F2CACA'],  // rose         → Snipe Cancel
+    Pink:   ['#F5D5E5', '#F5D5E5'],  // pink-violet  → Fake (distinct from red)
+    dblue:  ['#C8D4F5', '#B5C4F0'],  // indigo       → Possível Full (priority)
+    black:  ['#C8C8C8', '#C8C8C8'],  // dark gray    → Reforçar (distinct from gray)
+    teal:   ['#C0EAE7', '#A8DDE0'],  // teal         → Retirar (priority)
+    yellow: ['#F8E8A6', '#F0DA80'],  // straw        → Vigiar (priority)
+    lgreen: ['#D5EFCA', '#D5EFCA'],  // light mint   → ✓
   };
 
-  // Change 1: Every tag uses a unique palette key; [Retirar] now uses "teal"
-  // Change 1: "dorange" renamed to "purple"
+  // High-priority badge indices (M=0, PV=10, R!=12, V!=13) — slightly darker bg + bold text
+  var PRIORITY_IDX = new Set([0, 10, 12, 13]);
+
   var TAGS = [
-    // [ tag string,          btn label, btn bg colour, btn text colour ]
-    ['[Morto]',        'M',   'green',   'white'],
-    ['[Desviado]',     'D!',  'orange',  'white'],
-    ['[Desviar]',      'D',   'purple',  'white'],   // was "dorange" → "purple"
-    ['[Reconquistar]', 'R',   'gray',    'white'],
-    ['[Reconquistado]','RR',  'white',   'black'],
-    ['[Snipado]',      'S!',  'lblue',   'white'],
-    ['[Snipar]',       'S',   'blue',    'white'],
-    ['[Fubar]',        'FU',  'dgreen',  'white'],
-    ['[Snipe Cancel]', 'SC',  'red',     'white'],
-    ['[Fake]',         'FA',  'Pink',    'black'],
-    ['[Possível Full]','PV',  'dblue',   'white'],
-    ['[Reforçar]',     'RF',  'black',   'white'],
-    [' | Retirar',     'R!',  'teal',    'white'],   // was "dgreen" → "teal"
-    [' | Vigiar',      'V!',  'yellow',  'black'],
-    [' | ✓',           '✓',   'lgreen',  'black'],
+    // [ tag string,          btn label, palette key ]
+    ['[Morto]',        'M',   'green'  ],
+    ['[Desviado]',     'D!',  'orange' ],
+    ['[Desviar]',      'D',   'purple' ],
+    ['[Reconquistar]', 'R',   'gray'   ],
+    ['[Reconquistado]','RR',  'white'  ],
+    ['[Snipado]',      'S!',  'lblue'  ],
+    ['[Snipar]',       'S',   'blue'   ],
+    ['[Fubar]',        'FU',  'dgreen' ],
+    ['[Snipe Cancel]', 'SC',  'red'    ],
+    ['[Fake]',         'FA',  'Pink'   ],
+    ['[Possível Full]','PV',  'dblue'  ],
+    ['[Reforçar]',     'RF',  'black'  ],
+    [' | Retirar',     'R!',  'teal'   ],
+    [' | Vigiar',      'V!',  'yellow' ],
+    [' | ✓',           '✓',   'lgreen' ],
   ];
 
   function colTop(name)  { return (PALETTE[name] || PALETTE.black)[0]; }
-  function colBot(name)  { return (PALETTE[name] || PALETTE.black)[1]; }
-  function colText(name) { return (PALETTE[name] || PALETTE.white)[0]; }
 
   function btnStyle(idx) {
-    var bg   = TAGS[idx][2];
-    var font = TAGS[idx][3];
+    var bg         = TAGS[idx][2];
+    var pal        = PALETTE[bg] || PALETTE.gray;
+    var isPriority = PRIORITY_IDX.has(idx);
+    var bgColor    = isPriority ? pal[1] : pal[0];
+    var marginLeft = isIncomingsPage ? '5px' : '2px';
+    var padding    = isIncomingsPage ? '1px 6px' : '1px 3px';
+    var minWidth   = isIncomingsPage ? '22px' : '18px';
     return [
-      'margin-left:2px',
-      'color:' + colText(font),
+      'margin-left:' + marginLeft,
+      'color:#444',
       'font-size:' + tamanho_letra + 'px!important',
-      'background:linear-gradient(to bottom,' + colTop(bg) + ' 30%,' + colBot(bg) + ' 70%)',
-    ].join(';');
+      'background:' + bgColor,
+      'border:1px solid rgba(0,0,0,0.15)',
+      'border-radius:5px',
+      'padding:' + padding,
+      'box-sizing:border-box',
+      'min-width:' + minWidth,
+      'text-align:center',
+      'line-height:14px',
+      'cursor:pointer',
+      isPriority ? 'font-weight:600' : '',
+    ].filter(Boolean).join(';');
   }
 
   // ── Row-painting helpers ────────────────────────────────────────────────────
@@ -189,7 +204,7 @@
       var c1   = colTop(TAGS[dual[0]][2]);
       var c2   = colTop(TAGS[dual[1]][2]);
       var grad = 'repeating-linear-gradient(45deg,' + c1 + ',' + c1 + ' 10px,' + c2 + ' 10px,' + c2 + ' 20px)';
-      if (pagina_de_ataques === 'linha')  setBg($row.find('td'), grad);
+      // In 'linha' mode keep zebra striping — badge already identifies the row
       if (pagina_de_ataques === 'coluna') {
         setBg($row.find('td:eq(0)'), grad);
         $row.find('a:eq(0)').attr('style', 'color:white!important;text-shadow:-1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000,1px 1px 0 #000;');
@@ -200,7 +215,7 @@
     var idx = singleTagIndex(name);
     if (idx !== -1) {
       var color = colTop(TAGS[idx][2]);
-      if (pagina_de_ataques === 'linha')  setBg($row.find('td'), color);
+      // In 'linha' mode keep zebra striping — badge already identifies the row
       if (pagina_de_ataques === 'coluna') {
         setBg($row.find('td:eq(0)'), color);
         $row.find('a:eq(0)').attr('style', 'color:white!important;text-shadow:-1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000,1px 1px 0 #000;');
@@ -218,7 +233,7 @@
     }
   }
 
-  // ── Change 2: Chip rendering helpers ────────────────────────────────────────
+  // ── Chip rendering helpers ───────────────────────────────────────────────────
 
   /**
    * Render the collapsed chip element for a tagged row.
@@ -230,15 +245,13 @@
     var $row  = window.$(row);
     var tag   = TAGS[tagIdx];
     var bgKey = tag[2];
-    var fgKey = tag[3];
-    var bg    = colTop(bgKey);
-    var fg    = colText(fgKey);
+    var bg    = (PALETTE[bgKey] || PALETTE.gray)[0];
 
     $row.find('.rename-buttons').remove();
     $row.find('.mlr-chip').remove();
 
     var chipHtml = '<span class="mlr-chip"' +
-      ' style="background:' + bg + ';color:' + fg + ';margin-left:4px;padding:2px 6px;' +
+      ' style="background:' + bg + ';color:#444;margin-left:4px;padding:2px 6px;' +
       'border-radius:3px;font-size:10px;font-weight:bold;cursor:default;' +
       'display:inline-flex;align-items:center;gap:4px;">' +
       tag[1] +
@@ -262,12 +275,18 @@
     var $row = window.$(row);
     $row.find('.rename-buttons').remove();
     $row.find('.mlr-chip').remove();
-    var html = '<span class="rename-buttons" style="float:right;">';
+    var btnSpanStyle = isIncomingsPage
+      ? 'margin-left:auto;white-space:nowrap;flex-shrink:0;'
+      : 'margin-left:4px;white-space:nowrap;flex-shrink:0;';
+    var html = '<span class="rename-buttons" style="' + btnSpanStyle + '">';
     TAGS.forEach(function (tag, num) {
       html += '<button type="button" id="opt' + nr + '_' + num + '" class="btn" title="' + tag[0] + '" style="' + btnStyle(num) + '">' + tag[1] + '</button>';
     });
     html += '</span>';
-    $row.find('.quickedit-content').append(html);
+    $row.find('.quickedit').after(html);
+    var tdCss = {'display':'flex','align-items':'center'};
+    if (!isIncomingsPage) tdCss['flex-wrap'] = 'wrap';
+    $row.find('td:eq(0)').css(tdCss);
 
     TAGS.forEach(function (tag, num) {
       window.$('#opt' + nr + '_' + num).off('click').on('click', function () {
@@ -277,7 +296,6 @@
         var base = $input.val().split(' ')[0];
         $input.val(tag[0].startsWith(' |') ? $input.val() + tag[0] : base + ' ' + tag[0]);
         $row.find('input[type=button]').click();
-        // Change 2: collapse to chip after submitting
         injectChip(nr, row, num);
       });
     });
@@ -359,7 +377,7 @@
     if (!_autoFakeRunning) drainAutoFakeQueue();
   }
 
-  // ── Change 5: Module-scope deadline variable ─────────────────────────────────
+  // ── Module-scope deadline variable ───────────────────────────────────────────
   var _etiquetaDeadline = null;
 
   // ── Change 3: Auto-etiqueta with ETA bar ────────────────────────────────────
@@ -374,10 +392,9 @@
     var delayMs  = minDelayMs + Math.random() * randomExtraMs;
     var deadline = Date.now() + delayMs;
 
-    // Change 5: record deadline for sessionStorage stats
     _etiquetaDeadline = deadline;
 
-    // Change 3: inject ETA bar div above the form
+    // inject ETA bar div above the form
     if (!window.$('#mlr-eta-bar').length) {
       var etaHtml =
         '<div id="mlr-eta-bar" style="padding:6px 10px;background:#1e3a5f;color:#7dd3fc;' +
@@ -414,7 +431,7 @@
     }, delayMs);
   }
 
-  // ── Change 6: Listen for bulk-fake CustomEvent ───────────────────────────────
+  // ── Bulk-fake CustomEvent listener ───────────────────────────────────────────
   // Processes one row at a time with a 500 ms gap to avoid TW rate-limiting.
   document.addEventListener('xbot:labelrenamer:bulk_fake', function () {
     var queue = [];
@@ -446,7 +463,7 @@
     processNext(0);
   });
 
-  // ── Change 4: Keyboard shortcuts ─────────────────────────────────────────────
+  // ── Keyboard shortcuts ────────────────────────────────────────────────────────
 
   // Map Alt+key → TAGS index
   var KB_MAP = {
@@ -572,8 +589,6 @@
     } else {
       $form.find('input[type=checkbox]').prop('checked', true);
     }
-    var $radios = $form.find('input[type=radio]');
-    if ($radios.length > labelIndex) $radios.eq(labelIndex).prop('checked', true);
 
     // Advance page; clear navigatedTo so the TW reload isn't mistaken for a redirect
     setRunState({ active: true, page: state.page + 1 });
@@ -607,7 +622,6 @@
           : window.$.trim($cmdCell.text());
         if (!name) return;
 
-        // Change 2: on load, rows already tagged → show chip immediately
         var hasButtons = $row.find('.rename-buttons').length > 0;
         var hasChip    = $row.find('.mlr-chip').length > 0;
         var hasQE      = $row.find('.quickedit-content').length > 0;
@@ -643,7 +657,6 @@
         if (href.indexOf('target_village') >= 0) destinoColIdx = i;
       });
 
-      // Change 5: write live stats to sessionStorage + inject multi-target badges
       try {
         var total      = $rows.length;
         var untagged   = 0;
@@ -780,7 +793,6 @@
     tick();
     setInterval(tick, 1000);
 
-    // Change 4: set up keyboard shortcuts once table exists
     if (kbEnabled) {
       setupKeyboardShortcuts();
     }

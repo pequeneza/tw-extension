@@ -37,7 +37,6 @@ Adds **BITO colour-coded label buttons** to every row in the incomings table. Cl
 |-------|---------|-------------|
 | `minDelaySeconds` | 120 | Minimum seconds between label API calls (rate limiting). |
 | `randomExtraMax` | 30 | Additional random seconds on top of the minimum delay. |
-| `labelIndex` | 0 | Which label slot to use (0-indexed). |
 | `highlightMode` | `'coluna'` | Row paint mode (`'coluna'` or `'full'`). |
 | `kbEnabled` | true | Enable keyboard shortcuts for labelling. |
 | `originBadgeEnabled` | true | Show a badge showing the origin village on each row. |

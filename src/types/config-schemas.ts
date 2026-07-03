@@ -488,16 +488,6 @@ export const MODULE_CONFIG_SCHEMAS: ModuleConfigSchemas = {
         help: "Random seconds added on top of the min delay.",
       },
       {
-        key: "labelIndex",
-        label: "Label slot index (0-based)",
-        type: "number",
-        default: 0,
-        min: 0,
-        max: 9,
-        step: 1,
-        help: "Which radio label slot to select in the Etiqueta form.",
-      },
-      {
         key: "originBadgeEnabled",
         label: "Multi-target origin badge",
         type: "checkbox",

@@ -1647,11 +1647,21 @@ select.input {
 .desv-td--village { color: var(--b500); max-width: 90px; }
 
 .desv-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--g400); border: 1px solid var(--g-br); vertical-align: middle; }
-.desv-dot--fired { background: var(--a500); border-color: var(--a-br); }
+.desv-dot--fired     { background: var(--a500); border-color: var(--a-br); }
+.desv-dot--recovered { background: var(--r500); border-color: var(--r-br); }
 
 .desv-mono { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; color: var(--g600); }
 .desv-mono--fired { color: var(--a500); }
 .desv-mono--muted { color: var(--n400); }
+
+.desv-hist-panel { border-top: 1px solid var(--n150); background: var(--n50); max-height: 200px; overflow-y: auto; flex-shrink: 0; }
+.desv-hist-panel::-webkit-scrollbar { width: 4px; }
+.desv-hist-panel::-webkit-scrollbar-thumb { background: var(--n200); border-radius: 2px; }
+.desv-hist-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 14px 4px; }
+.desv-hist-title { font-size: 11px; font-weight: 600; color: var(--n400); text-transform: uppercase; letter-spacing: 0.05em; }
+.desv-hist-clear { font-size: 11px; color: var(--r500); background: none; border: none; cursor: pointer; padding: 0; }
+.desv-hist-clear:hover { text-decoration: underline; }
+.desv-hist-badge { display: inline-block; font-size: 10px; padding: 0 4px; border-radius: 8px; background: var(--r-bg); color: var(--r500); border: 1px solid var(--r-br); margin-left: 4px; font-weight: 600; vertical-align: middle; }
 
 /* ── Kumin Gluer ─────────────────────────────────────────────────────────── */
 .gluer-view {

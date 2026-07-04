@@ -6,6 +6,7 @@ const MUTE_KEY          = "twDesviador_muteSound";
 const ALL_COMMANDS_KEY  = "twDesviador_allCommands";
 const BLACKLIST_KEY     = "twDesviador_blacklist";
 const WHITELIST_KEY     = "twDesviador_whitelist";
+const HISTORY_KEY       = "twDesviador_history";
 
 interface ScheduledEntry {
   cmdId: string;
@@ -26,6 +27,16 @@ interface DesvState {
   whitelist: string;
 }
 
+interface HistoryEntry {
+  cmdId: string;
+  label?: string;
+  villageName?: string;
+  village: string;
+  arrivalMs?: number;
+  firedAt: number;
+  recovered?: boolean;
+}
+
 interface CancelToast {
   id: number;
   village: string;
@@ -41,6 +52,11 @@ function useMountAnim(trigger: boolean) {
 }
 
 function pad2(n: number) { return String(n).padStart(2, "0"); }
+
+function fmtTime(ms: number) {
+  const d = new Date(ms);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+}
 
 function fmtCountdown(ms: number) {
   if (ms <= 0) return "00:00";
@@ -132,7 +148,11 @@ export function DesviadorView({
   const [alertSec, setAlertSec] = useState(() =>
     parseInt(localStorage.getItem(ALERT_SEC_KEY) || "60", 10)
   );
+  const [history, setHistory] = useState<HistoryEntry[]>(() => {
+    try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); } catch { return []; }
+  });
   const [showCfg, setShowCfg] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [toasts, setToasts] = useState<CancelToast[]>([]);
   const toastIdRef = useRef(0);
@@ -144,8 +164,10 @@ export function DesviadorView({
   }, [visible]);
 
   useEffect(() => {
-    const handler = (e: Event) =>
+    const handler = (e: Event) => {
       setDesvState((e as CustomEvent<DesvState>).detail);
+      try { setHistory(JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]")); } catch {}
+    };
     document.addEventListener("xbot:desviador:state", handler);
     return () => document.removeEventListener("xbot:desviador:state", handler);
   }, []);
@@ -163,6 +185,11 @@ export function DesviadorView({
 
   const sendCmd = useCallback((detail: Record<string, unknown>) => {
     document.dispatchEvent(new CustomEvent("xbot:desviador:cmd", { detail }));
+  }, []);
+
+  const clearHistory = useCallback(() => {
+    localStorage.removeItem(HISTORY_KEY);
+    setHistory([]);
   }, []);
 
   const handleCancelSec = (raw: string) => {
@@ -228,6 +255,11 @@ export function DesviadorView({
               : "Parado"}
           </span>
         </div>
+        <button
+          className={`desv-cfg-btn${showHistory ? " desv-cfg-btn--open" : ""}`}
+          onClick={() => setShowHistory(v => !v)}
+          title="Histórico"
+        >⏱</button>
         <button
           className={`desv-cfg-btn${showCfg ? " desv-cfg-btn--open" : ""}`}
           onClick={() => setShowCfg(v => !v)}
@@ -390,6 +422,39 @@ export function DesviadorView({
           </table>
         )}
       </div>
+
+      {/* ── History panel ── */}
+      {showHistory && (
+        <div className="desv-hist-panel">
+          <div className="desv-hist-head">
+            <span className="desv-hist-title">Histórico de envios</span>
+            {history.length > 0 && (
+              <button className="desv-hist-clear" onClick={clearHistory}>Limpar</button>
+            )}
+          </div>
+          {history.length === 0 ? (
+            <div className="desv-empty" style={{ padding: "12px 14px" }}>Sem histórico.</div>
+          ) : (
+            <table className="desv-table">
+              <tbody>
+                {[...history].reverse().slice(0, 20).map(h => (
+                  <tr key={h.cmdId + h.firedAt} className="desv-row">
+                    <td className="desv-td desv-td--dot">
+                      <span className={`desv-dot${h.recovered ? " desv-dot--recovered" : " desv-dot--fired"}`} />
+                    </td>
+                    <td className="desv-td desv-td--label" title={h.label}>
+                      {h.label || h.cmdId}
+                      {h.recovered && <span className="desv-hist-badge">cache</span>}
+                    </td>
+                    <td className="desv-td desv-td--village">{h.villageName || h.village}</td>
+                    <td className="desv-td desv-mono desv-mono--muted">{fmtTime(h.firedAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
     </div>
   );
 }

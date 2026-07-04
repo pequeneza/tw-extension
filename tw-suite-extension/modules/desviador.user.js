@@ -23,6 +23,7 @@
     const ALL_COMMANDS_KEY     = 'twDesviador_allCommands';/* ignore [Desviar] filter   */
     const BLACKLIST_KEY        = 'twDesviador_blacklist'; /* comma-sep act-upon tags    */
     const WHITELIST_KEY        = 'twDesviador_whitelist'; /* comma-sep ignore tags      */
+    const HISTORY_KEY          = 'twDesviador_history';  /* fired command log (last 50) */
     const RECOVERY_STAGGER_MS  = 3_000;  /* inter-tab delay during missed-fire recovery  */
     const POPUP_TIMEOUT_MS     = 6_000;  /* max wait for popup rows / support btn        */
 
@@ -69,6 +70,20 @@
         localStorage.removeItem(PENDING_PREFIX + cmdId);
     }
 
+    function getHistory() {
+        try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch { return []; }
+    }
+    function addHistory(entry) {
+        const MAX_HIST  = 50;
+        const EXPIRE_MS = 48 * 3_600_000;
+        const now       = Date.now();
+        const hist      = getHistory()
+            .filter(h => now - h.firedAt < EXPIRE_MS)
+            .slice(-(MAX_HIST - 1));
+        hist.push(entry);
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(hist));
+    }
+
     /* Bind this tab to its cmdId via sessionStorage.
      * sessionStorage persists across navigations within the same tab but is
      * never shared between tabs — so two concurrent tabs never collide. */
@@ -84,6 +99,7 @@
     /* ── recovery on every page load ─────────────────────────────────────────*/
 
     function recoverMissedFires() {
+        if (localStorage.getItem(ACTIVE_KEY) !== '1') return;
         const now = Date.now();
         const toRecover = [];
         for (let i = localStorage.length - 1; i >= 0; i--) {
@@ -104,8 +120,9 @@
         toRecover.forEach((d, i) => {
             setTimeout(() => {
                 if (getPending(d.cmdId)) return;
+                addHistory({ cmdId: d.cmdId, village: d.village, firedAt: Date.now(), recovered: true });
                 setPending({ phase: 'send', village: d.village, cancelMs: d.cancelMs, cmdId: d.cmdId });
-                window.open(`/game.php?${sitterPrefix()}village=${d.village}&screen=place&__desv=${d.cmdId}`, '_blank', 'toolbar=no,location=no,menubar=no,scrollbars=no,status=no,width=1,height=1,left=0,top=0');
+                window.open(`/game.php?${sitterPrefix()}village=${d.village}&screen=place&__desv=${d.cmdId}`, '_blank');
                 window.focus();
             }, i * RECOVERY_STAGGER_MS);
         });
@@ -227,7 +244,11 @@
             localStorage.removeItem(ACTIVE_KEY);
             timers.forEach(clearTimeout); timers.length = 0;
             alertTimers.forEach(clearTimeout); alertTimers.length = 0;
-            scheduled.forEach(id => localStorage.removeItem(SCHED_PREFIX + id));
+            for (let i = localStorage.length - 1; i >= 0; i--) {
+                const k = localStorage.key(i);
+                if (k && (k.startsWith(SCHED_PREFIX) || k.startsWith(PENDING_PREFIX)))
+                    localStorage.removeItem(k);
+            }
             scheduled.clear(); scheduledDetails.clear();
             if (tickerId) { clearInterval(tickerId); tickerId = null; }
             document.title = originalTitle;
@@ -452,6 +473,7 @@
                         const detail = scheduledDetails.get(cmdId);
                         if (detail) detail.fired = true;
                         localStorage.removeItem(SCHED_PREFIX + cmdId);
+                        addHistory({ cmdId, label: labelText, villageName, village: destVillage, arrivalMs, firedAt: Date.now() });
                         setPending({ phase: 'send', village: destVillage, cancelMs, cmdId });
                         window.open(`/game.php?${sitterPrefix()}village=${destVillage}&screen=place&__desv=${cmdId}`, '_blank');
                         return;
@@ -471,6 +493,7 @@
                         if (detail) detail.fired = true;
                         localStorage.removeItem(SCHED_PREFIX + cmdId);
                         if (td1) td1.style.outline = '2px solid #d97706';
+                        addHistory({ cmdId, label: labelText, villageName, village: destVillage, arrivalMs, firedAt: Date.now() });
                         setPending({ phase: 'send', village: destVillage, cancelMs, cmdId });
                         window.open(`/game.php?${sitterPrefix()}village=${destVillage}&screen=place&__desv=${cmdId}`, '_blank');
                         dispatchState();

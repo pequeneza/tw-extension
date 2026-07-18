@@ -25,6 +25,13 @@
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
+    // Adds random jitter to fixed UI-automation delays so repeated runs (and
+    // different installs of this script) don't produce an identical, mechanically
+    // precise timing signature.
+    function jitter(baseMs, spreadMs) {
+        return Math.max(0, Math.round(baseMs + (Math.random() * 2 - 1) * spreadMs));
+    }
+
     /* ═══════════════════════════════════════════════════════════════════════
        CSS
     ═══════════════════════════════════════════════════════════════════════ */
@@ -135,7 +142,7 @@
         }
 
         counter.textContent = '✓';
-        await sleep(800);
+        await sleep(jitter(800, 200));
         location.reload();
     }
 

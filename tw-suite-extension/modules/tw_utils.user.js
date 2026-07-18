@@ -546,9 +546,12 @@
         else wrap.classList.add('tw-bc-empty');
     }
 
+    const BULK_CANCEL_SCREENS = ['place', 'overview', 'info_village'];
+
     function initBulkCancel() {
-        if (getCurrentScreen() !== 'place') return;
-        if (location.href.includes('try=confirm')) return;
+        const screen = getCurrentScreen();
+        if (!BULK_CANCEL_SCREENS.includes(screen)) return;
+        if (screen === 'place' && location.href.includes('try=confirm')) return;
 
         injectBcFixed();
         processBcTables();
@@ -558,12 +561,6 @@
             if (_bcTimer) return;
             _bcTimer = setTimeout(() => { _bcTimer = null; processBcTables(); updateBcFixed(); }, 250);
         }).observe(document.body, { childList: true, subtree: true });
-
-        document.addEventListener('xbot:twutils:cancelAll', () => {
-            const wrap = document.getElementById('tw-bc-fixed');
-            const counter = document.getElementById('tw-bc-fixed-counter');
-            if (wrap && counter) cancelAll(wrap, counter);
-        });
     }
 
     /* ═══════════════════════════════════════════════════════════════════════

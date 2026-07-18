@@ -75,8 +75,6 @@ export function TwUtilsView({
   onShowDrawerChange: (v: boolean) => void;
 }) {
   const [cfg, setCfg] = useState<TwUtilsCfg>(DEFAULTS);
-  const [cancelCount, setCancelCount] = useState(0);
-  const [cancelling, setCancelling] = useState(false);
   const [template, setTemplate] = useState<AttackTemplate>({});
   const [templateSaved, setTemplateSaved] = useState(false);
   const [mapSelActive, setMapSelActive] = useState(false);
@@ -84,8 +82,9 @@ export function TwUtilsView({
   const [mapSelOutput, setMapSelOutput] = useState("");
   const anim = useMountAnim(visible);
 
-  const isPlacePage = /screen=place/.test(window.location.href) &&
-                      !window.location.href.includes("try=confirm");
+  const screenParam = new URLSearchParams(window.location.search).get("screen");
+  const isBulkCancelPage = ["place", "overview", "info_village"].includes(screenParam ?? "") &&
+                           !(screenParam === "place" && window.location.href.includes("try=confirm"));
   const isMapPage   = /screen=map/.test(window.location.href);
 
   useEffect(() => {
@@ -128,16 +127,6 @@ export function TwUtilsView({
     document.dispatchEvent(new CustomEvent("xbot:mapsel:clear"));
   }, []);
 
-  // Poll cancel-link count so the button reflects live state
-  useEffect(() => {
-    if (!visible || !isPlacePage) return;
-    const update = () =>
-      setCancelCount(document.querySelectorAll("a.command-cancel[href]").length);
-    update();
-    const id = setInterval(update, 1000);
-    return () => clearInterval(id);
-  }, [visible, isPlacePage]);
-
   const toggle = useCallback(async (key: keyof TwUtilsCfg) => {
     const next = { ...cfg, [key]: !cfg[key] };
     setCfg(next);
@@ -161,14 +150,6 @@ export function TwUtilsView({
     setCfg(next);
     await storageSet({ [STORAGE_KEY]: next });
   }, [cfg]);
-
-  const triggerCancelAll = useCallback(() => {
-    if (!cancelCount || cancelling) return;
-    setCancelling(true);
-    document.dispatchEvent(new CustomEvent("xbot:twutils:cancelAll"));
-    // Reset after page would reload; guard in case it didn't
-    setTimeout(() => setCancelling(false), 5000);
-  }, [cancelCount, cancelling]);
 
   return (
     <div className={`cfg-view${anim ? " in" : ""}`}
@@ -340,25 +321,13 @@ export function TwUtilsView({
           </div>
         </div>
 
-        {isPlacePage && (
+        {isBulkCancelPage && (
           <div className="cfg-section">
             <div className="section-label">Bulk Cancel</div>
-            <div style={{ display: "flex", alignItems: "center",
-                          justifyContent: "space-between", gap: "8px",
-                          padding: "8px 14px" }}>
-              <span style={{ fontSize: "12px", color: "var(--n400)" }}>
-                {cancelCount > 0
-                  ? `${cancelCount} command${cancelCount !== 1 ? "s" : ""} queued`
-                  : "No outgoing commands"}
+            <div style={{ padding: "8px 14px" }}>
+              <span style={{ fontSize: "11px", color: "var(--n400)" }}>
+                Use o ícone 🗑️ junto à tabela de comandos para cancelar tudo.
               </span>
-              <button
-                className={`btn btn-save${cancelCount > 0 && !cancelling ? " btn-save--dirty" : ""}`}
-                style={{ minWidth: 0, padding: "4px 10px", flexShrink: 0 }}
-                onClick={triggerCancelAll}
-                disabled={cancelCount === 0 || cancelling}
-              >
-                {cancelling ? "Cancelling…" : "Cancel All"}
-              </button>
             </div>
             <div style={{ display: "flex", gap: "12px", padding: "4px 14px 8px",
                           alignItems: "center" }}>

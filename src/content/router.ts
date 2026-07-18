@@ -22,6 +22,7 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 interface LicenseCache {
   valid: boolean;
+  expiresAt: string | null;
   ts: number;
 }
 
@@ -40,7 +41,7 @@ function injectScript(src: string): void {
   (document.head ?? document.documentElement).appendChild(s);
 }
 
-async function isLicenseValid(key: string): Promise<boolean> {
+async function checkLicense(key: string): Promise<LicenseCache> {
   const cached = await new Promise<LicenseCache | null>((res) =>
     chrome.storage.local.get(LICENSE_CACHE_KEY, (r) =>
       res((r[LICENSE_CACHE_KEY] as LicenseCache) ?? null)
@@ -48,19 +49,20 @@ async function isLicenseValid(key: string): Promise<boolean> {
   );
 
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
-    return cached.valid;
+    return cached;
   }
 
   try {
-    const { valid } = await new Promise<{ valid: boolean }>((res, rej) =>
+    const { valid, expiresAt } = await new Promise<{ valid: boolean; expiresAt: string | null }>((res, rej) =>
       chrome.runtime.sendMessage({ type: "VALIDATE_LICENSE", key }, (r) =>
         chrome.runtime.lastError ? rej(chrome.runtime.lastError) : res(r)
       )
     );
-    chrome.storage.local.set({ [LICENSE_CACHE_KEY]: { valid, ts: Date.now() } });
-    return valid;
+    const fresh: LicenseCache = { valid, expiresAt, ts: Date.now() };
+    chrome.storage.local.set({ [LICENSE_CACHE_KEY]: fresh });
+    return fresh;
   } catch {
-    return cached?.valid ?? false;
+    return cached ?? { valid: false, expiresAt: null, ts: Date.now() };
   }
 }
 
@@ -71,8 +73,8 @@ chrome.storage.sync.get(buildStorageKeys(), async (result) => {
   const licenseKey = (result[LICENSE_STORAGE_KEY] as string) ?? "";
   if (!licenseKey) return;
 
-  const valid = await isLicenseValid(licenseKey);
-  if (!valid) return;
+  const license = await checkLicense(licenseKey);
+  if (!license.valid) return;
 
   const settings = (result[STORAGE_KEY] as ModuleSettings) ?? {};
 

@@ -16,6 +16,13 @@
     if (window.__mapoiosRunning) return;
     window.__mapoiosRunning = true;
 
+    // Adds random jitter to fixed UI-automation delays so repeated runs (and
+    // different installs of this script) don't produce an identical, mechanically
+    // precise timing signature.
+    function jitter(baseMs, spreadMs) {
+        return Math.max(0, Math.round(baseMs + (Math.random() * 2 - 1) * spreadMs));
+    }
+
     // ─── Page detection via URLSearchParams (order-independent) ────────────────
     const _p        = new URLSearchParams(location.search);
     const isMassPage = _p.get('screen') === 'place' && _p.get('mode') === 'call' && !_p.get('try');
@@ -43,7 +50,7 @@
             setTimeout(function () {
                 var btn = document.querySelector('#place_call_form_submit, .btn-confirm-yes, input[value="Enviar apoio"]');
                 if (btn) btn.click();
-            }, 1500);
+            }, jitter(1500, 300));
         }
         return;
     }
@@ -107,10 +114,10 @@
 
         if (batch.state === 'filling') {
             // Target was selected; fill troops and send
-            setTimeout(function () { autoFillAndSend(batch); }, 2000);
+            setTimeout(function () { autoFillAndSend(batch); }, jitter(2000, 400));
         } else {
             // Need to select the next target via autocomplete
-            setTimeout(function () { navigateToTarget(batch.targets[batch.index], batch.group, batch); }, 800);
+            setTimeout(function () { navigateToTarget(batch.targets[batch.index], batch.group, batch); }, jitter(800, 200));
         }
     })();
 
@@ -131,22 +138,30 @@
         return null;
     }
 
+    // Finds the autocomplete suggestion whose displayed coord actually matches — never
+    // trust "whichever item is first", since a stale/leftover suggestion from the
+    // previous target can still be in the DOM when the poll fires.
+    function findMatchingAutocompleteItem(coord) {
+        var items = document.querySelectorAll('.target-select-autocomplete .village-item');
+        for (var i = 0; i < items.length; i++) {
+            var m = items[i].textContent.match(/\d+\s*\|\s*\d+/);
+            if (m && normalizeCoord(m[0]) === normalizeCoord(coord)) return items[i];
+        }
+        return null;
+    }
+
     function navigateToTarget(coord, group, batch) {
         // If the page already has this target selected, skip navigation and fill directly
         var cur = getCurrentTargetCoord();
         if (cur && normalizeCoord(cur) === normalizeCoord(coord)) {
-            logBatch('[Batch] Alvo já ativo: ' + coord + ' — a preencher diretamente');
+            logBatch('[Batch] Alvo já ativo: ' + coord + ' — a preencher diretamente', batch);
             batch.state = 'filling';
             setBatch(batch);
-            setTimeout(function () { autoFillAndSend(getBatch()); }, 800);
+            setTimeout(function () { autoFillAndSend(getBatch()); }, jitter(800, 200));
             return;
         }
 
-        // Step 1: clear current target if one is shown
-        var delBtn = document.querySelector('img.village-delete');
-        if (delBtn) delBtn.click();
-
-        setTimeout(function () {
+        function typeAndSelect() {
             // Step 2: type coord into the autocomplete input
             var inp = document.querySelector('input.target-input-field, input.target-input-autocomplete, input.ui-autocomplete-input');
             if (!inp) { _urlNavigate(coord, group, batch); return; }
@@ -155,11 +170,12 @@
             // Trigger jQuery UI autocomplete via key events
             $(inp).trigger('focus').trigger('keydown').trigger('keyup').trigger('input');
 
-            // Step 3: poll for the autocomplete dropdown to appear
+            // Step 3: poll for an autocomplete suggestion that actually matches this coord
+            // (not just "the first item" — that can be a stale entry from the previous target)
             var waited = 0, maxWait = 4000, pollMs = 200;
             var poll = setInterval(function () {
                 waited += pollMs;
-                var item = document.querySelector('.target-select-autocomplete .village-item');
+                var item = findMatchingAutocompleteItem(coord);
                 if (item) {
                     clearInterval(poll);
 
@@ -175,15 +191,32 @@
                     setTimeout(function () {
                         var b = getBatch();
                         if (b && b.running && b.state === 'filling') autoFillAndSend(b);
-                    }, 2500);
+                    }, jitter(2500, 400));
 
                 } else if (waited >= maxWait) {
                     clearInterval(poll);
-                    logBatch('[Batch] Autocomplete timeout for ' + coord + ' — falling back to URL nav');
+                    logBatch('[Batch] Autocomplete timeout for ' + coord + ' — falling back to URL nav', batch);
                     _urlNavigate(coord, group, batch);
                 }
             }, pollMs);
-        }, 500);
+        }
+
+        // Step 1: clear current target if one is shown, then WAIT for the deletion to
+        // actually take effect before typing the next coord — a fixed 500ms guess here
+        // was the root cause of clicks landing on the still-active previous target when
+        // TW's delete/refresh took longer than that.
+        var delBtn = document.querySelector('img.village-delete');
+        if (!delBtn) { setTimeout(typeAndSelect, jitter(500, 150)); return; }
+
+        delBtn.click();
+        var clearWaited = 0, clearMaxWait = 2500, clearPollMs = 100;
+        var clearPoll = setInterval(function () {
+            clearWaited += clearPollMs;
+            if (!document.querySelector('img.village-delete') || clearWaited >= clearMaxWait) {
+                clearInterval(clearPoll);
+                setTimeout(typeAndSelect, jitter(200, 60));
+            }
+        }, clearPollMs);
     }
 
     function _urlNavigate(coord, group, batch) {
@@ -210,18 +243,25 @@
         // Zero all visible unit inputs
         document.querySelectorAll('#village_troup_list input[type=number]').forEach(function (i) { i.value = 0; });
 
-        // Apply template to each visible village row.
-        // Template values are stored in thousands (send row UX: 1 = 1000 troops).
+        // Apply template to the destination as a whole: each template value is the TOTAL
+        // troop count wanted at the target (k → actual count), not a per-village amount.
+        // Rows are in the page's distance-to-target order, so we consume the nearest
+        // villages' availability first until the requested total is met.
+        var remaining = {};
+        Object.keys(tpl).forEach(function (unit) {
+            remaining[unit] = Math.round((parseFloat(tpl[unit]) || 0) * 1000); // k → actual count
+        });
         document.querySelectorAll('#village_troup_list tbody tr').forEach(function (row) {
             Object.keys(tpl).forEach(function (unit) {
-                var amount = Math.round((parseFloat(tpl[unit]) || 0) * 1000); // k → actual count
-                if (!amount) return;
+                if (!remaining[unit]) return;
                 var input = row.querySelector('.call-unit-box-' + unit);
                 if (!input) return;
                 var availEl = row.querySelector("[data-unit='" + unit + "']");
                 // Strip non-digit chars: TW PT uses '.' as thousands sep ("1.000" → 1000)
-                var avail = availEl ? (parseInt(availEl.textContent.replace(/\D/g, ''), 10) || 0) : amount;
-                input.value = Math.min(amount, avail);
+                var avail = availEl ? (parseInt(availEl.textContent.replace(/\D/g, ''), 10) || 0) : 0;
+                var take = Math.min(remaining[unit], avail);
+                input.value = take;
+                remaining[unit] -= take;
             });
         });
 
@@ -244,6 +284,27 @@
             var fb = getBatch();
             if (!fb || !fb.running || fb.state !== 'filling') return;
 
+            var totalSentThisTarget = Object.keys(sentTotals).reduce(function (sum, u) { return sum + sentTotals[u]; }, 0);
+            if (totalSentThisTarget === 0) {
+                // Nothing was actually available to send (e.g. the unit ran out across all
+                // villages). Submitting would create an empty order, so skip it instead of
+                // falsely logging this target as sent.
+                logBatch('[' + (fb.index + 1) + '/' + fb.targets.length + '] ' + (fb.targets[fb.index] || '') + ' → SEM TROPAS DISPONÍVEIS, ignorado', fb);
+                fb.index++;
+                if (fb.index >= fb.targets.length) {
+                    fb.running  = false;
+                    fb.finished = true;
+                    setBatch(fb);
+                    updateBatchUI(fb);
+                } else {
+                    fb.state = 'selecting';
+                    setBatch(fb);
+                    updateBatchUI(fb);
+                    navigateToTarget(fb.targets[fb.index], fb.group, fb);
+                }
+                return;
+            }
+
             var submitBtn = (
                 document.getElementById('place_call_form_submit') ||
                 document.querySelector('#place_call_send input[type=submit]') ||
@@ -254,7 +315,7 @@
             );
             if (submitBtn) {
                 // Advance index BEFORE clicking — submit causes a page reload
-                logBatch('[' + (fb.index + 1) + '/' + fb.targets.length + '] ' + (fb.targets[fb.index] || '') + (sentStr ? ' → ' + sentStr : ''));
+                logBatch('[' + (fb.index + 1) + '/' + fb.targets.length + '] ' + (fb.targets[fb.index] || '') + (sentStr ? ' → ' + sentStr : ''), fb);
                 // Accumulate grand total
                 if (!fb.totalSent) fb.totalSent = {};
                 Object.keys(sentTotals).forEach(function (u) {
@@ -272,7 +333,7 @@
             } else {
                 showBatchNotice('Batch: tropas preenchidas — clica Enviar manualmente (' + (fb.index + 1) + '/' + fb.targets.length + ')');
             }
-        }, 1500);
+        }, jitter(1500, 300));
     }
 
     function showBatchNotice(msg) {
@@ -490,6 +551,9 @@
             '<span style="font-size:11px">Pausa (s):</span>' +
             '<input type="number" id="batch_delay" class="scriptInput" value="3" min="1" max="30" style="width:50px;background:' + backgroundInput + ';color:' + textColor + ';border:1px solid ' + borderColor + '">' +
             '</div>' +
+            // Shows the resolved troop amounts this batch will actually send — templates are
+            // frozen at save time, so editing the Tropas tab afterwards does NOT change them.
+            '<div id="batch_tmpl_preview" class="tmpl-preview" style="background:' + backgroundContainer + ';border:1px solid ' + borderColor + '"></div>' +
             // Buttons
             '<div style="display:flex;gap:6px;align-items:center;margin-top:6px">' +
             '<button class="btn evt-confirm-btn btn-confirm-yes" id="btn_start_batch">&#9654; Iniciar</button>' +
@@ -816,6 +880,7 @@
             var all = getTemplates(); all[name] = tpl; saveTemplates(all);
             refreshTemplateDropdowns();
             $('#tmpl_name').val('');
+            renderBatchTemplatePreview();
             if (typeof UI !== 'undefined') UI.SuccessMessage('"' + name + '" saved.', 1000);
         });
 
@@ -840,7 +905,21 @@
             var all = getTemplates(); delete all[name]; saveTemplates(all);
             refreshTemplateDropdowns();
             $('#tmpl_preview').text('');
+            renderBatchTemplatePreview();
         });
+    }
+
+    // Shows what the batch will ACTUALLY send for the currently selected Modelo.
+    // Named templates are frozen at save time — editing the Tropas tab afterwards has no
+    // effect on them, which is easy to miss, so make the resolved values visible here.
+    function renderBatchTemplatePreview() {
+        var el = document.getElementById('batch_tmpl_preview');
+        if (!el) return;
+        var key = $('#batch_tmpl').val();
+        var tpl = (key === '__send_row__') ? getTemplateFromSendRow() : (getTemplates()[key] || {});
+        if (!tpl || Object.keys(tpl).length === 0) { el.textContent = 'Vazio — preenche a linha de envio ou escolhe outro modelo.'; return; }
+        var label = (key === '__send_row__') ? 'Linha de envio (ao vivo)' : ('Modelo "' + key + '" (fixo, guardado antes)');
+        el.textContent = label + ': ' + Object.keys(tpl).map(function (u) { return u + ':' + tpl[u] + 'k'; }).join(' | ');
     }
 
     // ─── Batch tab ────────────────────────────────────────────────────────────────
@@ -853,6 +932,9 @@
         $('#batch_group').on('input', function () {
             localStorage.setItem(GROUP_KEY, $(this).val().trim());
         });
+
+        renderBatchTemplatePreview();
+        $('#batch_tmpl').on('change', renderBatchTemplatePreview);
 
         // Chip input for coordinates
         _coordChipInput = createChipInput(
@@ -906,7 +988,7 @@
             var delayS = Math.max(1, parseInt($('#batch_delay').val(), 10) || 3);
             var batch = { running: true, targets: targets, index: 0, template: tpl, group: group, state: 'selecting', delay: delayS * 1000 };
             setBatch(batch);
-            logBatch('A iniciar lote: ' + targets.length + ' alvos. Primeiro: ' + targets[0]);
+            logBatch('A iniciar lote: ' + targets.length + ' alvos. Primeiro: ' + targets[0], batch);
             updateBatchUI(batch);
             navigateToTarget(targets[0], group, batch);
         });
@@ -939,14 +1021,18 @@
         }
     }
 
-    function logBatch(msg) {
+    // batchRef: pass the SAME batch object the caller is about to setBatch() with, so the log
+    // line rides along with it. Without this, logBatch would getBatch() its own fresh copy,
+    // push+save into THAT, and then the caller's later setBatch(theirStaleCopy) would overwrite
+    // storage again and silently drop the just-added line — which is why the log wasn't
+    // surviving reloads (every entry but the last got clobbered this way).
+    function logBatch(msg, batchRef) {
         var line = new Date().toLocaleTimeString() + ' — ' + msg;
-        // Persist to batch state so log survives page reloads
-        var b = getBatch();
+        var b = batchRef || getBatch();
         if (b) {
             if (!b.log) b.log = [];
             b.log.push(line);
-            setBatch(b);
+            if (!batchRef) setBatch(b);
         }
         var el = document.getElementById('batch_log');
         if (!el) return;
@@ -1132,6 +1218,7 @@
                 pop += val * 1000 * (popWeights[unit] || 0);
             });
             document.getElementById('packets_send').value = (pop / 1000).toFixed(2);
+            if ($('#batch_tmpl').val() === '__send_row__') renderBatchTemplatePreview();
         });
 
         $('#packets_send').off('input').on('input', function () {

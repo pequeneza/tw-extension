@@ -276,18 +276,22 @@ function LicenseView({ visible, onBack, onClose }: {
     const key = keyInput.trim().toUpperCase();
     if (!key) return;
     setStatus("checking");
+    let expiresAt: string | null = null;
     try {
-      const { valid } = await new Promise<{ valid: boolean }>((res, rej) =>
+      const result = await new Promise<{ valid: boolean; expiresAt: string | null }>((res, rej) =>
         chrome.runtime.sendMessage({ type: "VALIDATE_LICENSE", key }, (r) =>
           chrome.runtime.lastError ? rej(chrome.runtime.lastError) : res(r)
         )
       );
-      if (!valid) { setStatus("invalid"); return; }
+      if (!result.valid) { setStatus("invalid"); return; }
+      expiresAt = result.expiresAt;
     } catch {
       setStatus("error"); return;
     }
     await new Promise<void>((res) => chrome.storage.sync.set({ [LICENSE_STORAGE_KEY]: key }, res));
-    await new Promise<void>((res) => chrome.storage.local.remove(LICENSE_CACHE_KEY, res));
+    await new Promise<void>((res) =>
+      chrome.storage.local.set({ [LICENSE_CACHE_KEY]: { valid: true, expiresAt, ts: Date.now() } }, res)
+    );
     setSavedKey(key);
     setStatus("saved");
   }
@@ -507,7 +511,7 @@ function StatsBar() {
 /* ─── Panel ───────────────────────────────────────────────────────────────── */
 function Panel({
   visible, onClose, s, ready, isOn, toggle, view, setViewP, theme, onToggleTheme,
-  onTwUtilsDrawerChange,
+  onTwUtilsDrawerChange, licenseExpiresAt,
 }: {
   visible: boolean;
   onClose: () => void;
@@ -520,6 +524,7 @@ function Panel({
   theme: "light" | "dark";
   onToggleTheme: () => void;
   onTwUtilsDrawerChange: (v: boolean) => void;
+  licenseExpiresAt: string | null;
 }) {
   const [search, setSearch] = useState("");
   const searchRef           = useRef<HTMLInputElement>(null);
@@ -548,6 +553,10 @@ function Panel({
 
   const cfgId = view.type === "config" ? view.id : null;
 
+  const licenseDaysLeft = licenseExpiresAt
+    ? Math.ceil((new Date(`${licenseExpiresAt}T00:00:00`).getTime() - Date.now()) / 86_400_000)
+    : null;
+
   return (
     <div className={`panel${anim ? " in" : ""}`}
          style={{ display: visible ? "flex" : "none" }}>
@@ -559,6 +568,13 @@ function Panel({
             <span className="panel-logo">⚡</span>
             <div>
               <div className="panel-title">xBot</div>
+              {licenseExpiresAt && licenseDaysLeft !== null && (
+                <div className={`panel-license${licenseDaysLeft <= 7 ? " panel-license--warn" : ""}`}>
+                  Expires {licenseExpiresAt} · {licenseDaysLeft > 0
+                    ? `${licenseDaysLeft} day${licenseDaysLeft !== 1 ? "s" : ""} left`
+                    : "expired"}
+                </div>
+              )}
               <div className="panel-meta">
                 <span className="meta-chip meta-on">{onCount} enabled</span>
                 {liveCount > 0 && (
@@ -761,6 +777,24 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
 
   // Settings live HERE — never unmount, never reset on close
   const { s, ready, isOn, toggle } = useSettings();
+
+  // License expiry — read the validation cache written by router.ts / LicenseView,
+  // and stay in sync when either revalidates (fresh save, cache refresh on nav).
+  const [licenseExpiresAt, setLicenseExpiresAt] = useState<string | null>(null);
+  useEffect(() => {
+    const read = () => {
+      chrome.storage.local.get(LICENSE_CACHE_KEY, (r) => {
+        const cache = r[LICENSE_CACHE_KEY] as { expiresAt?: string | null } | undefined;
+        setLicenseExpiresAt(cache?.expiresAt ?? null);
+      });
+    };
+    read();
+    const onChange = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area === "local" && changes[LICENSE_CACHE_KEY]) read();
+    };
+    chrome.storage.onChanged.addListener(onChange);
+    return () => chrome.storage.onChanged.removeListener(onChange);
+  }, []);
 
   // tw_utils: whether to show the ⚙️ drawer trigger button
   const [twUtilsShowDrawer, setTwUtilsShowDrawer] = useState(true);
@@ -1058,6 +1092,7 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
           view={view} setViewP={setViewP}
           theme={theme} onToggleTheme={toggleTheme}
           onTwUtilsDrawerChange={setTwUtilsShowDrawer}
+          licenseExpiresAt={licenseExpiresAt}
         />
       </div>
     </>

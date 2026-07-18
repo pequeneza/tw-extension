@@ -15,6 +15,13 @@
     // Capture extension base URL synchronously before any async work
     const EXT_BASE = (document.currentScript?.src ?? '').replace(/\/modules\/[^/]+$/, '');
 
+    // Adds random jitter to fixed UI-automation delays so repeated runs (and
+    // different installs of this script) don't produce an identical, mechanically
+    // precise timing signature.
+    function jitter(baseMs, spreadMs) {
+        return Math.max(0, Math.round(baseMs + (Math.random() * 2 - 1) * spreadMs));
+    }
+
     const QUEUE_KEY    = 'twKuminGluer_queue';
     const CACHE_KEY    = 'twKuminGluer_commandCache';
     const SETTINGS_KEY = 'twKuminGluer_settings';
@@ -655,7 +662,7 @@
             setTimeout(() => {
                 editBtn.click();
                 waitForEditorAndFill(e, fillNext);
-            }, 350);
+            }, jitter(350, 100));
         }
 
         function waitForEditorAndFill(entry, onDone) {
@@ -669,8 +676,8 @@
                     setUnitsInEditor(entry);
                     setTimeout(() => {
                         createBtn.click();
-                        setTimeout(onDone, 800);
-                    }, 400);
+                        setTimeout(onDone, jitter(800, 150));
+                    }, jitter(400, 100));
                 } else if (++attempts < 50) {
                     setTimeout(check, 200);
                 } else {

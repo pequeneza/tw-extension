@@ -20,6 +20,14 @@
   const MINT_CLICK_DELAY = 500;
   const LS_NEXT_RUN = 'tw_auto_mint_next_run_at';
 
+  // Adds random jitter to fixed UI-automation delays so repeated runs (and
+  // different installs of this script) don't produce an identical, mechanically
+  // precise timing signature.
+  function jitter(baseMs, spreadMs) {
+    return Math.max(0, Math.round(baseMs + (Math.random() * 2 - 1) * spreadMs));
+  }
+  function nextIntervalMs() { return jitter(INTERVAL, 4000); }
+
   const REFRESH_ON_MISSING_AFTER_MS = 10000;
 
   // Safety: don’t refresh too often
@@ -185,21 +193,21 @@
             armRefreshBecauseMintMissing();
           }
 
-          scheduleNext(INTERVAL);
+          scheduleNext(nextIntervalMs());
         } catch (e) {
           console.error('[AutoMint] Error in delayed mint step:', e);
           setUI({ status: 'error (see console)' });
           armRefreshBecauseMintMissing();
-          scheduleNext(INTERVAL);
+          scheduleNext(nextIntervalMs());
         } finally {
           isMintInProgress = false;
         }
-      }, MINT_CLICK_DELAY);
+      }, jitter(MINT_CLICK_DELAY, 150));
     } catch (e) {
       console.error('[AutoMint] Error in mintCoins:', e);
       setUI({ status: 'error (see console)' });
       armRefreshBecauseMintMissing();
-      scheduleNext(INTERVAL);
+      scheduleNext(nextIntervalMs());
       isMintInProgress = false;
     }
   }
@@ -209,7 +217,7 @@
 
     const saved = Number(localStorage.getItem(LS_NEXT_RUN) || '0');
     if (Number.isFinite(saved) && saved > Date.now()) nextRunAt = saved;
-    else scheduleNext(INTERVAL);
+    else scheduleNext(nextIntervalMs());
 
     startTicker();
 

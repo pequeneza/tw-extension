@@ -27,6 +27,14 @@
     const RECOVERY_STAGGER_MS  = 3_000;  /* inter-tab delay during missed-fire recovery  */
     const POPUP_TIMEOUT_MS     = 6_000;  /* max wait for popup rows / support btn        */
 
+    /* Adds random jitter to fixed UI-automation delays so repeated runs (and
+       different installs of this script) don't produce an identical, mechanically
+       precise timing signature. Not used on the recall-trick's sentAt-derived math
+       (doScheduleCancel's gap window), which needs ms-level fidelity to work. */
+    function jitter(baseMs, spreadMs) {
+        return Math.max(0, Math.round(baseMs + (Math.random() * 2 - 1) * spreadMs));
+    }
+
     const params    = new URLSearchParams(window.location.search);
     const screenId  = params.get('screen');
     const mode      = params.get('mode');
@@ -504,7 +512,7 @@
             }
 
             dispatchState();
-            timers.push(setTimeout(scanAndSchedule, 15_000));
+            timers.push(setTimeout(scanAndSchedule, jitter(15_000, 3_000)));
         }
     }
 
@@ -609,7 +617,7 @@
             }
             proceedWithTarget(rows[0], p, tried);
         };
-        setTimeout(waitRows, 300);
+        setTimeout(waitRows, jitter(300, 80));
     }
 
     function proceedWithTarget(pick, p, tried) {
@@ -664,7 +672,7 @@
                 setTimeout(poll, 200);
             };
             setTimeout(poll, 200);
-        }, 1200);
+        }, jitter(1200, 250));
     }
 
     function doScheduleCancel(p) {
@@ -900,9 +908,13 @@
             return;
         }
 
-        /* Record dispatch time before navigating so the cancel phase knows when to fire */
-        setPending({ ...p, phase: 'cancel', sentAt: Date.now() });
-        setTimeout(() => btn.click(), 400);
+        /* sentAt must match the real click instant — doScheduleCancel's recall-trick
+           math uses sentAt%1000 for ms-level gap alignment, so it's captured inside
+           the callback (after jitter), not before it. */
+        setTimeout(() => {
+            btn.click();
+            setPending({ ...p, phase: 'cancel', sentAt: Date.now() });
+        }, jitter(400, 100));
     }
 
 })();

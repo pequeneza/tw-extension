@@ -24,6 +24,13 @@
     snob: 35, knight: 10
   };
 
+  // Adds random jitter to fixed UI-automation delays so repeated runs (and
+  // different installs of this script) don't produce an identical, mechanically
+  // precise timing signature. Does not touch actual snipe arrival-time math.
+  function jitter(baseMs, spreadMs) {
+    return Math.max(0, Math.round(baseMs + (Math.random() * 2 - 1) * spreadMs));
+  }
+
   function pad2(n) { return String(n).padStart(2, '0'); }
 
   function toDatetimeLocalMs(ms) {
@@ -110,10 +117,10 @@
 
     const okT = fillTargetOnPlace(plan);
     const okU = fillUnitsOnPlace(plan);
-    if (okT && okU) setTimeout(() => submitSupportOnPlace(), 350);
+    if (okT && okU) setTimeout(() => submitSupportOnPlace(), jitter(350, 100));
   }
 
   if (getQueryParam('screen') === 'place') {
-    setTimeout(runPlaceAutomationIfNeeded, 500);
+    setTimeout(runPlaceAutomationIfNeeded, jitter(500, 120));
   }
 })();

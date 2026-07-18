@@ -17,6 +17,13 @@
     const _screen = new URLSearchParams(window.location.search).get('screen');
     const isMemo  = _screen === 'memo';
 
+    // Adds random jitter to fixed UI-automation delays so repeated runs (and
+    // different installs of this script) don't produce an identical, mechanically
+    // precise timing signature.
+    function jitter(baseMs, spreadMs) {
+        return Math.max(0, Math.round(baseMs + (Math.random() * 2 - 1) * spreadMs));
+    }
+
     /* ═══════════════════════════════════════════════════════════════════════
        CONSTANTS
     ═══════════════════════════════════════════════════════════════════════ */
@@ -1144,7 +1151,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
             setTimeout(() => {
                 editBtn.click();
                 waitForEditor(e, fillNext);
-            }, 350);
+            }, jitter(350, 100));
         }
 
         function waitForEditor(entry, onDone) {
@@ -1156,7 +1163,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
                 if (popupDate && popupDate.offsetParent !== null && createBtn) {
                     nativeSet(popupDate, entry.date || '');
                     setUnits(entry);
-                    setTimeout(() => { createBtn.click(); setTimeout(onDone, 800); }, 400);
+                    setTimeout(() => { createBtn.click(); setTimeout(onDone, jitter(800, 150)); }, jitter(400, 100));
                 } else if (++attempts < 50) {
                     setTimeout(check, 200);
                 } else {

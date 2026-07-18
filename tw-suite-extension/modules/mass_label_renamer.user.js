@@ -19,6 +19,13 @@
   var minDelayMs    = (_cfg.minDelaySeconds  !== undefined ? _cfg.minDelaySeconds  : 120) * 1000;
   var randomExtraMs = (_cfg.randomExtraMax   !== undefined ? _cfg.randomExtraMax   : 30)  * 1000;
 
+  // Adds random jitter to fixed UI-automation delays so repeated runs (and
+  // different installs of this script) don't produce an identical, mechanically
+  // precise timing signature.
+  function jitter(baseMs, spreadMs) {
+    return Math.max(0, Math.round(baseMs + (Math.random() * 2 - 1) * spreadMs));
+  }
+
   // ── User preferences ────────────────────────────────────────────────────────
   var tamanho_letra     = 10;
 
@@ -368,7 +375,7 @@
         injectChip(nr, row, 9);
       }
     }
-    setTimeout(drainAutoFakeQueue, 250);
+    setTimeout(drainAutoFakeQueue, jitter(250, 60));
   }
 
   function queueAutoFake(nr, row) {
@@ -457,7 +464,7 @@
         $row.find('input[type=button]').click();
         injectButtonsLegacy(nr, row);
       }
-      setTimeout(function () { processNext(i + 1); }, 250);
+      setTimeout(function () { processNext(i + 1); }, jitter(250, 60));
     }
 
     processNext(0);
@@ -513,7 +520,7 @@
         // After re-opening, simulate a small delay then click the target button
         setTimeout(function () {
           $row.find('#opt' + $row.index() + '_' + tagIdx).click();
-        }, 50);
+        }, jitter(50, 20));
         return;
       }
 

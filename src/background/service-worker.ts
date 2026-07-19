@@ -24,7 +24,7 @@ type BgMessage =
 type BgResponse =
   | { type: "ACTIVE_TAB_URL"; url: string | null }
   | { type: "ACK" }
-  | { type: "LICENSE_RESULT"; valid: boolean };
+  | { type: "LICENSE_RESULT"; valid: boolean; expiresAt: string | null };
 
 // ─── Suppress "no-op fetch handler" warning ───────────────────────────────────
 // Returning nothing (undefined) lets the browser handle the request normally.
@@ -96,8 +96,9 @@ chrome.runtime.onMessage.addListener(
           body: JSON.stringify({ key: message.key }),
         })
           .then((r) => r.json())
-          .then((data: { valid: boolean }) => sendResponse({ type: "LICENSE_RESULT", valid: data.valid }))
-          .catch(() => sendResponse({ type: "LICENSE_RESULT", valid: false }));
+          .then((data: { valid: boolean; expires_at?: string | null }) =>
+            sendResponse({ type: "LICENSE_RESULT", valid: data.valid, expiresAt: data.expires_at ?? null }))
+          .catch(() => sendResponse({ type: "LICENSE_RESULT", valid: false, expiresAt: null }));
         return true;
 
       default:

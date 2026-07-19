@@ -25,7 +25,11 @@
       "Bash(Select-Object FullName)",
       "Bash(node *)",
       "Bash(Get-ChildItem *)",
-      "PowerShell(Get-Content *)"
+      "PowerShell(Get-Content *)",
+      "Bash(git stash *)",
+      "Bash(curl *)",
+      "Read(//c/Users/peque/.ssh/**)",
+      "Bash(python3 -c ' *)"
     ]
   },
   "enabledPlugins": {

@@ -89,13 +89,13 @@ export function createApp(db, adminUser, adminPass) {
   app.post('/validate', (req, res) => {
     res.set('Access-Control-Allow-Origin', '*');
     const { key } = req.body ?? {};
-    if (!key || typeof key !== 'string') return res.json({ valid: false });
+    if (!key || typeof key !== 'string') return res.json({ valid: false, expires_at: null });
     const row = q.get.get(key.trim().toUpperCase());
-    if (!row || row.active !== 1) return res.json({ valid: false });
+    if (!row || row.active !== 1) return res.json({ valid: false, expires_at: null });
     if (row.expires_at && row.expires_at <= new Date().toISOString().slice(0, 10)) {
-      return res.json({ valid: false });
+      return res.json({ valid: false, expires_at: row.expires_at });
     }
-    res.json({ valid: true });
+    res.json({ valid: true, expires_at: row.expires_at ?? null });
   });
 
   // ── Admin routes ───────────────────────────────────────────────────────────────

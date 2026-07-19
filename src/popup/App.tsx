@@ -38,6 +38,7 @@ export function App() {
   const [licenseKey, setLicenseKey] = useState("");
   const [licenseInput, setLicenseInput] = useState("");
   const [licenseStatus, setLicenseStatus] = useState<"idle" | "saving">("idle");
+  const [licenseVisible, setLicenseVisible] = useState(false);
 
   useEffect(() => {
     readStorage().then(({ enabled, settings, licenseKey }) => {
@@ -127,12 +128,25 @@ export function App() {
           <div className="license-row">
             <input
               className="license-input"
-              type="text"
+              type={licenseVisible ? "text" : "password"}
               placeholder="XXXX-XXXX-XXXX-XXXX"
               value={licenseInput}
               onChange={(e) => setLicenseInput(e.target.value)}
               spellCheck={false}
             />
+            <button
+              type="button"
+              className="license-eye"
+              aria-label="Hold to reveal license key"
+              title="Hold to reveal"
+              onMouseDown={() => setLicenseVisible(true)}
+              onMouseUp={() => setLicenseVisible(false)}
+              onMouseLeave={() => setLicenseVisible(false)}
+              onTouchStart={() => setLicenseVisible(true)}
+              onTouchEnd={() => setLicenseVisible(false)}
+            >
+              {licenseVisible ? "🙈" : "👁"}
+            </button>
             {licenseChanged && (
               <button
                 className="license-save"
@@ -258,6 +272,19 @@ const CSS = `
     border: none; border-radius: 5px; cursor: pointer;
   }
   .license-save:disabled { opacity: 0.5; }
+
+  .license-eye {
+    flex-shrink: 0;
+    width: 24px;
+    padding: 4px 0;
+    font-size: 11px;
+    background: #f9fafb;
+    border: 1px solid #e5e7eb; border-radius: 5px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .license-eye:hover { background: #f3f4f6; }
+  .license-eye:active { background: #e5e7eb; }
 
   .license-ok { font-size: 10px; color: #16a34a; }
 

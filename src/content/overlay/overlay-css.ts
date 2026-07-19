@@ -361,6 +361,12 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
   letter-spacing: -0.01em;
   line-height: 1.2;
 }
+.panel-license {
+  font-size: 10.5px;
+  color: var(--n400);
+  margin-top: 2px;
+}
+.panel-license--warn { color: var(--r500); font-weight: 500; }
 .panel-meta {
   display: flex;
   align-items: center;

@@ -1673,6 +1673,51 @@ select.input {
 .gluer-view {
   background: var(--n0);
 }
+/* Whole-panel accent matching the selected command type — inset so it survives overflow:hidden */
+.gluer-view--attack  { box-shadow: inset 0 0 0 2px var(--r500); }
+.gluer-view--support { box-shadow: inset 0 0 0 2px var(--b500); }
+
+.gluer-cfg-note {
+  font-size: 10px;
+  color: var(--n300);
+  font-style: italic;
+  padding: 0 2px;
+}
+
+.gluer-type-toggle {
+  display: flex;
+  gap: 4px;
+}
+.gluer-type-btn {
+  width: 30px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid transparent;
+  border-radius: 5px;
+  background: var(--n50);
+  cursor: pointer;
+  padding: 2px;
+  transition: all var(--ease);
+}
+.gluer-type-btn img { width: 18px; height: 18px; display: block; }
+.gluer-type-btn:hover { background: var(--n100); }
+.gluer-type-btn--active[data-type="Attack"] {
+  border-color: var(--r500);
+  background: color-mix(in srgb, var(--r500) 12%, var(--n0));
+}
+.gluer-type-btn--active[data-type="Support"] {
+  border-color: var(--b500);
+  background: color-mix(in srgb, var(--b500) 12%, var(--n0));
+}
+
+.gluer-reload-btn {
+  flex: none;
+  margin-top: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+}
 
 .gluer-queue-badge {
   background: var(--a500);

@@ -12,7 +12,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { computeScheduledByVillage } from "./queue-utils";
+import { computeScheduledByVillage, fetchWorldSpeed } from "./queue-utils";
 
 /* ─── Constants ───────────────────────────────────────────────────────────── */
 const QUEUE_KEY    = "twKuminGluer_queue";
@@ -41,6 +41,11 @@ const NT_OPTIONS: Array<[string, string]> = [
   ["thirdNobleRed5NT",             "3rd Noble Red 5NT"],
   ["noNT",                         "no NT"],
 ];
+
+const CMD_ICON: Record<"Attack" | "Support", string> = {
+  Attack:  "https://dspt.innogamescdn.com/asset/48a2d4fb/graphic/command/attack.webp",
+  Support: "https://dspt.innogamescdn.com/asset/48a2d4fb/graphic/command/support.webp",
+};
 
 function sitterPrefix(): string {
   const t = new URLSearchParams(window.location.search).get("t");
@@ -278,7 +283,10 @@ function computeCandidates(
 }
 
 /* ─── fetchOwnHomeTroops ──────────────────────────────────────────────────── */
-async function fetchOwnHomeTroops(villageId: string): Promise<VillageTroops[]> {
+/** Result also carries `worldUnits` — the units this world actually trains (from the
+ * overview_villages table header), so the filter can drop e.g. archer/knight on worlds
+ * without them without relying on window.gameData (only reliably populated on screen=place). */
+async function fetchOwnHomeTroops(villageId: string): Promise<{ villages: VillageTroops[]; worldUnits: string[] }> {
   const out: VillageTroops[] = [];
   const headerUnits: string[] = [];
   const seenCoords = new Set<string>();
@@ -338,7 +346,7 @@ async function fetchOwnHomeTroops(villageId: string): Promise<VillageTroops[]> {
     page++;
   }
 
-  return out;
+  return { villages: out, worldUnits: headerUnits };
 }
 
 /* ─── useCountdown ────────────────────────────────────────────────────────── */
@@ -559,6 +567,14 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
     return () => clearInterval(id);
   }, [visible]);
 
+  // Auto-load game/unit speed from the world config once, like planeador.fetchServerConfig
+  useEffect(() => {
+    fetchWorldSpeed().then(({ gameSpeed: gs, unitSpeed: us }) => {
+      setGameSpeed(gs); setGsDraft(String(gs));
+      setUnitSpeed(us); setUsDraft(String(us));
+    });
+  }, []);
+
   useEffect(() => {
     const h = (e: Event) => {
       const detail = (e as CustomEvent<SelectedAttack>).detail;
@@ -589,7 +605,16 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
       ?? null;
     if (!vid) { setTroopsErr("Could not detect village id."); return; }
     setLoadingTrp(true); setTroopsErr(null);
-    try { setTroops(await fetchOwnHomeTroops(vid)); }
+    try {
+      const { villages, worldUnits } = await fetchOwnHomeTroops(vid);
+      setTroops(villages);
+      // Auto-narrow the filter: world-available units ∩ units actually present in troops.
+      const worldSet = new Set(worldUnits);
+      const present = new Set(
+        UNIT_ORDER_SLOW_TO_FAST.filter(u => worldSet.has(u) && villages.some(v => (v.troops[u] ?? 0) > 0))
+      );
+      setEnabledUnits(present.size ? present : new Set(worldUnits.filter(u => UNIT_ORDER_SLOW_TO_FAST.includes(u))));
+    }
     catch (e) { setTroopsErr(`Erro: ${(e as Error).message}`); }
     finally { setLoadingTrp(false); }
   }, [attack]);
@@ -666,7 +691,8 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
   }
 
   return (
-    <div className={`cfg-view gluer-view${visible ? " in" : ""}`}
+    <div className={`cfg-view gluer-view${visible ? " in" : ""}`
+         + (commandType === "Attack" ? " gluer-view--attack" : " gluer-view--support")}
          style={{ display: visible ? "flex" : "none" }}>
 
       {/* Header */}
@@ -802,14 +828,20 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
                 />
               </label>
             </div>
+            <div className="gluer-cfg-note">Velocidades carregadas automaticamente do mundo.</div>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <span style={{ fontSize: 12, color: "var(--n500)", minWidth: 44 }}>Tipo</span>
-              <select className="input" style={{ flex: 1, fontSize: 12 }}
-                value={commandType}
-                onChange={e => setCommandType(e.target.value as "Attack" | "Support")}>
-                <option value="Attack">Ataque</option>
-                <option value="Support">Apoio</option>
-              </select>
+              <div className="gluer-type-toggle">
+                {(["Attack", "Support"] as const).map(t => (
+                  <button key={t} type="button"
+                    className={`gluer-type-btn${commandType === t ? " gluer-type-btn--active" : ""}`}
+                    data-type={t}
+                    title={t === "Attack" ? "Ataque" : "Apoio"}
+                    onClick={() => setCommandType(t)}>
+                    <img src={CMD_ICON[t]} alt={t} />
+                  </button>
+                ))}
+              </div>
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <span style={{ fontSize: 12, color: "var(--n500)", minWidth: 44 }}>NT</span>
@@ -855,6 +887,11 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
               </button>
             </span>
           </div>
+          {troops.length > 0 && (
+            <div className="gluer-cfg-note" style={{ padding: "0 14px 4px" }}>
+              Ajustado automaticamente às unidades deste mundo e às tropas carregadas.
+            </div>
+          )}
           <div className="gluer-unit-filter">
             {UNIT_ORDER_DISPLAY.map(unit => {
               const on = enabledUnits.has(unit);
@@ -885,8 +922,8 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
             {troopsErr && (
               <div className="snipe-error" style={{ marginTop: 4, marginBottom: 6 }}>{troopsErr}</div>
             )}
-            <button className="btn btn-save btn-save--dirty"
-              onClick={loadTroops} disabled={loadingTrp} style={{ marginTop: 6 }}>
+            <button className="btn btn-save btn-save--dirty gluer-reload-btn"
+              onClick={loadTroops} disabled={loadingTrp}>
               {loadingTrp
                 ? <><span className="spinner" /> A carregar…</>
                 : troops.length ? `↺ Recarregar (${troops.length})` : "Carregar tropas"}

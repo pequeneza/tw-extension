@@ -823,19 +823,14 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
         {queue.length > 0 && (
           <span className="gluer-queue-badge">{queue.length}</span>
         )}
+        <button className={`back-btn${tab === "presets" ? " back-btn--active" : ""}`}
+          onClick={() => setTab(t => t === "presets" ? "main" : "presets")}
+          title="Presets de tropas" aria-label="Presets de tropas">
+          ⚙
+        </button>
       </div>
 
       <div className="cfg-body snipe-body">
-
-        {/* Tab bar — main gluer flow vs. troop presets */}
-        <div className="cfg-section" style={{ paddingBottom: 0 }}>
-          <div style={{ display: "flex", gap: 4 }}>
-            <button className={`btn${tab === "main" ? " btn-save" : " btn-ghost"}`}
-              onClick={() => setTab("main")}>🧲 Gluer</button>
-            <button className={`btn${tab === "presets" ? " btn-save" : " btn-ghost"}`}
-              onClick={() => setTab("presets")}>⚙ Presets</button>
-          </div>
-        </div>
 
         {tab === "presets" && (
           <>

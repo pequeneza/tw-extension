@@ -714,6 +714,7 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
   font-family: inherit;
 }
 .back-btn:hover { background: var(--n100); border-color: var(--n200); color: var(--n700); }
+.back-btn--active { background: var(--b-bg); border-color: var(--b-br); color: var(--b500); }
 .cfg-icon { font-size: 18px; flex-shrink: 0; line-height: 1; }
 .cfg-header-text { flex: 1; min-width: 0; }
 .cfg-title {

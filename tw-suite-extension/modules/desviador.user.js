@@ -24,7 +24,6 @@
     const BLACKLIST_KEY        = 'twDesviador_blacklist'; /* comma-sep act-upon tags    */
     const WHITELIST_KEY        = 'twDesviador_whitelist'; /* comma-sep ignore tags      */
     const HISTORY_KEY          = 'twDesviador_history';  /* fired command log (last 50) */
-    const RECOVERY_STAGGER_MS  = 3_000;  /* inter-tab delay during missed-fire recovery  */
     const POPUP_TIMEOUT_MS     = 6_000;  /* max wait for popup rows / support btn        */
 
     /* Adds random jitter to fixed UI-automation delays so repeated runs (and
@@ -104,36 +103,24 @@
         return id;
     }
 
-    /* ── recovery on every page load ─────────────────────────────────────────*/
+    /* ── stale schedule cleanup on every page load ───────────────────────────*/
 
+    /* Recovery used to re-fire any SCHED_PREFIX entry whose fireAt had passed by
+     * treating it as a "missed" send and opening a tab for it. That misidentified
+     * commands as missed too broadly (e.g. a backlog of stale entries all being
+     * past-due at once), causing dozens of tabs/triggers to fire in a single burst.
+     * We no longer attempt recovery — this just clears out stale/expired entries
+     * so they don't keep accumulating in localStorage. */
     function recoverMissedFires() {
-        if (localStorage.getItem(ACTIVE_KEY) !== '1') return;
         const now = Date.now();
-        const toRecover = [];
         for (let i = localStorage.length - 1; i >= 0; i--) {
             const key = localStorage.key(i);
             if (!key || !key.startsWith(SCHED_PREFIX)) continue;
             try {
                 const d = JSON.parse(localStorage.getItem(key));
-                if (!d) { localStorage.removeItem(key); continue; }
-                if (now > d.arrivalMs) { localStorage.removeItem(key); continue; }
-                if (now >= d.fireAt) {
-                    localStorage.removeItem(key); /* claim — prevents duplicate tabs */
-                    toRecover.push(d);
-                }
+                if (!d || now > d.arrivalMs || now >= d.fireAt) localStorage.removeItem(key);
             } catch { localStorage.removeItem(key); }
         }
-        /* Stagger tab opens 3 s apart — prevents Chrome popup blocker from firing
-         * when multiple past-due entries are recovered simultaneously. */
-        toRecover.forEach((d, i) => {
-            setTimeout(() => {
-                if (getPending(d.cmdId)) return;
-                addHistory({ cmdId: d.cmdId, village: d.village, firedAt: Date.now(), recovered: true });
-                setPending({ phase: 'send', village: d.village, cancelMs: d.cancelMs, cmdId: d.cmdId });
-                window.open(`/game.php?${sitterPrefix()}village=${d.village}&screen=place&__desv=${d.cmdId}`, '_blank');
-                window.focus();
-            }, i * RECOVERY_STAGGER_MS);
-        });
     }
 
     /* Only run recovery on pages that are NOT already a desviador place/confirm tab.

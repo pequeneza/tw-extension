@@ -424,7 +424,9 @@ async function readIncomingsFromDOM(): Promise<Incoming[]> {
 
 async function fetchOwnHomeTroops(villageId: string): Promise<VillageTroops[]> {
   const out: VillageTroops[] = [];
-  const headerUnits: string[] = [];
+  // One entry per td.unit-item column — `null` for columns we don't track (e.g. militia),
+  // so unrecognized columns still consume a slot and later units stay aligned with their td.
+  const headerUnits: (string | null)[] = [];
   const seenCoords = new Set<string>();
   let page = 0;
 
@@ -439,14 +441,18 @@ async function fetchOwnHomeTroops(villageId: string): Promise<VillageTroops[]> {
     if (!table) break;
 
     if (page === 0) {
-      table.querySelectorAll("thead th").forEach((th) => {
-        const img = th.querySelector<HTMLImageElement>("img");
-        if (!img) return;
-        const m = (img.getAttribute("src") ?? "").match(/\/unit_([a-z0-9_]+)\./i);
-        if (!m) return;
+      // Collect unit icons directly (not per-<th>) — some worlds group multiple
+      // unit columns under one <th colspan>, which would undercount if we only
+      // looked at the first <img> per <th>. This stays aligned with td.unit-item
+      // columns regardless of how a given world's markup groups the header cells.
+      table.querySelectorAll<HTMLImageElement>('thead img[src*="/graphic/unit/unit_"]').forEach((img) => {
+        // No trailing `\.` anchor — retina asset filenames insert `@2x` between
+        // the unit name and the extension (unit_spear@2x.webp), which would
+        // otherwise make this regex fail to match entirely.
+        const m = (img.getAttribute("src") ?? "").match(/\/unit_([a-z0-9_]+)/i);
+        if (!m) { headerUnits.push(null); return; }
         const raw = m[1]!.toLowerCase();
-        if (raw === "militia" || !(raw in UNIT_MIN_PER_FIELD)) return;
-        headerUnits.push(raw);
+        headerUnits.push(raw === "militia" || !(raw in UNIT_MIN_PER_FIELD) ? null : raw);
       });
     }
 
@@ -467,6 +473,7 @@ async function fetchOwnHomeTroops(villageId: string): Promise<VillageTroops[]> {
       if (!tds.length) return;
       const troops: Record<string, number> = {};
       headerUnits.forEach((unit, i) => {
+        if (!unit) return;
         const raw = (tds[i]?.textContent ?? "").replace(/[^\d]/g, "");
         troops[unit] = raw ? parseInt(raw, 10) : 0;
       });

@@ -118,17 +118,27 @@
         hasTiming, srv, local, srv != null ? (srv - local) : 'N/A');
   }
 
-  /* ─── Ping measurer (mirrors Kumin's getAverageTimingOffset) ────────────── */
+  /* ─── Ping measurer (exact port of Kumin's getAverageTimingOffset) ──────── */
+  // Kumin: calculateMedian averages the two middle values on an even-length array.
+  function calcMedian(arr) {
+    var sorted = arr.slice().sort(function(a, b) { return a - b; });
+    var mid = Math.floor(sorted.length / 2);
+    if (sorted.length % 2 === 0) return (sorted[mid - 1] + sorted[mid]) / 2;
+    return sorted[mid];
+  }
+  function calcMAD(arr, median) {
+    return calcMedian(arr.map(function(v) { return Math.abs(v - median); }));
+  }
   function measurePing(multiplier) {
     var mul = multiplier || 0.25;
-    var samples = [];
+    var samples = []; // chronological order — index 0 = oldest
     var intervalId = null;
     function takeSample() {
       var t0 = performance.now();
       var img = new Image();
       img.onload = img.onerror = function() { samples.push((performance.now() - t0) * mul); };
-      // Kumin: uses window.location.hostname (not origin) — same pattern as _requestImage
-      img.src = '//' + window.location.hostname + '?random-no-cache=' + Math.floor((1 + Math.random()) * 65536).toString(32);
+      // Kumin: relative path off window.location.hostname (no "//" prefix) — NOT a protocol-relative root fetch
+      img.src = window.location.hostname + '?random-no-cache=' + Math.floor((1 + Math.random()) * 65536).toString(32);
     }
     takeSample();
     intervalId = setInterval(takeSample, 5000);
@@ -136,14 +146,12 @@
       getOffset: function() {
         clearInterval(intervalId);
         if (!samples.length) return 0;
-        var sorted = samples.slice().sort(function(a, b) { return a - b; });
-        var mid = Math.floor(sorted.length / 2);
-        var median = sorted[mid];
-        var mads = sorted.map(function(v) { return Math.abs(v - median); }).sort(function(a,b){return a-b;});
-        var mad = mads[Math.floor(mads.length / 2)];
-        var filtered = sorted.filter(function(v) { return Math.abs(v - median) <= 10 * mad; });
-        if (!filtered.length) filtered = sorted;
-        // exponential-weighted average: most recent sample gets highest weight
+        var median = calcMedian(samples);
+        var mad = calcMAD(samples, median);
+        // Kumin filters/weights the CHRONOLOGICAL array, not a value-sorted one —
+        // so the exponential decay favors the most RECENT sample, not the largest.
+        var filtered = samples.filter(function(v) { return Math.abs(v - median) <= 10 * mad; });
+        if (!filtered.length) filtered = samples;
         var sumW = 0, sumVW = 0;
         filtered.forEach(function(v, i) {
           var w = Math.pow(0.8, filtered.length - 1 - i);

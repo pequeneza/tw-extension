@@ -29,7 +29,12 @@
       "Bash(git stash *)",
       "Bash(curl *)",
       "Read(//c/Users/peque/.ssh/**)",
-      "Bash(python3 -c ' *)"
+      "Bash(python3 -c ' *)",
+      "Bash(git checkout *)",
+      "Bash(where onedrive *)",
+      "Bash(git push *)",
+      "PowerShell(git config *)",
+      "Bash(git add *)"
     ]
   },
   "enabledPlugins": {

@@ -659,7 +659,7 @@
 
                 // Parse unit counts: img src encodes unit id, adjacent text node is count
                 tr.querySelectorAll('img').forEach(img => {
-                    const m = img.src.match(/unit_(\w+)\./);
+                    const m = img.src.match(/unit_(\w+)/);
                     if (!m || !UMAX_SIM_UNITS.includes(m[1])) return;
                     const sib = img.nextSibling;
                     if (!sib || sib.nodeType !== 3) return;
@@ -741,7 +741,7 @@
                 // Method B: img src encodes unit id, adjacent text node is the count
                 tr.querySelectorAll('img').forEach(img => {
                     if (img.dataset.twincf) return;
-                    const m = img.src.match(/unit_(\w+)\./);
+                    const m = img.src.match(/unit_(\w+)/);
                     if (!m || !UMAX_SIM_UNITS.includes(m[1])) return;
                     const sib = img.nextSibling;
                     if (!sib || sib.nodeType !== 3) return;
@@ -919,7 +919,7 @@
                 form.querySelectorAll('tr').forEach(tr => {
                     const imgs = [...tr.querySelectorAll('img[src*="unit_"]')];
                     if (!imgs.length) return;
-                    const unit = (imgs[0].src.match(/unit_(\w+)\./) || [])[1];
+                    const unit = (imgs[0].src.match(/unit_(\w+)/) || [])[1];
                     if (!unit || !UMAX_SIM_UNITS.includes(unit)) return;
                     const inputs = [...tr.querySelectorAll(
                         'input[name][type="text"], input[name][type="number"], input[name]:not([type])'

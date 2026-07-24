@@ -394,8 +394,11 @@
         const unitImgs = tr.querySelectorAll('span[data-command-id] img');
         for (const img of unitImgs) {
             const src = img.getAttribute('src') || '';
-            const m = src.match(/unit[_\/]tiny[_\/]?([a-z0-9_]+)\./i)
-                   || src.match(/unit_([a-z0-9_]+)\./i);
+            // No trailing `\.` anchor — retina asset filenames insert `@2x` between
+            // the unit name and the extension (unit_spear@2x.webp), which would
+            // otherwise make this regex fail to match entirely.
+            const m = src.match(/unit[_\/]tiny[_\/]?([a-z0-9_]+)/i)
+                   || src.match(/unit_([a-z0-9_]+)/i);
             if (m && KNOWN_UNITS.has(m[1].toLowerCase())) {
                 unit = m[1].toLowerCase();
                 break;

@@ -295,10 +295,11 @@ async function fetchOwnHomeTroops(villageId: string): Promise<VillageTroops[]> {
     if (!table) break;
 
     if (page === 0) {
-      table.querySelectorAll("thead th").forEach(th => {
-        const img = th.querySelector<HTMLImageElement>("img");
-        if (!img) return;
-        const m = (img.getAttribute("src") ?? "").match(/\/unit_([a-z0-9_]+)\./i);
+      // No trailing `\.` anchor — retina asset filenames insert `@2x` between
+      // the unit name and the extension (unit_spear@2x.webp), which would
+      // otherwise make this regex fail to match entirely.
+      table.querySelectorAll<HTMLImageElement>("thead img[src*='/graphic/unit/unit_']").forEach(img => {
+        const m = (img.getAttribute("src") ?? "").match(/\/unit_([a-z0-9_]+)/i);
         if (!m) return;
         const raw = m[1]!.toLowerCase();
         if (raw === "militia" || !(raw in UNIT_MIN_PER_FIELD)) return;

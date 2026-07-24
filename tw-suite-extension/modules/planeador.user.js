@@ -270,10 +270,11 @@
             if (!table) break;
 
             if (page === 0) {
-                Array.from(table.querySelectorAll('thead th')).forEach(function(th) {
-                    const img = th.querySelector('img');
-                    if (!img) return;
-                    const m = (img.getAttribute('src') || '').match(/\/unit_([a-z0-9_]+)\./i);
+                // No trailing `\.` anchor — retina asset filenames insert `@2x` between
+                // the unit name and the extension (unit_spear@2x.webp), which would
+                // otherwise make this regex fail to match entirely.
+                Array.from(table.querySelectorAll('thead img[src*="/graphic/unit/unit_"]')).forEach(function(img) {
+                    const m = (img.getAttribute('src') || '').match(/\/unit_([a-z0-9_]+)/i);
                     if (!m) return;
                     const raw = m[1].toLowerCase();
                     if (raw === 'militia') return;

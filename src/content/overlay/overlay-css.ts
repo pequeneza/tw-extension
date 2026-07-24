@@ -1783,15 +1783,6 @@ select.input {
   border-bottom-color: var(--b500);
   background: color-mix(in srgb, var(--b500) 6%, var(--n0));
 }
-.gluer-attack-time {
-  font-size: 12px;
-  font-family: var(--mono);
-  color: var(--b500);
-  background: var(--b-bg);
-  border: 1px solid var(--b-br);
-  border-radius: 5px;
-  padding: 1px 7px;
-}
 .gluer-attack-coord {
   font-family: var(--mono);
   font-size: 12px;
@@ -1819,67 +1810,11 @@ select.input {
   text-align: center;
 }
 
-.gluer-cfg-label {
-  font-size: 12px;
-  color: var(--n500);
-  white-space: nowrap;
-  min-width: 70px;
-}
-
-.gluer-cand-list {
-  display: flex;
-  flex-direction: column;
-}
-.gluer-cand-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 14px;
-  border-bottom: 1px solid var(--n100);
-  transition: background var(--ease);
-}
-.gluer-cand-row:last-child { border-bottom: none; }
-.gluer-cand-row:hover { background: var(--n50); }
-.gluer-cand-row--queued { background: var(--g-bg); }
-.gluer-cand-row--queued:hover { background: #e6fdf0; }
-
-.gluer-cand-left {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1;
-  min-width: 0;
-}
 .gluer-unit-icon {
   width: 18px;
   height: 18px;
   flex-shrink: 0;
 }
-.gluer-cand-coord {
-  font-family: var(--mono);
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--n700);
-  white-space: nowrap;
-}
-.gluer-cand-send {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--n400);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.gluer-cand-timer {
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--g600);
-  white-space: nowrap;
-  min-width: 84px;
-  text-align: right;
-}
-.gluer-cand-timer--past { color: var(--r500); }
 
 .gluer-queue-list {
   display: flex;
@@ -1893,7 +1828,40 @@ select.input {
   border-bottom: 1px solid var(--n100);
 }
 .gluer-queue-row:last-child { border-bottom: none; }
+.gluer-queue-row--stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+.gluer-queue-line1 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .gluer-card--queued { border-color: var(--g600); background: color-mix(in srgb, var(--g600) 8%, var(--n0)); }
+
+/* ETA badge — 4-state, token-driven (replaces hand-rolled rgba colors) */
+.gluer-eta-badge {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 4px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+}
+.gluer-eta-badge--ok     { background: var(--g-bg); border-color: var(--g-br); color: var(--g600); }
+.gluer-eta-badge--soon   { background: var(--a-bg); border-color: var(--a-br); color: var(--a500); }
+.gluer-eta-badge--urgent { background: var(--r-bg); border-color: var(--r-br); color: var(--r500); }
+.gluer-eta-badge--sent   { background: var(--n100); border-color: var(--n200); color: var(--n400); }
+
+.gluer-quickbtn { flex: none; font-size: 10px; padding: 1px 7px; }
+
+/* Gluer-only compact unit box — SnipeView keeps the full-size .snipe-unitbox */
+.gluer-unitbox--compact { width: 40px; }
+.gluer-unitbox--compact .snipe-unit-icon { width: 15px; height: 15px; }
+.gluer-unitbox--compact .snipe-unit-input { width: 34px; }
+
 .gluer-unit-filter {
   display: flex;
   flex-wrap: wrap;
@@ -1940,13 +1908,6 @@ select.input {
   font-weight: 600;
   color: var(--n700);
   white-space: nowrap;
-}
-.gluer-queue-time {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--a500);
-  white-space: nowrap;
-  margin-left: auto;
 }
 
 .trigger--gluer    { position: relative; top: unset; }

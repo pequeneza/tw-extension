@@ -477,7 +477,7 @@ function GluerCandidateCard({ cand, target, tgtVillageId, arrivalMs, commandType
           onClick={handleQueue}
           disabled={past || !hasSelection}
         >
-          {queued ? "+ Queue" : "+ Queue"}
+          + Queue
         </button>
       </div>
 
@@ -493,7 +493,7 @@ function GluerCandidateCard({ cand, target, tgtVillageId, arrivalMs, commandType
             // Show greyed-out — can't arrive in time or 0 troops
             return (
               <div key={unit}
-                className="snipe-unitbox snipe-unitbox--disabled"
+                className="snipe-unitbox snipe-unitbox--disabled gluer-unitbox--compact"
                 title={rawAvail > 0 ? `${unit}: não chega a tempo` : `${unit}: sem tropas`}>
                 <img src={unitIconUrl(unit)} alt={unit} className="snipe-unit-icon" />
                 <div className="snipe-unit-avail">{rawAvail}</div>
@@ -503,7 +503,7 @@ function GluerCandidateCard({ cand, target, tgtVillageId, arrivalMs, commandType
 
           return (
             <div key={unit}
-              className={`snipe-unitbox${val > 0 ? " snipe-unitbox--on" : ""}`}
+              className={`snipe-unitbox gluer-unitbox--compact${val > 0 ? " snipe-unitbox--on" : ""}`}
               title={sendAtThisUnit ? `Saída: ${fmtDate(sendAtThisUnit).split(" ")[1]}` : unit}>
               <img src={unitIconUrl(unit)} alt={unit} className="snipe-unit-icon"
                 onClick={() => toggleUnit(unit)} />
@@ -529,12 +529,6 @@ function GluerCandidateCard({ cand, target, tgtVillageId, arrivalMs, commandType
           );
         })}
       </div>
-
-      {!hasSelection && (
-        <div style={{ fontSize: 11, color: "var(--n300)", padding: "4px 0 2px", textAlign: "center" }}>
-          Clica num ícone ou "Selec. tudo" para selecionar tropas
-        </div>
-      )}
     </div>
   );
 }
@@ -786,12 +780,11 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
               </div>
             </div>
             <div className="gluer-attack-row">
-              <span style={{ fontSize: 11, color: "var(--n400)" }}>Alvo:</span>
               <span className="gluer-attack-coord">{attack.targetX}|{attack.targetY}</span>
-              <span style={{ fontSize: 11, color: "var(--n400)", marginLeft: "auto" }}>
-                Chega em: <strong style={{ fontFamily: "var(--mono)" }}>
-                  {fmtCountdown(effectiveArrivalMs - now)}
-                </strong>
+              <span
+                className={`snipe-countdown${(effectiveArrivalMs - now) < 0 ? " snipe-countdown--past" : ""}`}
+                style={{ marginLeft: "auto", fontSize: 13, minWidth: 0 }}>
+                {fmtCountdown(effectiveArrivalMs - now)}
               </span>
             </div>
           </div>
@@ -799,46 +792,44 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
 
         {/* Speed + type */}
         <div className="cfg-section">
-          <div className="section-label">Configuração</div>
-          <div style={{ padding: "6px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
-            <div className="gluer-cfg-row">
-              <span className="gluer-cfg-note gluer-cfg-note--inline">
-                Jogo {gameSpeed}x · Tropa {unitSpeed}x <em>(auto)</em>
-              </span>
-              <label className="snipe-speed-label" style={{ marginLeft: "auto" }}>
-                Sígilia %
-                <input className="input snipe-speed-input" type="number" step={1} min={0} max={100}
-                  value={sigilDraft}
-                  onChange={e => { setSigilDraft(e.target.value); const n = parseFloat(e.target.value); if (Number.isFinite(n) && n >= 0) setSigil(n); }}
-                  onBlur={() => { const n = parseFloat(sigilDraft); if (!Number.isFinite(n) || n < 0) setSigilDraft(String(sigil)); }}
-                />
-              </label>
+          <div className="section-label">
+            Configuração
+            <span className="snipe-candidate-meta">
+              &nbsp;·&nbsp;Jogo {gameSpeed}x · Tropa {unitSpeed}x
+            </span>
+          </div>
+          <div className="gluer-cfg-row" style={{ padding: "6px 14px" }}>
+            <div className="gluer-type-toggle">
+              {(["Attack", "Support"] as const).map(t => (
+                <button key={t} type="button"
+                  className={`gluer-type-btn${commandType === t ? " gluer-type-btn--active" : ""}`}
+                  data-type={t}
+                  title={t === "Attack" ? "Ataque" : "Apoio"}
+                  onClick={() => setCommandType(t)}>
+                  <img src={CMD_ICON[t]} alt={t} />
+                </button>
+              ))}
             </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <div className="gluer-type-toggle">
-                {(["Attack", "Support"] as const).map(t => (
-                  <button key={t} type="button"
-                    className={`gluer-type-btn${commandType === t ? " gluer-type-btn--active" : ""}`}
-                    data-type={t}
-                    title={t === "Attack" ? "Ataque" : "Apoio"}
-                    onClick={() => setCommandType(t)}>
-                    <img src={CMD_ICON[t]} alt={t} />
-                  </button>
-                ))}
-              </div>
-              <select className="input" style={{ flex: 1, fontSize: 12 }}
-                value={ntTemplate}
-                onChange={e => {
-                  setNtTemplate(e.target.value);
-                  const s = loadGluerSettings();
-                  s.ntTemplate = e.target.value;
-                  saveGluerSettings(s);
-                }}>
-                {NT_OPTIONS.map(([val, lbl]) => (
-                  <option key={val} value={val}>{lbl}</option>
-                ))}
-              </select>
-            </div>
+            <label className="snipe-speed-label">
+              Sígilia %
+              <input className="input snipe-speed-input" type="number" step={1} min={0} max={100}
+                value={sigilDraft}
+                onChange={e => { setSigilDraft(e.target.value); const n = parseFloat(e.target.value); if (Number.isFinite(n) && n >= 0) setSigil(n); }}
+                onBlur={() => { const n = parseFloat(sigilDraft); if (!Number.isFinite(n) || n < 0) setSigilDraft(String(sigil)); }}
+              />
+            </label>
+            <select className="input" style={{ flex: 1, fontSize: 12 }}
+              value={ntTemplate}
+              onChange={e => {
+                setNtTemplate(e.target.value);
+                const s = loadGluerSettings();
+                s.ntTemplate = e.target.value;
+                saveGluerSettings(s);
+              }}>
+              {NT_OPTIONS.map(([val, lbl]) => (
+                <option key={val} value={val}>{lbl}</option>
+              ))}
+            </select>
           </div>
         </div>
 
@@ -847,11 +838,11 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
           <div className="section-label" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingRight: 14 }}>
             <span>Tropas a considerar</span>
             <span style={{ display: "flex", gap: 4 }}>
-              <button className="btn btn-ghost" style={{ fontSize: 10, padding: "1px 7px" }}
+              <button className="btn btn-ghost gluer-quickbtn"
                 onClick={() => setEnabledUnits(new Set(UNIT_ORDER_SLOW_TO_FAST))}>
                 Todas
               </button>
-              <button className="btn btn-ghost" style={{ fontSize: 10, padding: "1px 7px" }}
+              <button className="btn btn-ghost gluer-quickbtn"
                 disabled={troops.length === 0}
                 title={troops.length === 0 ? "Carrega as tropas primeiro" : "Seleciona apenas unidades com tropas disponíveis"}
                 onClick={() => {
@@ -862,7 +853,7 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
                 }}>
                 Com tropas
               </button>
-              <button className="btn btn-ghost" style={{ fontSize: 10, padding: "1px 7px" }}
+              <button className="btn btn-ghost gluer-quickbtn"
                 onClick={() => setEnabledUnits(new Set())}>
                 Nenhuma
               </button>
@@ -934,6 +925,11 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
                   Nenhuma aldeia consegue chegar a tempo.
                 </div>
               )}
+              {candidates.length > 0 && (
+                <div style={{ fontSize: 11, color: "var(--n300)", padding: "2px 0 6px", textAlign: "center" }}>
+                  Clica num ícone ou "Selec. tudo" para selecionar tropas
+                </div>
+              )}
               {candidates.map(cand => {
                 const key = `${cand.src.coord.x}|${cand.src.coord.y}`;
                 return (
@@ -972,47 +968,38 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
               {queue.map((e, i) => {
                 const diff      = e.sendMs - now;
                 const sent      = diff <= 0;
-                const badgeClr  = sent ? "var(--n400)" : diff > 3_600_000 ? "var(--g600)" : diff > 600_000 ? "var(--a500)" : "var(--r500)";
-                const badgeBg   = sent ? "rgba(128,128,128,0.12)" : diff > 3_600_000 ? "rgba(0,180,0,0.12)" : diff > 600_000 ? "rgba(255,140,0,0.12)" : "rgba(220,30,30,0.12)";
+                const etaState  = sent ? "sent" : diff > 3_600_000 ? "ok" : diff > 600_000 ? "soon" : "urgent";
                 const unitList  = UNIT_ORDER_DISPLAY.filter(u => (e.units[u] ?? 0) > 0);
                 return (
-                  <div key={e.id} className="gluer-queue-row" style={{ flexDirection: "column", alignItems: "stretch", gap: 0 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <span className="gluer-queue-idx">#{i+1}</span>
-                      <img src={unitIconUrl(e.slowestUnit)} alt={e.slowestUnit} className="gluer-unit-icon" />
-                      <span className="gluer-queue-src">{e.source}</span>
-                      <span style={{ color: "var(--n300)", fontSize: 11 }}>→</span>
-                      {e.tgtVillageId && e.srcVillageId ? (
-                        <a
-                          className="gluer-queue-tgt"
-                          href={`${location.origin}/game.php?village=${e.srcVillageId}&screen=info_village&id=${e.tgtVillageId}`}
-                          target="_blank" rel="noopener noreferrer"
-                          style={{ color: "var(--b500)", textDecoration: "underline" }}
-                        >{e.target}</a>
-                      ) : (
-                        <span className="gluer-queue-tgt">{e.target}</span>
-                      )}
+                  <div key={e.id} className="gluer-queue-row gluer-queue-row--stack">
+                    <div className="gluer-queue-line1">
+                      <div className="gluer-queue-info">
+                        <span className="gluer-queue-idx">#{i+1}</span>
+                        <img src={unitIconUrl(e.slowestUnit)} alt={e.slowestUnit} className="gluer-unit-icon" />
+                        <span className="gluer-queue-src">{e.source}</span>
+                        <span style={{ color: "var(--n300)", fontSize: 11 }}>→</span>
+                        {e.tgtVillageId && e.srcVillageId ? (
+                          <a
+                            className="gluer-queue-tgt"
+                            href={`${location.origin}/game.php?village=${e.srcVillageId}&screen=info_village&id=${e.tgtVillageId}`}
+                            target="_blank" rel="noopener noreferrer"
+                            style={{ color: "var(--b500)", textDecoration: "underline" }}
+                          >{e.target}</a>
+                        ) : (
+                          <span className="gluer-queue-tgt">{e.target}</span>
+                        )}
+                      </div>
+                      <span className={`gluer-eta-badge gluer-eta-badge--${etaState}`} title={fmtPtDate(e.sendMs)}>
+                        {sent ? "enviado" : fmtCountdown(diff)}
+                      </span>
                       <button
                         className="btn btn-ghost"
-                        style={{ marginLeft: "auto", flex: "none", padding: "1px 6px", fontSize: 11, color: "var(--r500)" }}
+                        style={{ flex: "none", padding: "1px 6px", fontSize: 11, color: "var(--r500)" }}
                         onClick={() => removeFromQueue(e.id)}
                       >✕</button>
                     </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, paddingLeft: 36, paddingBottom: 2 }}>
-                      <span style={{ fontSize: 11, color: "var(--n400)", fontFamily: "var(--mono)" }}>
-                        {fmtPtDate(e.sendMs)}
-                      </span>
-                      <span style={{
-                        fontSize: 10, fontFamily: "var(--mono)", fontWeight: 700,
-                        color: badgeClr, background: badgeBg,
-                        border: `1px solid ${badgeClr}`, borderRadius: 4,
-                        padding: "1px 5px", flexShrink: 0,
-                      }}>
-                        {sent ? "enviado" : fmtCountdown(diff)}
-                      </span>
-                    </div>
                     {unitList.length > 0 && (
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, paddingLeft: 36, paddingBottom: 6 }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, paddingLeft: 24, paddingBottom: 4 }}>
                         {unitList.map(u => (
                           <span key={u} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
                             <img src={unitIconUrl(u)} alt={u} style={{ width: 16, height: 16 }} />
@@ -1036,12 +1023,12 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
           disabled={!queue.length} style={{ flex: 1 }}>
           {copied ? "✓ Copiado" : "📋 Copiar BB"}
         </button>
-        <button className="btn btn-save btn-save--dirty" onClick={openKumin}
+        <button className="btn btn-ghost" onClick={openKumin}
           disabled={!queue.length} style={{ flex: 1 }}>
           📜 Kumin
         </button>
-        <button className="btn btn-save btn-save--dirty" onClick={sendToAutosender}
-          disabled={!queue.length} style={{ flex: 1, background: "var(--b500)" }}
+        <button className="btn btn-ghost" onClick={sendToAutosender}
+          disabled={!queue.length} style={{ flex: 1 }}
           title="Enviar para Auto Sender (xBot)">
           🚀 Autosend
         </button>

@@ -1159,6 +1159,12 @@ select.input {
   background: var(--bg);
   color: var(--n600);
   font-family: var(--mono);
+  -moz-appearance: textfield;
+}
+.snipe-unit-input::-webkit-outer-spin-button,
+.snipe-unit-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 .snipe-unit-input:focus {
   outline: none;
@@ -1867,9 +1873,9 @@ select.input {
 }
 
 /* Gluer-only compact unit box — SnipeView keeps the full-size .snipe-unitbox */
-.gluer-unitbox--compact { width: 40px; }
+.gluer-unitbox--compact { width: 44px; }
 .gluer-unitbox--compact .snipe-unit-icon { width: 15px; height: 15px; }
-.gluer-unitbox--compact .snipe-unit-input { width: 34px; }
+.gluer-unitbox--compact .snipe-unit-input { width: 38px; }
 
 .gluer-unit-filter {
   display: flex;

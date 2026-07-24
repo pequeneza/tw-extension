@@ -461,9 +461,10 @@ function GluerCandidateCard({ cand, target, tgtVillageId, arrivalMs, commandType
       </div>
 
       <div className="snipe-card-row">
-        <button className="btn btn-ghost snipe-timer-btn"
+        <button className="btn btn-ghost snipe-timer-btn snipe-timer-btn--icon"
+          title={timerActive ? "Parar" : "Iniciar timer"}
           onClick={() => setTimerActive(t => !t)}>
-          {timerActive ? "Stop" : "Timer"}
+          {timerActive ? "⏹" : "⏱️"}
         </button>
         {timerActive && (
           <span className={`snipe-countdown${past ? " snipe-countdown--past" : ""}`}>
@@ -547,8 +548,6 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
   const [gameSpeed,   setGameSpeed]   = useState(1.4);
   const [unitSpeed,   setUnitSpeed]   = useState(0.75);
   const [sigil,       setSigil]       = useState(0);
-  const [gsDraft,     setGsDraft]     = useState("1.4");
-  const [usDraft,     setUsDraft]     = useState("0.75");
   const [sigilDraft,  setSigilDraft]  = useState("0");
   const [ntTemplate,         setNtTemplate]         = useState<string>(() => loadGluerSettings().ntTemplate ?? "noNT");
   const [commandType,        setCommandType]        = useState<"Attack"|"Support">("Attack");
@@ -570,8 +569,8 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
   // Auto-load game/unit speed from the world config once, like planeador.fetchServerConfig
   useEffect(() => {
     fetchWorldSpeed().then(({ gameSpeed: gs, unitSpeed: us }) => {
-      setGameSpeed(gs); setGsDraft(String(gs));
-      setUnitSpeed(us); setUsDraft(String(us));
+      setGameSpeed(gs);
+      setUnitSpeed(us);
     });
   }, []);
 
@@ -802,24 +801,11 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
         <div className="cfg-section">
           <div className="section-label">Configuração</div>
           <div style={{ padding: "6px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
-            <div className="snipe-speed-row">
-              <label className="snipe-speed-label">
-                Jogo
-                <input className="input snipe-speed-input" type="number" step={0.01} min={0.1} max={10}
-                  value={gsDraft}
-                  onChange={e => { setGsDraft(e.target.value); const n = parseFloat(e.target.value); if (Number.isFinite(n) && n > 0) setGameSpeed(n); }}
-                  onBlur={() => { const n = parseFloat(gsDraft); if (!Number.isFinite(n) || n <= 0) setGsDraft(String(gameSpeed)); }}
-                />
-              </label>
-              <label className="snipe-speed-label">
-                Tropa
-                <input className="input snipe-speed-input" type="number" step={0.01} min={0.1} max={2}
-                  value={usDraft}
-                  onChange={e => { setUsDraft(e.target.value); const n = parseFloat(e.target.value); if (Number.isFinite(n) && n > 0) setUnitSpeed(n); }}
-                  onBlur={() => { const n = parseFloat(usDraft); if (!Number.isFinite(n) || n <= 0) setUsDraft(String(unitSpeed)); }}
-                />
-              </label>
-              <label className="snipe-speed-label">
+            <div className="gluer-cfg-row">
+              <span className="gluer-cfg-note gluer-cfg-note--inline">
+                Jogo {gameSpeed}x · Tropa {unitSpeed}x <em>(auto)</em>
+              </span>
+              <label className="snipe-speed-label" style={{ marginLeft: "auto" }}>
                 Sígilia %
                 <input className="input snipe-speed-input" type="number" step={1} min={0} max={100}
                   value={sigilDraft}
@@ -828,9 +814,7 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
                 />
               </label>
             </div>
-            <div className="gluer-cfg-note">Velocidades carregadas automaticamente do mundo.</div>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <span style={{ fontSize: 12, color: "var(--n500)", minWidth: 44 }}>Tipo</span>
               <div className="gluer-type-toggle">
                 {(["Attack", "Support"] as const).map(t => (
                   <button key={t} type="button"
@@ -842,9 +826,6 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
                   </button>
                 ))}
               </div>
-            </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <span style={{ fontSize: 12, color: "var(--n500)", minWidth: 44 }}>NT</span>
               <select className="input" style={{ flex: 1, fontSize: 12 }}
                 value={ntTemplate}
                 onChange={e => {

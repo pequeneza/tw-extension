@@ -1079,6 +1079,18 @@ select.input {
 .snipe-timer-btn {
   min-width: 52px;
 }
+.snipe-timer-btn--icon {
+  min-width: 0;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+}
 .snipe-countdown {
   font-family: var(--mono);
   font-size: 13px;
@@ -1683,6 +1695,16 @@ select.input {
   font-style: italic;
   padding: 0 2px;
 }
+.gluer-cfg-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.gluer-cfg-note--inline {
+  white-space: nowrap;
+}
+.gluer-cfg-note--inline em { font-style: normal; opacity: 0.75; }
 
 .gluer-type-toggle {
   display: flex;

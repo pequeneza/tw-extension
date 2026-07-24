@@ -823,7 +823,7 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
         {queue.length > 0 && (
           <span className="gluer-queue-badge">{queue.length}</span>
         )}
-        <button className={`back-btn${tab === "presets" ? " back-btn--active" : ""}`}
+        <button className={`back-btn gluer-settings-btn${tab === "presets" ? " back-btn--active" : ""}`}
           onClick={() => setTab(t => t === "presets" ? "main" : "presets")}
           title="Presets de tropas" aria-label="Presets de tropas">
           ⚙

@@ -59,6 +59,25 @@ function saveGluerSettings(s: Record<string, string>) {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
 }
 
+/* ─── Troop presets — named unit-visibility + minimum-troop combos ───────── */
+const PRESETS_KEY = "twKuminGluer_presets";
+
+interface GluerPreset {
+  id: string;
+  name: string;
+  /** Units considered/toggleable when this preset is applied. Empty = all units. */
+  visibleUnits: string[];
+  /** Per-unit minimum troop count a village must have to qualify as a candidate. 0/absent = no requirement. */
+  minTroops: Record<string, number>;
+}
+
+function loadPresets(): GluerPreset[] {
+  try { return JSON.parse(localStorage.getItem(PRESETS_KEY) ?? "[]") ?? []; } catch { return []; }
+}
+function savePresets(p: GluerPreset[]) {
+  localStorage.setItem(PRESETS_KEY, JSON.stringify(p));
+}
+
 const UNIT_MIN_PER_FIELD: Record<string, number> = {
   spear: 18, sword: 22, axe: 18, archer: 18, spy: 9,
   light: 10, marcher: 10, heavy: 11, ram: 30, catapult: 30,
@@ -169,6 +188,16 @@ function fmtCountdown(diffMs: number) {
   return `${sign}${pad2(h)}:${pad2(m)}:${pad2(s)}.${pad3(ms)}`;
 }
 
+/** Same as fmtCountdown but without the ms component — used by .snipe-countdown displays. */
+function fmtCountdownShort(diffMs: number) {
+  const sign = diffMs < 0 ? "-" : "";
+  const abs  = Math.abs(diffMs);
+  const h    = Math.floor(abs / 3_600_000);
+  const m    = Math.floor((abs % 3_600_000) / 60_000);
+  const s    = Math.floor((abs % 60_000) / 1000);
+  return `${sign}${pad2(h)}:${pad2(m)}:${pad2(s)}`;
+}
+
 function fmtPtDate(ms: number): string {
   const now    = new Date(getServerNowMs());
   const d      = new Date(ms);
@@ -235,6 +264,7 @@ function computeCandidates(
   troops: VillageTroops[],
   speedFactor: number,
   enabledUnits: Set<string>,
+  minTroops: Record<string, number> = {},
 ): GluerCandidate[] {
   const target: Coord    = { x: attack.targetX, y: attack.targetY };
   const nowMs            = getServerNowMs();
@@ -244,6 +274,14 @@ function computeCandidates(
   const out: GluerCandidate[] = [];
 
   for (const src of troops) {
+    // Preset minimum-troops gate — village must own at least this many of each
+    // specified unit (independent of which units end up used to send).
+    let passesMinTroops = true;
+    for (const [unit, minAmt] of Object.entries(minTroops)) {
+      if (minAmt > 0 && (src.troops[unit] ?? 0) < minAmt) { passesMinTroops = false; break; }
+    }
+    if (!passesMinTroops) continue;
+
     const viable: Array<{ unit: string; sendMs: number }> = [];
 
     for (const unit of UNIT_ORDER_SLOW_TO_FAST) {
@@ -351,13 +389,13 @@ async function fetchOwnHomeTroops(villageId: string): Promise<{ villages: Villag
 
 /* ─── useCountdown ────────────────────────────────────────────────────────── */
 function useCountdown(sendMs: number, active: boolean) {
-  const [display, setDisplay] = useState(() => fmtCountdown(sendMs - getServerNowMs()));
+  const [display, setDisplay] = useState(() => fmtCountdownShort(sendMs - getServerNowMs()));
   const [past,    setPast]    = useState(false);
   useEffect(() => {
     if (!active) return;
     const id = setInterval(() => {
       const diff = sendMs - getServerNowMs();
-      setDisplay(fmtCountdown(diff));
+      setDisplay(fmtCountdownShort(diff));
       setPast(diff < 0);
     }, 50);
     return () => clearInterval(id);
@@ -544,8 +582,19 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
   const [sigil,       setSigil]       = useState(0);
   const [sigilDraft,  setSigilDraft]  = useState("0");
   const [ntTemplate,         setNtTemplate]         = useState<string>(() => loadGluerSettings().ntTemplate ?? "noNT");
+  const [ntEnabled,          setNtEnabled]          = useState<boolean>(() => (loadGluerSettings().ntTemplate ?? "noNT") !== "noNT");
   const [commandType,        setCommandType]        = useState<"Attack"|"Support">("Attack");
   const [enabledUnits,       setEnabledUnits]       = useState<Set<string>>(() => new Set(UNIT_ORDER_SLOW_TO_FAST));
+  const [tab,                setTab]                = useState<"main" | "presets">("main");
+  const [presets,            setPresets]            = useState<GluerPreset[]>(() => loadPresets());
+  const [activePresetId,     setActivePresetId]     = useState<string | null>(null);
+  const [minTroops,          setMinTroops]          = useState<Record<string, number>>({});
+  const [editingPresetId,    setEditingPresetId]    = useState<string | null>(null);
+  const [formName,           setFormName]           = useState("");
+  const [formVisible,        setFormVisible]        = useState<Set<string>>(() => new Set(UNIT_ORDER_SLOW_TO_FAST));
+  const [formMinDrafts,      setFormMinDrafts]      = useState<Record<string, string>>(() =>
+    Object.fromEntries(UNIT_ORDER_DISPLAY.map(u => [u, "0"]))
+  );
   const [attackTimeDraft,    setAttackTimeDraft]    = useState("");
   const [attackTimeOverride, setAttackTimeOverride] = useState<number | null>(null);
   const [nudgeMs,            setNudgeMs]            = useState(100);
@@ -583,7 +632,7 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
   const effectiveAttack    = attack ? { ...attack, arrivalMs: effectiveArrivalMs } : null;
 
   const speedFactor = 1 / (gameSpeed * unitSpeed * (1 + sigil / 100));
-  const candidates  = effectiveAttack ? computeCandidates(effectiveAttack, troops, speedFactor, enabledUnits) : [];
+  const candidates  = effectiveAttack ? computeCandidates(effectiveAttack, troops, speedFactor, enabledUnits, minTroops) : [];
   const target: Coord | null = attack ? { x: attack.targetX, y: attack.targetY } : null;
 
   // Per-village committed amounts — aggregated across all three scheduling queues
@@ -602,15 +651,75 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
       const { villages, worldUnits } = await fetchOwnHomeTroops(vid);
       setTroops(villages);
       // Auto-narrow the filter: world-available units ∩ units actually present in troops.
-      const worldSet = new Set(worldUnits);
-      const present = new Set(
-        UNIT_ORDER_SLOW_TO_FAST.filter(u => worldSet.has(u) && villages.some(v => (v.troops[u] ?? 0) > 0))
-      );
-      setEnabledUnits(present.size ? present : new Set(worldUnits.filter(u => UNIT_ORDER_SLOW_TO_FAST.includes(u))));
+      // Skipped when a preset is active — the preset's explicit visible-units choice wins.
+      if (!activePresetId) {
+        const worldSet = new Set(worldUnits);
+        const present = new Set(
+          UNIT_ORDER_SLOW_TO_FAST.filter(u => worldSet.has(u) && villages.some(v => (v.troops[u] ?? 0) > 0))
+        );
+        setEnabledUnits(present.size ? present : new Set(worldUnits.filter(u => UNIT_ORDER_SLOW_TO_FAST.includes(u))));
+      }
     }
     catch (e) { setTroopsErr(`Erro: ${(e as Error).message}`); }
     finally { setLoadingTrp(false); }
-  }, [attack]);
+  }, [attack, activePresetId]);
+
+  // Presets — clicking the active preset again clears it back to defaults (all units, no minimums)
+  function applyPreset(p: GluerPreset) {
+    if (activePresetId === p.id) {
+      setActivePresetId(null);
+      setEnabledUnits(new Set(UNIT_ORDER_SLOW_TO_FAST));
+      setMinTroops({});
+      return;
+    }
+    setActivePresetId(p.id);
+    setEnabledUnits(new Set(p.visibleUnits.length ? p.visibleUnits : UNIT_ORDER_SLOW_TO_FAST));
+    setMinTroops(p.minTroops);
+  }
+
+  function resetPresetForm() {
+    setEditingPresetId(null);
+    setFormName("");
+    setFormVisible(new Set(UNIT_ORDER_SLOW_TO_FAST));
+    setFormMinDrafts(Object.fromEntries(UNIT_ORDER_DISPLAY.map(u => [u, "0"])));
+  }
+
+  function startEditPreset(p: GluerPreset) {
+    setEditingPresetId(p.id);
+    setFormName(p.name);
+    setFormVisible(new Set(p.visibleUnits.length ? p.visibleUnits : UNIT_ORDER_SLOW_TO_FAST));
+    setFormMinDrafts(Object.fromEntries(UNIT_ORDER_DISPLAY.map(u => [u, String(p.minTroops[u] ?? 0)])));
+  }
+
+  function savePresetForm() {
+    const name = formName.trim();
+    if (!name) return;
+    const minTroopsOut: Record<string, number> = {};
+    for (const u of UNIT_ORDER_DISPLAY) {
+      const n = parseInt(formMinDrafts[u] ?? "0", 10);
+      if (Number.isFinite(n) && n > 0) minTroopsOut[u] = n;
+    }
+    const preset: GluerPreset = {
+      id: editingPresetId ?? makeId(),
+      name,
+      visibleUnits: [...formVisible],
+      minTroops: minTroopsOut,
+    };
+    const next = editingPresetId
+      ? presets.map(p => p.id === editingPresetId ? preset : p)
+      : [...presets, preset];
+    setPresets(next);
+    savePresets(next);
+    resetPresetForm();
+  }
+
+  function deletePreset(id: string) {
+    const next = presets.filter(p => p.id !== id);
+    setPresets(next);
+    savePresets(next);
+    if (activePresetId === id) { setActivePresetId(null); setEnabledUnits(new Set(UNIT_ORDER_SLOW_TO_FAST)); setMinTroops({}); }
+    if (editingPresetId === id) resetPresetForm();
+  }
 
   function addToQueue(entry: Omit<QueueEntry, "id">) {
     const newEntry: QueueEntry = { ...entry, id: makeId() };
@@ -704,7 +813,9 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
         <div className="cfg-header-text">
           <span className="cfg-title">Kumin Gluer</span>
           <span className="cfg-subtitle">
-            {attack
+            {tab === "presets"
+              ? "presets de tropas"
+              : attack
               ? `${attack.label} → ${attack.targetX}|${attack.targetY}`
               : "Clica num ataque para começar"}
           </span>
@@ -716,6 +827,89 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
 
       <div className="cfg-body snipe-body">
 
+        {/* Tab bar — main gluer flow vs. troop presets */}
+        <div className="cfg-section" style={{ paddingBottom: 0 }}>
+          <div style={{ display: "flex", gap: 4 }}>
+            <button className={`btn${tab === "main" ? " btn-save" : " btn-ghost"}`}
+              onClick={() => setTab("main")}>🧲 Gluer</button>
+            <button className={`btn${tab === "presets" ? " btn-save" : " btn-ghost"}`}
+              onClick={() => setTab("presets")}>⚙ Presets</button>
+          </div>
+        </div>
+
+        {tab === "presets" && (
+          <>
+            <div className="cfg-section">
+              <div className="section-label">Presets guardados</div>
+              {presets.length === 0 && (
+                <div className="state-msg" style={{ paddingTop: 10, paddingBottom: 10 }}>
+                  Nenhum preset criado ainda.
+                </div>
+              )}
+              {presets.map(p => {
+                const minCount = Object.values(p.minTroops).filter(v => v > 0).length;
+                return (
+                  <div key={p.id} className="gluer-queue-line1" style={{ padding: "5px 14px", borderBottom: "1px solid var(--n100)" }}>
+                    <div className="gluer-queue-info">
+                      <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--n900)" }}>{p.name}</span>
+                      <span className="gluer-cfg-note gluer-cfg-note--inline">
+                        &nbsp;·&nbsp;{p.visibleUnits.length || UNIT_ORDER_DISPLAY.length} unidades
+                        {minCount > 0 ? ` · ${minCount} mínimo${minCount !== 1 ? "s" : ""}` : ""}
+                      </span>
+                    </div>
+                    <button className="btn btn-ghost gluer-quickbtn" onClick={() => startEditPreset(p)}>✎</button>
+                    <button className="btn btn-ghost gluer-quickbtn" style={{ color: "var(--r500)" }}
+                      onClick={() => deletePreset(p.id)}>✕</button>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="cfg-section">
+              <div className="section-label">{editingPresetId ? "Editar preset" : "Novo preset"}</div>
+              <div style={{ padding: "6px 14px" }}>
+                <input className="input" placeholder='Nome (ex: "Quick Recon")'
+                  value={formName} onChange={e => setFormName(e.target.value)} />
+              </div>
+              <div className="gluer-cfg-note" style={{ padding: "0 14px 4px" }}>
+                Clica no ícone para incluir/excluir a unidade; o número define o mínimo de tropas exigido (0 = sem mínimo).
+              </div>
+              <div className="snipe-units" style={{ padding: "4px 14px 8px" }}>
+                {UNIT_ORDER_DISPLAY.map(unit => (
+                  <div key={unit} className={`snipe-unitbox${formVisible.has(unit) ? " snipe-unitbox--on" : ""}`}>
+                    <img src={unitIconUrl(unit)} alt={unit} className="snipe-unit-icon"
+                      onClick={() => setFormVisible(prev => {
+                        const next = new Set(prev);
+                        if (next.has(unit)) next.delete(unit); else next.add(unit);
+                        return next;
+                      })} />
+                    <input
+                      className="snipe-unit-input"
+                      type="number" min={0} step={1}
+                      value={formMinDrafts[unit] ?? "0"}
+                      onChange={e => setFormMinDrafts(p => ({ ...p, [unit]: e.target.value }))}
+                      onBlur={() => {
+                        const n = parseInt(formMinDrafts[unit] ?? "0", 10);
+                        setFormMinDrafts(p => ({ ...p, [unit]: String(Number.isFinite(n) && n >= 0 ? n : 0) }));
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 8, padding: "6px 14px" }}>
+                <button className="btn btn-save btn-save--dirty" disabled={!formName.trim()} onClick={savePresetForm}>
+                  {editingPresetId ? "Guardar alterações" : "Criar preset"}
+                </button>
+                {editingPresetId && (
+                  <button className="btn btn-ghost" onClick={resetPresetForm}>Cancelar</button>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+
+        {tab === "main" && (
+        <>
         {/* No attack selected */}
         {!attack && (
           <div className="cfg-section">
@@ -784,7 +978,7 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
               <span
                 className={`snipe-countdown${(effectiveArrivalMs - now) < 0 ? " snipe-countdown--past" : ""}`}
                 style={{ marginLeft: "auto", fontSize: 13, minWidth: 0 }}>
-                {fmtCountdown(effectiveArrivalMs - now)}
+                {fmtCountdownShort(effectiveArrivalMs - now)}
               </span>
             </div>
           </div>
@@ -818,18 +1012,38 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
                 onBlur={() => { const n = parseFloat(sigilDraft); if (!Number.isFinite(n) || n < 0) setSigilDraft(String(sigil)); }}
               />
             </label>
-            <select className="input" style={{ flex: 1, fontSize: 12 }}
-              value={ntTemplate}
-              onChange={e => {
-                setNtTemplate(e.target.value);
-                const s = loadGluerSettings();
-                s.ntTemplate = e.target.value;
-                saveGluerSettings(s);
-              }}>
-              {NT_OPTIONS.map(([val, lbl]) => (
-                <option key={val} value={val}>{lbl}</option>
-              ))}
-            </select>
+            <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--n500)", cursor: "pointer", userSelect: "none", flex: "none" }}>
+              <input type="checkbox" checked={ntEnabled}
+                onChange={e => {
+                  const checked = e.target.checked;
+                  setNtEnabled(checked);
+                  const s = loadGluerSettings();
+                  if (!checked) {
+                    setNtTemplate("noNT");
+                    s.ntTemplate = "noNT";
+                  } else if (ntTemplate === "noNT") {
+                    const first = NT_OPTIONS.find(([val]) => val !== "noNT")![0];
+                    setNtTemplate(first);
+                    s.ntTemplate = first;
+                  }
+                  saveGluerSettings(s);
+                }} />
+              NT
+            </label>
+            {ntEnabled && (
+              <select className="input" style={{ flex: 1, fontSize: 12 }}
+                value={ntTemplate}
+                onChange={e => {
+                  setNtTemplate(e.target.value);
+                  const s = loadGluerSettings();
+                  s.ntTemplate = e.target.value;
+                  saveGluerSettings(s);
+                }}>
+                {NT_OPTIONS.filter(([val]) => val !== "noNT").map(([val, lbl]) => (
+                  <option key={val} value={val}>{lbl}</option>
+                ))}
+              </select>
+            )}
           </div>
         </div>
 
@@ -839,26 +1053,27 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
             <span>Tropas a considerar</span>
             <span style={{ display: "flex", gap: 4 }}>
               <button className="btn btn-ghost gluer-quickbtn"
-                onClick={() => setEnabledUnits(new Set(UNIT_ORDER_SLOW_TO_FAST))}>
+                onClick={() => { setActivePresetId(null); setMinTroops({}); setEnabledUnits(new Set(UNIT_ORDER_SLOW_TO_FAST)); }}>
                 Todas
               </button>
               <button className="btn btn-ghost gluer-quickbtn"
-                disabled={troops.length === 0}
-                title={troops.length === 0 ? "Carrega as tropas primeiro" : "Seleciona apenas unidades com tropas disponíveis"}
-                onClick={() => {
-                  const present = new Set(
-                    UNIT_ORDER_SLOW_TO_FAST.filter(u => troops.some(v => (v.troops[u] ?? 0) > 0))
-                  );
-                  setEnabledUnits(present);
-                }}>
-                Com tropas
-              </button>
-              <button className="btn btn-ghost gluer-quickbtn"
-                onClick={() => setEnabledUnits(new Set())}>
+                onClick={() => { setActivePresetId(null); setMinTroops({}); setEnabledUnits(new Set()); }}>
                 Nenhuma
               </button>
             </span>
           </div>
+          {presets.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4, padding: "0 14px 4px" }}>
+              {presets.map(p => (
+                <button key={p.id}
+                  className={`btn btn-ghost gluer-quickbtn${activePresetId === p.id ? " gluer-preset-btn--active" : ""}`}
+                  title={Object.keys(p.minTroops).length ? "Também filtra aldeias abaixo dos mínimos definidos" : undefined}
+                  onClick={() => applyPreset(p)}>
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          )}
           {troops.length > 0 && (
             <div className="gluer-cfg-note" style={{ padding: "0 14px 4px" }}>
               Ajustado automaticamente às unidades deste mundo e às tropas carregadas.
@@ -871,11 +1086,14 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
                 <div key={unit}
                   className={`gluer-filter-box${on ? " gluer-filter-box--on" : ""}`}
                   title={unit}
-                  onClick={() => setEnabledUnits(prev => {
-                    const next = new Set(prev);
-                    if (next.has(unit)) next.delete(unit); else next.add(unit);
-                    return next;
-                  })}>
+                  onClick={() => {
+                    setActivePresetId(null);
+                    setEnabledUnits(prev => {
+                      const next = new Set(prev);
+                      if (next.has(unit)) next.delete(unit); else next.add(unit);
+                      return next;
+                    });
+                  }}>
                   <img src={unitIconUrl(unit)} alt={unit} className="snipe-unit-icon" />
                 </div>
               );
@@ -1013,6 +1231,8 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
               })}
             </div>
           </div>
+        )}
+        </>
         )}
 
       </div>

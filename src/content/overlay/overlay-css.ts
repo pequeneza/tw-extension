@@ -1856,6 +1856,11 @@ select.input {
 .gluer-eta-badge--sent   { background: var(--n100); border-color: var(--n200); color: var(--n400); }
 
 .gluer-quickbtn { flex: none; font-size: 10px; padding: 1px 7px; }
+.gluer-preset-btn--active {
+  border-color: var(--b500);
+  background: color-mix(in srgb, var(--b500) 12%, var(--n0));
+  color: var(--b500);
+}
 
 /* Gluer-only compact unit box — SnipeView keeps the full-size .snipe-unitbox */
 .gluer-unitbox--compact { width: 40px; }

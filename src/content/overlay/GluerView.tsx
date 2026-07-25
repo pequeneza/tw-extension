@@ -78,6 +78,18 @@ function savePresets(p: GluerPreset[]) {
   localStorage.setItem(PRESETS_KEY, JSON.stringify(p));
 }
 
+/** The preset applied last time (if it still exists) — restored on mount so the choice sticks across reopens. */
+function loadLastPreset(): GluerPreset | null {
+  const lastId = loadGluerSettings().lastPresetId;
+  if (!lastId) return null;
+  return loadPresets().find(p => p.id === lastId) ?? null;
+}
+function persistLastPreset(id: string | null) {
+  const s = loadGluerSettings();
+  if (id) s.lastPresetId = id; else delete s.lastPresetId;
+  saveGluerSettings(s);
+}
+
 const UNIT_MIN_PER_FIELD: Record<string, number> = {
   spear: 18, sword: 22, axe: 18, archer: 18, spy: 9,
   light: 10, marcher: 10, heavy: 11, ram: 30, catapult: 30,
@@ -243,6 +255,12 @@ function saveQueue(q: QueueEntry[]) {
 
 function unitIconUrl(unit: string) {
   return `https://dspt.innogamescdn.com/asset/b2fb8d33/graphic/unit/unit_${unit}.webp`;
+}
+
+/** Deep link to the in-game map screen centered on a coordinate, e.g. #470;637. */
+function mapUrl(x: number, y: number): string {
+  const vid = window.location.search.match(/[?&]village=(\d+)/)?.[1] ?? "";
+  return `${location.origin}/game.php?village=${vid}&screen=map&xbot_sender=1#${x};${y}`;
 }
 
 function clampInt(n: number, lo: number, hi: number) {
@@ -584,11 +602,14 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
   const [ntTemplate,         setNtTemplate]         = useState<string>(() => loadGluerSettings().ntTemplate ?? "noNT");
   const [ntEnabled,          setNtEnabled]          = useState<boolean>(() => (loadGluerSettings().ntTemplate ?? "noNT") !== "noNT");
   const [commandType,        setCommandType]        = useState<"Attack"|"Support">("Attack");
-  const [enabledUnits,       setEnabledUnits]       = useState<Set<string>>(() => new Set(UNIT_ORDER_SLOW_TO_FAST));
+  const [enabledUnits,       setEnabledUnits]       = useState<Set<string>>(() => {
+    const p = loadLastPreset();
+    return new Set(p ? (p.visibleUnits.length ? p.visibleUnits : UNIT_ORDER_SLOW_TO_FAST) : UNIT_ORDER_SLOW_TO_FAST);
+  });
   const [tab,                setTab]                = useState<"main" | "presets">("main");
   const [presets,            setPresets]            = useState<GluerPreset[]>(() => loadPresets());
-  const [activePresetId,     setActivePresetId]     = useState<string | null>(null);
-  const [minTroops,          setMinTroops]          = useState<Record<string, number>>({});
+  const [activePresetId,     setActivePresetId]     = useState<string | null>(() => loadLastPreset()?.id ?? null);
+  const [minTroops,          setMinTroops]          = useState<Record<string, number>>(() => loadLastPreset()?.minTroops ?? {});
   const [editingPresetId,    setEditingPresetId]    = useState<string | null>(null);
   const [formName,           setFormName]           = useState("");
   const [formVisible,        setFormVisible]        = useState<Set<string>>(() => new Set(UNIT_ORDER_SLOW_TO_FAST));
@@ -664,17 +685,20 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
     finally { setLoadingTrp(false); }
   }, [attack, activePresetId]);
 
-  // Presets — clicking the active preset again clears it back to defaults (all units, no minimums)
+  // Presets — clicking the active preset again clears it back to defaults (all units, no minimums).
+  // The applied (or cleared) preset is persisted so it's restored automatically next time the panel opens.
   function applyPreset(p: GluerPreset) {
     if (activePresetId === p.id) {
       setActivePresetId(null);
       setEnabledUnits(new Set(UNIT_ORDER_SLOW_TO_FAST));
       setMinTroops({});
+      persistLastPreset(null);
       return;
     }
     setActivePresetId(p.id);
     setEnabledUnits(new Set(p.visibleUnits.length ? p.visibleUnits : UNIT_ORDER_SLOW_TO_FAST));
     setMinTroops(p.minTroops);
+    persistLastPreset(p.id);
   }
 
   function resetPresetForm() {
@@ -717,7 +741,7 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
     const next = presets.filter(p => p.id !== id);
     setPresets(next);
     savePresets(next);
-    if (activePresetId === id) { setActivePresetId(null); setEnabledUnits(new Set(UNIT_ORDER_SLOW_TO_FAST)); setMinTroops({}); }
+    if (activePresetId === id) { setActivePresetId(null); setEnabledUnits(new Set(UNIT_ORDER_SLOW_TO_FAST)); setMinTroops({}); persistLastPreset(null); }
     if (editingPresetId === id) resetPresetForm();
   }
 
@@ -1061,11 +1085,11 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
             <span>Tropas a considerar</span>
             <span style={{ display: "flex", gap: 4 }}>
               <button className="btn btn-ghost gluer-quickbtn"
-                onClick={() => { setActivePresetId(null); setMinTroops({}); setEnabledUnits(new Set(UNIT_ORDER_SLOW_TO_FAST)); }}>
+                onClick={() => { setActivePresetId(null); setMinTroops({}); setEnabledUnits(new Set(UNIT_ORDER_SLOW_TO_FAST)); persistLastPreset(null); }}>
                 Todas
               </button>
               <button className="btn btn-ghost gluer-quickbtn"
-                onClick={() => { setActivePresetId(null); setMinTroops({}); setEnabledUnits(new Set()); }}>
+                onClick={() => { setActivePresetId(null); setMinTroops({}); setEnabledUnits(new Set()); persistLastPreset(null); }}>
                 Nenhuma
               </button>
             </span>
@@ -1096,6 +1120,7 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
                   title={unit}
                   onClick={() => {
                     setActivePresetId(null);
+                    persistLastPreset(null);
                     setEnabledUnits(prev => {
                       const next = new Set(prev);
                       if (next.has(unit)) next.delete(unit); else next.add(unit);
@@ -1113,7 +1138,13 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
         {attack && target && (
           <div className="cfg-section">
             <div className="section-label">
-              Candidatos → {target.x}|{target.y}
+              Candidatos →
+              <button
+                onClick={() => window.open(mapUrl(target.x, target.y), "_blank", "noopener,noreferrer")}
+                title="Ver localização no mapa"
+                style={{ background: "none", border: "none", cursor: "pointer", padding: 0, margin: "0 3px", fontSize: 12, verticalAlign: "middle", lineHeight: 1 }}
+              >📍</button>
+              {target.x}|{target.y}
               {candidates.length > 0 && (
                 <span className="snipe-candidate-meta">
                   &nbsp;·&nbsp;{candidates.length} aldeia{candidates.length !== 1 ? "s" : ""}

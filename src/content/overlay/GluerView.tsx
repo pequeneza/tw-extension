@@ -520,8 +520,14 @@ function GluerCandidateCard({ cand, target, tgtVillageId, arrivalMs, commandType
           <span className="snipe-card-coord">{x}|{y}</span>
         </span>
         <span className="snipe-card-meta">
-          slowest: <strong>{slowestSelected}</strong>
-          &nbsp;·&nbsp;saída: <strong>{fmtDate(effectiveSendMs).split(" ")[1]}</strong>
+          {hasSelection ? (
+            <>
+              slowest: <strong>{slowestSelected}</strong>
+              &nbsp;·&nbsp;saída: <strong>{fmtDate(effectiveSendMs).split(" ")[1]}</strong>
+            </>
+          ) : (
+            <span style={{ color: "var(--a500)", fontWeight: 600 }}>⚠ nenhuma tropa escolhida</span>
+          )}
         </span>
       </div>
 

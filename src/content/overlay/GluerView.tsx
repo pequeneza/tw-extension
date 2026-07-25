@@ -706,6 +706,7 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
   const [queue,              setQueueState]         = useState<QueueEntry[]>(() => loadQueue());
   const [copied,             setCopied]             = useState(false);
   const [now,                setNow]                = useState(() => getServerNowMs());
+  const queueSectionRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!visible) return;
@@ -928,7 +929,11 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
           </span>
         </div>
         {queue.length > 0 && (
-          <span className="gluer-queue-badge">{queue.length}</span>
+          <button className="gluer-queue-badge"
+            onClick={() => queueSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+            title="Ir para a fila de envio" aria-label="Ir para a fila de envio">
+            {queue.length}
+          </button>
         )}
         <button className={`back-btn gluer-settings-btn${tab === "presets" ? " back-btn--active" : ""}`}
           onClick={() => setTab(t => t === "presets" ? "main" : "presets")}
@@ -1268,7 +1273,7 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
 
         {/* Queue */}
         {queue.length > 0 && (
-          <div className="cfg-section">
+          <div className="cfg-section" ref={queueSectionRef}>
             <div className="section-label"
               style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingRight: 14 }}>
               <span>Fila de envio ({queue.length})</span>

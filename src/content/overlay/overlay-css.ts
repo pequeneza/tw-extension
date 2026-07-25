@@ -1809,7 +1809,12 @@ select.input {
   border-radius: 10px;
   flex-shrink: 0;
   line-height: 1.4;
+  border: none;
+  font-family: inherit;
+  cursor: pointer;
+  transition: filter var(--ease);
 }
+.gluer-queue-badge:hover { filter: brightness(1.1); }
 
 .gluer-attack-section {
   background: var(--b-bg);

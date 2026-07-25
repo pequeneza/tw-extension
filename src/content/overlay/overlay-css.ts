@@ -1093,6 +1093,49 @@ select.input {
   flex-wrap: wrap;
   margin-bottom: 5px;
 }
+
+/* Timer toggle switch — Gluer-only, styled after the shared friend-provided mockup */
+.gluer-toggle {
+  width: 34px;
+  height: 19px;
+  border-radius: 999px;
+  border: none;
+  padding: 0;
+  background: var(--g600);
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--ease);
+}
+.gluer-toggle--off { background: var(--n200); }
+.gluer-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 17px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.25);
+  transition: left var(--ease);
+}
+.gluer-toggle--off .gluer-toggle-knob { left: 2px; }
+
+/* Population fill bar */
+.gluer-pop-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.gluer-pop-bar { flex: 1; accent-color: var(--g600); }
+.gluer-pop-total {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  min-width: 40px;
+  text-align: right;
+}
 .snipe-timer-btn {
   min-width: 52px;
 }

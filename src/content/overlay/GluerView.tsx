@@ -443,6 +443,8 @@ function GluerCandidateCard({ cand, target, tgtVillageId, arrivalMs, commandType
     Object.fromEntries(cand.allowedUnits.map(u => [u, "0"]))
   );
   const [timerActive, setTimerActive] = useState(false);
+  const [showPopulation, setShowPopulation] = useState(false);
+  const [fillPct, setFillPct] = useState(0);
 
   // Slowest selected unit determines the effective departure time
   const hasSelection    = Object.values(amounts).some(v => v > 0);
@@ -480,6 +482,15 @@ function GluerCandidateCard({ cand, target, tgtVillageId, arrivalMs, commandType
     setDrafts(Object.fromEntries(Object.entries(next).map(([k, v]) => [k, String(v)])));
   }, [cand, committed]);
 
+  // Population bar — scales every viable unit to pct% of its own available stock at once
+  const applyFillPct = useCallback((pct: number) => {
+    setFillPct(pct);
+    const next: Record<string, number> = { ...amounts };
+    for (const u of cand.allowedUnits) next[u] = Math.round(effAvail(u) * pct / 100);
+    setAmounts(next);
+    setDrafts(Object.fromEntries(Object.entries(next).map(([k, v]) => [k, String(v)])));
+  }, [cand, amounts, committed]);
+
   function handleQueue() {
     const activeUnits = Object.fromEntries(
       Object.entries(amounts).filter(([, v]) => v > 0)
@@ -509,6 +520,11 @@ function GluerCandidateCard({ cand, target, tgtVillageId, arrivalMs, commandType
   // All units to display: enabled units in standard TW display order
   const displayUnits = UNIT_ORDER_DISPLAY.filter(u => enabledUnits.has(u));
 
+  const populationTotal = cand.allowedUnits.reduce((sum, u) => sum + (amounts[u] ?? 0), 0);
+  const populationColor = populationTotal < 1000 ? "var(--g600)"
+    : populationTotal <= 5000 ? "var(--a500)"
+    : "var(--r500)";
+
   return (
     <div className={`snipe-card${queued ? " gluer-card--queued" : ""}`}>
       <div className="snipe-card-header">
@@ -529,25 +545,46 @@ function GluerCandidateCard({ cand, target, tgtVillageId, arrivalMs, commandType
       </div>
 
       <div className="snipe-card-row">
-        <button className="btn btn-ghost snipe-timer-btn snipe-timer-btn--icon"
-          title={timerActive ? "Parar" : "Iniciar timer"}
-          onClick={() => setTimerActive(t => !t)}>
-          {timerActive ? "⏹" : "⏱️"}
+        <button type="button"
+          className={`gluer-toggle${timerActive ? "" : " gluer-toggle--off"}`}
+          onClick={() => setTimerActive(t => !t)}
+          role="switch" aria-checked={timerActive} aria-label="Timer"
+          title={timerActive ? "Parar" : "Iniciar timer"}>
+          <span className="gluer-toggle-knob" />
         </button>
         {timerActive && (
           <span className={`snipe-countdown${past ? " snipe-countdown--past" : ""}`}>
             {display}
           </span>
         )}
-        <button className="btn btn-ghost" onClick={selectAll}>Selec. tudo</button>
-        <button
-          className={`btn${queued ? " btn-save btn-save--saved" : " btn-save btn-save--dirty"}`}
-          onClick={handleQueue}
-          disabled={past || !hasSelection}
-        >
-          + Queue
-        </button>
+        <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
+          <button className="btn btn-ghost snipe-timer-btn--icon"
+            onClick={() => setShowPopulation(s => !s)}
+            title="Preencher por população" aria-pressed={showPopulation}>
+            📊
+          </button>
+          <button className="btn btn-ghost" style={{ flex: 1 }} onClick={selectAll}>Selec. tudo</button>
+          <button
+            className={`btn${queued ? " btn-save btn-save--saved" : " btn-save btn-save--dirty"}`}
+            style={{ flex: 1 }}
+            onClick={handleQueue}
+            disabled={past || !hasSelection}
+          >
+            + Queue
+          </button>
+        </div>
       </div>
+
+      {showPopulation && (
+        <div className="gluer-pop-row">
+          <input type="range" min={0} max={100} value={fillPct}
+            className="gluer-pop-bar" style={{ accentColor: populationColor }}
+            onChange={e => applyFillPct(Number(e.target.value))} />
+          <span className="gluer-pop-total" style={{ color: populationColor }}>
+            {populationTotal.toLocaleString("pt-PT")}
+          </span>
+        </div>
+      )}
 
       <div className="snipe-units">
         {displayUnits.map(unit => {

@@ -1065,6 +1065,19 @@ select.input {
   color: var(--n600);
   font-family: var(--mono);
 }
+.gluer-map-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--n400);
+  flex-shrink: 0;
+  transition: color var(--ease);
+}
+.gluer-map-btn:hover { color: var(--b500); }
 .snipe-card-meta {
   font-size: 11px;
   color: var(--n400);

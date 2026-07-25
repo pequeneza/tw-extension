@@ -509,7 +509,16 @@ function GluerCandidateCard({ cand, target, tgtVillageId, arrivalMs, commandType
   return (
     <div className={`snipe-card${queued ? " gluer-card--queued" : ""}`}>
       <div className="snipe-card-header">
-        <span className="snipe-card-coord">{x}|{y}</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+          <button className="gluer-map-btn"
+            onClick={() => window.open(mapUrl(x, y), "_blank", "noopener,noreferrer")}
+            title="Ver localização no mapa" aria-label="Ver localização no mapa">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 2C7.86 2 4.5 5.36 4.5 9.5c0 5.5 6.5 12 7 12.5.28.28.72.28 1 0 .5-.5 7-7 7-12.5C19.5 5.36 16.14 2 12 2zm0 10.25a2.75 2.75 0 1 1 0-5.5 2.75 2.75 0 0 1 0 5.5z"/>
+            </svg>
+          </button>
+          <span className="snipe-card-coord">{x}|{y}</span>
+        </span>
         <span className="snipe-card-meta">
           slowest: <strong>{slowestSelected}</strong>
           &nbsp;·&nbsp;saída: <strong>{fmtDate(effectiveSendMs).split(" ")[1]}</strong>
@@ -1138,13 +1147,7 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
         {attack && target && (
           <div className="cfg-section">
             <div className="section-label">
-              Candidatos →
-              <button
-                onClick={() => window.open(mapUrl(target.x, target.y), "_blank", "noopener,noreferrer")}
-                title="Ver localização no mapa"
-                style={{ background: "none", border: "none", cursor: "pointer", padding: 0, margin: "0 3px", fontSize: 12, verticalAlign: "middle", lineHeight: 1 }}
-              >📍</button>
-              {target.x}|{target.y}
+              Candidatos → {target.x}|{target.y}
               {candidates.length > 0 && (
                 <span className="snipe-candidate-meta">
                   &nbsp;·&nbsp;{candidates.length} aldeia{candidates.length !== 1 ? "s" : ""}

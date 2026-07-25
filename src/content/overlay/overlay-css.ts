@@ -1925,6 +1925,8 @@ select.input {
 .gluer-unitbox--compact { width: 44px; }
 .gluer-unitbox--compact .snipe-unit-icon { width: 15px; height: 15px; }
 .gluer-unitbox--compact .snipe-unit-input { width: 38px; }
+/* Marks a unit as manually set while the Population bar is open — the bar skips it */
+.gluer-unitbox--locked { border-color: var(--a-br); box-shadow: inset 0 0 0 1px var(--a-br); }
 
 .gluer-unit-filter {
   display: flex;

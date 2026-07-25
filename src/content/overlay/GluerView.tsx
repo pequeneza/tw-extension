@@ -445,6 +445,9 @@ function GluerCandidateCard({ cand, target, tgtVillageId, arrivalMs, commandType
   const [timerActive, setTimerActive] = useState(false);
   const [showPopulation, setShowPopulation] = useState(false);
   const [fillPct, setFillPct] = useState(0);
+  // Units the user has set by hand (icon toggle or typing) — the Population bar
+  // leaves these alone and only scales the remaining, non-overridden units.
+  const [overriddenUnits, setOverriddenUnits] = useState<Set<string>>(new Set());
 
   // Slowest selected unit determines the effective departure time
   const hasSelection    = Object.values(amounts).some(v => v > 0);
@@ -462,6 +465,7 @@ function GluerCandidateCard({ cand, target, tgtVillageId, arrivalMs, commandType
     setAmounts(Object.fromEntries(cand.allowedUnits.map(u => [u, 0])));
     setDrafts(Object.fromEntries(cand.allowedUnits.map(u => [u, "0"])));
     setTimerActive(false);
+    setOverriddenUnits(new Set());
   }, [cand.src.villageId, allowedKey]);
 
   // Effective available = raw troops minus already-queued amounts
@@ -474,22 +478,34 @@ function GluerCandidateCard({ cand, target, tgtVillageId, arrivalMs, commandType
     const next = (amounts[unit] ?? 0) > 0 ? 0 : avail;
     setAmounts(p => ({ ...p, [unit]: next }));
     setDrafts(p => ({ ...p, [unit]: String(next) }));
+    setOverriddenUnits(p => new Set(p).add(unit));
   }, [cand, amounts, committed]);
 
+  // "Todos" is a fresh bulk fill, not a per-unit override — clears any locks
+  // so the Population bar can immediately act on every unit again afterward.
   const selectAll = useCallback(() => {
     const next = Object.fromEntries(cand.allowedUnits.map(u => [u, effAvail(u)]));
     setAmounts(next);
     setDrafts(Object.fromEntries(Object.entries(next).map(([k, v]) => [k, String(v)])));
+    setOverriddenUnits(new Set());
   }, [cand, committed]);
 
-  // Population bar — scales every viable unit to pct% of its own available stock at once
+  // Population bar — scales every non-overridden viable unit to pct% of its own
+  // available stock at once. Units the user has set by hand are left untouched.
   const applyFillPct = useCallback((pct: number) => {
     setFillPct(pct);
     const next: Record<string, number> = { ...amounts };
-    for (const u of cand.allowedUnits) next[u] = Math.round(effAvail(u) * pct / 100);
+    for (const u of cand.allowedUnits) {
+      if (overriddenUnits.has(u)) continue;
+      next[u] = Math.round(effAvail(u) * pct / 100);
+    }
     setAmounts(next);
-    setDrafts(Object.fromEntries(Object.entries(next).map(([k, v]) => [k, String(v)])));
-  }, [cand, amounts, committed]);
+    setDrafts(prev => {
+      const nd = { ...prev };
+      for (const u of cand.allowedUnits) if (!overriddenUnits.has(u)) nd[u] = String(next[u]);
+      return nd;
+    });
+  }, [cand, amounts, committed, overriddenUnits]);
 
   function handleQueue() {
     const activeUnits = Object.fromEntries(
@@ -609,10 +625,13 @@ function GluerCandidateCard({ cand, target, tgtVillageId, arrivalMs, commandType
             );
           }
 
+          const locked = showPopulation && overriddenUnits.has(unit);
           return (
             <div key={unit}
-              className={`snipe-unitbox gluer-unitbox--compact${val > 0 ? " snipe-unitbox--on" : ""}`}
-              title={sendAtThisUnit ? `Saída: ${fmtDate(sendAtThisUnit).split(" ")[1]}` : unit}>
+              className={`snipe-unitbox gluer-unitbox--compact${val > 0 ? " snipe-unitbox--on" : ""}${locked ? " gluer-unitbox--locked" : ""}`}
+              title={locked
+                ? `${unit}: fixado — a barra de população não altera esta unidade`
+                : sendAtThisUnit ? `Saída: ${fmtDate(sendAtThisUnit).split(" ")[1]}` : unit}>
               <img src={unitIconUrl(unit)} alt={unit} className="snipe-unit-icon"
                 onClick={() => toggleUnit(unit)} />
               <div className="snipe-unit-avail">{avail}</div>
@@ -625,6 +644,7 @@ function GluerCandidateCard({ cand, target, tgtVillageId, arrivalMs, commandType
                   setDrafts(p => ({ ...p, [unit]: raw }));
                   const n = clampInt(parseInt(raw, 10), 0, avail);
                   if (Number.isFinite(n)) setAmounts(p => ({ ...p, [unit]: n }));
+                  setOverriddenUnits(p => new Set(p).add(unit));
                 }}
                 onBlur={() => {
                   const n = parseInt(drafts[unit] ?? "0", 10);

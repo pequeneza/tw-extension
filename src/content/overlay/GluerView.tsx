@@ -445,8 +445,12 @@ function GluerCandidateCard({ cand, target, tgtVillageId, arrivalMs, commandType
   const [timerActive, setTimerActive] = useState(false);
 
   // Slowest selected unit determines the effective departure time
+  const hasSelection    = Object.values(amounts).some(v => v > 0);
   const slowestSelected = UNIT_ORDER_SLOW_TO_FAST.find(u => (amounts[u] ?? 0) > 0) ?? cand.primaryUnit;
   const effectiveSendMs = cand.sendMsPerUnit[slowestSelected] ?? cand.sendMs;
+  // True when the user's selection doesn't include the theoretically slowest viable
+  // unit — the send time above is recalculated for their actual choice, not primaryUnit.
+  const primaryMismatch = hasSelection && slowestSelected !== cand.primaryUnit;
 
   const { display, past } = useCountdown(effectiveSendMs, timerActive);
 
@@ -502,7 +506,6 @@ function GluerCandidateCard({ cand, target, tgtVillageId, arrivalMs, commandType
   }
 
   const { x, y } = cand.src.coord;
-  const hasSelection = Object.values(amounts).some(v => v > 0);
   // All units to display: enabled units in standard TW display order
   const displayUnits = UNIT_ORDER_DISPLAY.filter(u => enabledUnits.has(u));
 
@@ -520,14 +523,8 @@ function GluerCandidateCard({ cand, target, tgtVillageId, arrivalMs, commandType
           <span className="snipe-card-coord">{x}|{y}</span>
         </span>
         <span className="snipe-card-meta">
-          {hasSelection ? (
-            <>
-              slowest: <strong>{slowestSelected}</strong>
-              &nbsp;·&nbsp;saída: <strong>{fmtDate(effectiveSendMs).split(" ")[1]}</strong>
-            </>
-          ) : (
-            <span style={{ color: "var(--a500)", fontWeight: 600 }}>⚠ nenhuma tropa escolhida</span>
-          )}
+          slowest: <strong>{slowestSelected}</strong>
+          &nbsp;·&nbsp;saída: <strong>{fmtDate(effectiveSendMs).split(" ")[1]}</strong>
         </span>
       </div>
 
@@ -600,6 +597,17 @@ function GluerCandidateCard({ cand, target, tgtVillageId, arrivalMs, commandType
           );
         })}
       </div>
+
+      {primaryMismatch && (
+        <div style={{
+          marginTop: 6, padding: "4px 8px", borderRadius: 5, fontSize: 11,
+          color: "var(--n300)", background: "rgba(13,148,136,0.08)",
+          border: "1px solid rgba(13,148,136,0.25)",
+        }}>
+          ↻ Tempo de envio recalculado para <strong>{slowestSelected}</strong>: <strong>{fmtDate(effectiveSendMs).split(" ")[1]}</strong>
+          &nbsp;(mais lento disponível: <strong>{cand.primaryUnit}</strong>)
+        </div>
+      )}
     </div>
   );
 }

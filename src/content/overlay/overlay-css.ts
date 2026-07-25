@@ -1744,13 +1744,6 @@ select.input {
   background: color-mix(in srgb, var(--b500) 12%, var(--n0));
 }
 
-.gluer-reload-btn {
-  flex: none;
-  margin-top: 6px;
-  padding: 4px 10px;
-  font-size: 11px;
-}
-
 .gluer-queue-badge {
   background: var(--a500);
   color: #fff;

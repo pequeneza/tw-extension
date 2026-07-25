@@ -976,6 +976,19 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
                 {fmtCountdownShort(effectiveArrivalMs - now)}
               </span>
             </div>
+            <div className="gluer-attack-row">
+              <button className="btn btn-ghost snipe-timer-btn--icon"
+                onClick={loadTroops} disabled={loadingTrp}
+                title={troops.length ? "Recarregar tropas" : "Carregar tropas"}>
+                {loadingTrp ? <span className="spinner" /> : "↺"}
+              </button>
+              <span style={{ fontSize: 11, color: "var(--n400)" }}>
+                Aldeias carregadas: <strong style={{ color: "var(--n700)" }}>{troops.length}</strong>
+              </span>
+            </div>
+            {troopsErr && (
+              <div className="snipe-error" style={{ margin: "0 14px 6px" }}>{troopsErr}</div>
+            )}
           </div>
         )}
 
@@ -1093,26 +1106,6 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
                 </div>
               );
             })}
-          </div>
-        </div>
-
-        {/* Troops */}
-        <div className="cfg-section">
-          <div style={{ padding: "6px 14px" }}>
-            <div className="snipe-summary-row">
-              <span className="snipe-summary-item">
-                Aldeias carregadas: <strong>{troops.length}</strong>
-              </span>
-            </div>
-            {troopsErr && (
-              <div className="snipe-error" style={{ marginTop: 4, marginBottom: 6 }}>{troopsErr}</div>
-            )}
-            <button className="btn btn-save btn-save--dirty gluer-reload-btn"
-              onClick={loadTroops} disabled={loadingTrp}>
-              {loadingTrp
-                ? <><span className="spinner" /> A carregar…</>
-                : troops.length ? `↺ Recarregar (${troops.length})` : "Carregar tropas"}
-            </button>
           </div>
         </div>
 

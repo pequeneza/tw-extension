@@ -59,41 +59,21 @@ async function fetchAttackCommandCount(): Promise<number> {
 }
 
 /**
- * Count of incoming attacks labelled "Nobre" — same detection mass_label_renamer.user.js
- * uses (unit icon src contains snob/nobre, or the label text contains "Nobre"), but done
- * server-side: apply a temporary saved filter (filters[target_comment]=Nobre) on the
- * incomings overview so TW itself returns just the filtered count, then clear the filter
- * again so the account's saved incomings view isn't left altered.
- *
- * NOTE: overview_filters_manage's exact field/response shape was not verified against a
- * live session (no logged-in tab was available while building this) — if it silently
- * returns 0 or errors, check the actual request TW sends when you apply this filter by
- * hand (Network tab) and report back the real field names/response shape.
+ * Count of incoming attacks carrying a noble. The incomings overview's own filter panel
+ * (screen=overview_villages&mode=incomings) has a purpose-built "Com nobre" checkbox —
+ * `filter_icon[2]=2` — keyed to the noble icon itself, which is far more reliable than
+ * matching on the command's free-text comment/label. Applied as a plain query-string
+ * filter on a GET request (TW's overview tables read filters from the query string on
+ * each load, falling back to the account's saved defaults when absent) — no CSRF, no
+ * save/restore round-trip, and it never touches the account's saved filter settings.
  */
 async function fetchIncomingNobleCount(): Promise<number> {
-  const gd = (window as Window & { game_data?: { csrf?: string } }).game_data;
-  const csrf = gd?.csrf;
-  if (!csrf) return 0;
-
-  const base = `${location.origin}/game.php?screen=overview_villages&mode=incomings&subtype=attacks`;
-  const setFilter = (value: string) => fetch(`${base}&ajax=overview_filters_manage`, {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: `filters%5Btarget_comment%5D=${encodeURIComponent(value)}&h=${encodeURIComponent(csrf)}`,
-  }).catch(() => null);
-
-  try {
-    await setFilter("Nobre");
-    const html = await fetch(base, { credentials: "include" }).then(r => r.text());
-    const headerMatch = html.match(/Ataques?\s*\(\s*(\d+)\s*\)/i);
-    if (headerMatch) return parseInt(headerMatch[1]!, 10);
-    const doc = new DOMParser().parseFromString(html, "text/html");
-    return doc.querySelectorAll("#incomings_table tbody tr").length;
-  } finally {
-    // Always restore the account's default (unfiltered) incomings view, even on failure above.
-    await setFilter("");
-  }
+  const url = `${location.origin}/game.php?screen=overview_villages&mode=incomings&subtype=attacks&filter_icon%5B2%5D=2`;
+  const html = await fetch(url, { credentials: "include" }).then(r => r.text());
+  const headerMatch = html.match(/Ataques?\s*\(\s*(\d+)\s*\)/i);
+  if (headerMatch) return parseInt(headerMatch[1]!, 10);
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  return doc.querySelectorAll("#incomings_table tbody tr").length;
 }
 
 /** Caches the last successful Attacks/Nobles fetch so the stats bar shows real

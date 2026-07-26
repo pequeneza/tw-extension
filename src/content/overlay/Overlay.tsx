@@ -70,7 +70,7 @@ async function fetchAttackCommandCount(): Promise<number> {
 async function fetchIncomingNobleCount(): Promise<number> {
   const url = `${location.origin}/game.php?screen=overview_villages&mode=incomings&subtype=attacks&filter_icon%5B2%5D=2`;
   const html = await fetch(url, { credentials: "include" }).then(r => r.text());
-  const headerMatch = html.match(/Ataques?\s*\(\s*(\d+)\s*\)/i);
+  const headerMatch = html.match(/Comando\s*\(\s*(\d+)\s*\)/i);
   if (headerMatch) return parseInt(headerMatch[1]!, 10);
   const doc = new DOMParser().parseFromString(html, "text/html");
   return doc.querySelectorAll("#incomings_table tbody tr").length;

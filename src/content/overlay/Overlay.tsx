@@ -529,33 +529,12 @@ function ModuleCard({ mod, isOn, isLive, hasCfg, onToggle, onCfg, index }: {
 
 /* ─── StatsBar ────────────────────────────────────────────────────────────── */
 function StatsBar() {
-  const [fakes,    setFakes]    = useState("0");
-  const [resMoved, setResMoved] = useState("—");
-  const [snipes,   setSnipes]   = useState("0");
-
-  // Live account stats — require HTTP round-trips to the game server, so unlike the
-  // local counters above these only update on manual refresh, not on a timer.
+  // Live account stats — require HTTP round-trips to the game server, so they only
+  // update on manual refresh, not on a timer.
   const [attacks,   setAttacks]   = useState("—");
   const [nobles,    setNobles]    = useState("—");
   const [liveLoading, setLiveLoading] = useState(false);
   const [liveError,   setLiveError]   = useState(false);
-
-  useEffect(() => {
-    const tick = () => {
-      setFakes(localStorage.getItem("fake_sent_v1") ?? "0");
-      const raw = localStorage.getItem("wh_balancer_total_sent_v1");
-      setResMoved(raw !== null ? raw : "—");
-      try {
-        const arr = JSON.parse(localStorage.getItem("tw_snipe_queue_v1") ?? "[]");
-        setSnipes(String(Array.isArray(arr) ? arr.length : 0));
-      } catch {
-        setSnipes("0");
-      }
-    };
-    tick();
-    const id = setInterval(tick, 2000);
-    return () => clearInterval(id);
-  }, []);
 
   const refreshLiveStats = useCallback(async () => {
     setLiveLoading(true);
@@ -574,18 +553,6 @@ function StatsBar() {
 
   return (
     <div className="stats-bar">
-      <div className="stat-cell">
-        <span className="stat-label">Fakes</span>
-        <span className="stat-value">{fakes}</span>
-      </div>
-      <div className="stat-cell">
-        <span className="stat-label">Res moved</span>
-        <span className="stat-value">{resMoved}</span>
-      </div>
-      <div className="stat-cell">
-        <span className="stat-label">Snipes</span>
-        <span className="stat-value">{snipes}</span>
-      </div>
       <div className="stat-cell">
         <span className="stat-label">Attacks</span>
         <span className="stat-value">{attacks}</span>

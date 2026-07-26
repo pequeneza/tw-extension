@@ -103,6 +103,8 @@ function saveLiveStats(attacks: string, nobles: string) {
   try { localStorage.setItem(LIVE_STATS_KEY, JSON.stringify({ attacks, nobles })); } catch { /* */ }
 }
 
+const BOT_ENABLED_KEY = "xbot_enabled";
+
 /* ─── Storage ─────────────────────────────────────────────────────────────── */
 function storageGet(keys: string[]): Promise<Record<string, unknown>> {
   return new Promise((res) =>
@@ -821,6 +823,24 @@ function Panel({
 
 /* ─── OverlayRoot ─────────────────────────────────────────────────────────── */
 export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
+  // Master on/off (popup's "Active" toggle) — when off, the whole drawer/trigger-stack
+  // must disappear from the page, not just the per-module triggers that check isOn(id).
+  // null = not read yet (render normally rather than flash-hide while loading).
+  const [botEnabled, setBotEnabled] = useState<boolean | null>(null);
+  useEffect(() => {
+    const read = () => {
+      chrome.storage.sync.get(BOT_ENABLED_KEY, (r) => {
+        setBotEnabled((r[BOT_ENABLED_KEY] as boolean) === true);
+      });
+    };
+    read();
+    const onChange = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area === "sync" && changes[BOT_ENABLED_KEY]) read();
+    };
+    chrome.storage.onChanged.addListener(onChange);
+    return () => chrome.storage.onChanged.removeListener(onChange);
+  }, []);
+
   // Persist open/closed across page navigations (place→confirm→place loop)
   const [open, setOpenRaw] = useState(() =>
     sessionStorage.getItem("xbot_overlay_open") === "1"
@@ -1055,6 +1075,10 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
   }, [drawerWidth]);
+
+  // Master toggle off — remove the entire drawer/trigger-stack from the page,
+  // not just the per-module triggers gated by isOn(id).
+  if (botEnabled === false) return null;
 
   return (
     <>

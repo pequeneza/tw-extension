@@ -21,6 +21,16 @@ import { TelegramView }   from "./TelegramView";
 
 /* ─── Helpers ─────────────────────────────────────────────────────────────── */
 function _p2(n: number) { return String(n).padStart(2, "0"); }
+
+// Adds random jitter to fixed delays so repeated runs don't produce an identical,
+// mechanically precise timing signature — same convention as the userscripts
+// (auto_sender, kumin_gluer, planeador, etc.), applied here to the live-stats fetches.
+function jitter(baseMs: number, spreadMs: number): number {
+  return Math.max(0, Math.round(baseMs + (Math.random() * 2 - 1) * spreadMs));
+}
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 function getServerNowMs(): number {
   try {
     const w = window as Window & { Timing?: { getCurrentServerTime?: () => number } };
@@ -40,6 +50,7 @@ function fmtTriggerTimer(diffMs: number): string {
 
 /** Reads the "Comando (N)" total from the outgoing commands overview for a given type. */
 async function fetchCommandCountPage(type: string, page: number): Promise<number> {
+  await sleep(jitter(350, 200));
   const html = await fetch(
     `${location.origin}/game.php?screen=overview_villages&mode=commands&type=${type}&page=${page}`,
     { credentials: "include" }
@@ -68,6 +79,7 @@ async function fetchAttackCommandCount(): Promise<number> {
  * save/restore round-trip, and it never touches the account's saved filter settings.
  */
 async function fetchIncomingNobleCount(): Promise<number> {
+  await sleep(jitter(350, 200));
   const url = `${location.origin}/game.php?screen=overview_villages&mode=incomings&subtype=attacks&filter_icon%5B2%5D=2`;
   const html = await fetch(url, { credentials: "include" }).then(r => r.text());
   const headerMatch = html.match(/Comando\s*\(\s*(\d+)\s*\)/i);
@@ -536,7 +548,10 @@ function StatsBar() {
     setLiveLoading(true);
     setLiveError(false);
     try {
-      const [a, n] = await Promise.all([fetchAttackCommandCount(), fetchIncomingNobleCount()]);
+      // Sequential, not Promise.all — staggered by each fetch's own jitter rather than
+      // firing both requests at once.
+      const a = await fetchAttackCommandCount();
+      const n = await fetchIncomingNobleCount();
       const aStr = String(a), nStr = String(n);
       setAttacks(aStr);
       setNobles(nStr);

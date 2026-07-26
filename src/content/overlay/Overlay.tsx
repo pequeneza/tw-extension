@@ -96,6 +96,21 @@ async function fetchIncomingNobleCount(): Promise<number> {
   }
 }
 
+/** Caches the last successful Attacks/Nobles fetch so the stats bar shows real
+ * data immediately on mount (overlay reopen, page navigation, etc.) instead of
+ * resetting to "—" — they only change again once the user hits refresh. */
+const LIVE_STATS_KEY = "xbot_live_stats_v1";
+function loadLiveStats(): { attacks: string; nobles: string } {
+  try {
+    const raw = JSON.parse(localStorage.getItem(LIVE_STATS_KEY) ?? "{}");
+    return { attacks: typeof raw.attacks === "string" ? raw.attacks : "—",
+             nobles:  typeof raw.nobles  === "string" ? raw.nobles  : "—" };
+  } catch { return { attacks: "—", nobles: "—" }; }
+}
+function saveLiveStats(attacks: string, nobles: string) {
+  try { localStorage.setItem(LIVE_STATS_KEY, JSON.stringify({ attacks, nobles })); } catch { /* */ }
+}
+
 /* ─── Storage ─────────────────────────────────────────────────────────────── */
 function storageGet(keys: string[]): Promise<Record<string, unknown>> {
   return new Promise((res) =>
@@ -530,9 +545,10 @@ function ModuleCard({ mod, isOn, isLive, hasCfg, onToggle, onCfg, index }: {
 /* ─── StatsBar ────────────────────────────────────────────────────────────── */
 function StatsBar() {
   // Live account stats — require HTTP round-trips to the game server, so they only
-  // update on manual refresh, not on a timer.
-  const [attacks,   setAttacks]   = useState("—");
-  const [nobles,    setNobles]    = useState("—");
+  // update on manual refresh, not on a timer. Seeded from the last successful fetch
+  // (persisted in localStorage) so they don't reset to "—" on every remount.
+  const [attacks,   setAttacks]   = useState(() => loadLiveStats().attacks);
+  const [nobles,    setNobles]    = useState(() => loadLiveStats().nobles);
   const [liveLoading, setLiveLoading] = useState(false);
   const [liveError,   setLiveError]   = useState(false);
 
@@ -541,8 +557,10 @@ function StatsBar() {
     setLiveError(false);
     try {
       const [a, n] = await Promise.all([fetchAttackCommandCount(), fetchIncomingNobleCount()]);
-      setAttacks(String(a));
-      setNobles(String(n));
+      const aStr = String(a), nStr = String(n);
+      setAttacks(aStr);
+      setNobles(nStr);
+      saveLiveStats(aStr, nStr);
     } catch (err) {
       console.error("[StatsBar] refreshLiveStats:", err);
       setLiveError(true);
@@ -554,11 +572,11 @@ function StatsBar() {
   return (
     <div className="stats-bar">
       <div className="stat-cell">
-        <span className="stat-label">Attacks</span>
+        <span className="stat-label">Comandos</span>
         <span className="stat-value">{attacks}</span>
       </div>
       <div className="stat-cell">
-        <span className="stat-label">Nobles inc.</span>
+        <span className="stat-label">Nobres</span>
         <span className="stat-value">{nobles}</span>
       </div>
       <button className="stat-refresh-btn"

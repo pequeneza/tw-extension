@@ -585,7 +585,7 @@ export function FakeSenderView({ visible, onBack }: {
   return (
     <div
       className={`cfg-view${anim ? " in" : ""}`}
-      style={{ display: visible ? "flex" : "none", minWidth: 340, width: 340 }}
+      style={{ display: visible ? "flex" : "none" }}
     >
       {/* ── Header ── */}
       <div className="cfg-header">

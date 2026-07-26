@@ -1343,8 +1343,8 @@ select.input {
 
 /* Badges */
 .bal-badge        { display: inline-flex; align-items: center; padding: 1px 5px; border-radius: 4px; font-size: 10px; font-weight: 700; flex-shrink: 0; }
-.bal-badge--hq    { background: #fff3b0; border: 1px solid #c8a800; color: #7a6000; }
-.bal-badge--cc    { background: var(--b-bg); border: 1px solid #991e43; color: var(--n500); }
+.bal-badge--hq    { background: var(--a-bg); border: 1px solid var(--a-br); color: var(--a500); }
+.bal-badge--cc    { background: var(--b-bg); border: 1px solid var(--b-br); color: var(--b500); }
  
 /* Section header with inline button */
 .bal-section-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px 4px; }

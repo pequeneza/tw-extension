@@ -897,6 +897,7 @@ select.input {
   display: flex; align-items: center; justify-content: center; gap: 4px;
 }
 .btn:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
+.snipe-tab-btn { font-size: 11px; padding: 5px 8px; }
 
 .btn-ghost {
   background: var(--n0); border-color: var(--n200); color: var(--n500);

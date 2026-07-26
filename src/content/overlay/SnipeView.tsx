@@ -209,6 +209,12 @@ function unitIconUrl(unit: string) {
   return `https://dspt.innogamescdn.com/asset/b2fb8d33/graphic/unit/unit_${unit}.webp`;
 }
 
+/** Deep link to the in-game map screen centered on a coordinate, e.g. #470;637. */
+function mapUrl(x: number, y: number): string {
+  const vid = window.location.search.match(/[?&]village=(\d+)/)?.[1] ?? "";
+  return `${location.origin}/game.php?village=${vid}&screen=map&xbot_sender=1#${x};${y}`;
+}
+
 function makeId() {
   return `${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
@@ -716,6 +722,14 @@ function RecallTab({
 
   return (
     <div>
+      {/* Explanation */}
+      <div className="cfg-section">
+        <div className="gluer-cfg-note" style={{ padding: "6px 14px", fontStyle: "normal" }}>
+          Envia um apoio para a tua aldeia própria mais próxima e cancela-o a meio caminho —
+          o retorno chega mesmo na janela entre dois ataques recebidos, "limpando" a fila sem gastar tropas de verdade.
+        </div>
+      </div>
+
       {/* Source */}
       <div className="cfg-section">
         <div className="section-label">Origem (aldeia defendida)</div>
@@ -764,7 +778,7 @@ function RecallTab({
           ) : (
             <div className="snipe-card">
               <div className="snipe-card-row">
-                <button className="btn btn-ghost" onClick={selectAll}>Select all</button>
+                <button className="btn btn-ghost" onClick={selectAll}>Todos</button>
                 {slowestUnit && (
                   <span style={{ fontSize: 11, color: "var(--n500)" }}>
                     slowest: <strong>{slowestUnit}</strong>
@@ -776,9 +790,9 @@ function RecallTab({
                   const avail = srcVillageTroops.troops[unit] ?? 0;
                   const val   = amounts[unit] ?? 0;
                   return (
-                    <div key={unit} className={`snipe-unitbox${val > 0 ? " snipe-unitbox--on" : ""}`}>
+                    <div key={unit} className={`snipe-unitbox gluer-unitbox--compact${val > 0 ? " snipe-unitbox--on" : ""}`}>
                       <img src={unitIconUrl(unit)} alt={unit} className="snipe-unit-icon"
-                           onClick={() => toggleUnit(unit)} title={`Click to toggle all ${unit}`} />
+                           onClick={() => toggleUnit(unit)} title={`Clica para alternar todas as ${unit}`} />
                       <div className="snipe-unit-avail">{avail}</div>
                       <input
                         className="snipe-unit-input"
@@ -816,10 +830,13 @@ function RecallTab({
               background: c.feasible ? "rgba(13,148,136,0.08)" : "rgba(80,80,80,0.06)",
               border: `1px solid ${c.feasible ? "rgba(13,148,136,0.3)" : "rgba(100,100,100,0.18)"}`,
             }}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2, fontSize: 12 }}>
                 <strong>Janela #{c.gapIdx + 1}</strong>
                 {!c.feasible && <span style={{ color: "var(--r500)", fontSize: 11 }}>{c.reason}</span>}
                 {c.feasible && queued.has(c.gapIdx) && <span style={{ color: "var(--g600)", fontSize: 11 }}>✓ Na fila</span>}
+              </div>
+              <div style={{ fontSize: 10.5, color: "var(--n400)", marginBottom: 6 }}>
+                entre os ataques das <strong>{fmtDateMs(c.gapAfterMs).split(" ")[1]?.split(".")[0]}</strong> e das <strong>{fmtDateMs(c.gapBeforeMs).split(" ")[1]?.split(".")[0]}</strong>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: "2px 6px", fontFamily: "var(--mono)", fontSize: 11, color: "var(--n300)" }}>
                 <span>Enviar:</span>   <span>{fmtDateMs(c.sendMs).split(" ")[1]}</span>
@@ -829,10 +846,10 @@ function RecallTab({
               </div>
               {c.feasible && !queued.has(c.gapIdx) && (
                 <button
-                  className="btn btn-save btn-save--dirty"
+                  className="btn btn-ghost"
                   style={{ marginTop: 6, width: "100%", fontSize: 12 }}
                   onClick={() => queueGap(c)}
-                >⚡ Queue to AutoSender</button>
+                >⚡ Adicionar ao Auto Sender</button>
               )}
             </div>
           ))}
@@ -883,6 +900,11 @@ function CandidateCard({ candidate, target, midGapArrivalMs, gapLabel, onQueue, 
     Object.fromEntries(candidate.allowedUnits.map((u) => [u, "0"]))
   );
   const [timerActive, setTimerActive] = useState(false);
+  const [showPopulation, setShowPopulation] = useState(false);
+  const [fillPct, setFillPct] = useState(0);
+  // Units the user has set by hand (icon toggle or typing) — the Population bar
+  // leaves these alone and only scales the remaining, non-overridden units.
+  const [overriddenUnits, setOverriddenUnits] = useState<Set<string>>(new Set());
 
   const effectiveSlowest = [...UNIT_ORDER_FAST_TO_SLOW].reverse().find((u) => (amounts[u] ?? 0) > 0) ?? null;
   const timingMismatch   = effectiveSlowest !== null && effectiveSlowest !== candidate.chosenSlowestUnit;
@@ -911,34 +933,42 @@ function CandidateCard({ candidate, target, midGapArrivalMs, gapLabel, onQueue, 
     setAmounts(Object.fromEntries(candidate.allowedUnits.map((u) => [u, 0])));
     setDrafts(Object.fromEntries(candidate.allowedUnits.map((u) => [u, "0"])));
     setTimerActive(false);
+    setOverriddenUnits(new Set());
   }, [candidate.src.villageId, candidate.sendMs]);
 
   const toggleUnit = useCallback((unit: string) => {
     const next = (amounts[unit] ?? 0) > 0 ? 0 : (candidate.src.troops[unit] ?? 0);
     setAmounts((p) => ({ ...p, [unit]: next }));
     setDrafts((p) => ({ ...p, [unit]: String(next) }));
+    setOverriddenUnits((p) => new Set(p).add(unit));
   }, [candidate, amounts]);
 
+  // "Todos" is a fresh bulk fill, not a per-unit override — clears any locks
+  // so the Population bar can immediately act on every unit again afterward.
   const selectAll = useCallback(() => {
     const next = Object.fromEntries(candidate.allowedUnits.map((u) => [u, candidate.src.troops[u] ?? 0]));
     setAmounts(next);
     setDrafts(Object.fromEntries(Object.entries(next).map(([k, v]) => [k, String(v)])));
+    setOverriddenUnits(new Set());
   }, [candidate]);
 
-  const openSupport = useCallback(() => {
-    if (!candidate.src.villageId) { alert("Cannot open support: villageId missing."); return; }
-    const units = Object.fromEntries(Object.entries(amounts).filter(([, v]) => v > 0));
-    if (!Object.keys(units).length) { alert("Select at least one unit amount (> 0)."); return; }
-    localStorage.setItem(STORAGE_KEY_PLAN, JSON.stringify({
-      createdAt: Date.now(),
-      sourceVillageId: candidate.src.villageId,
-      target, unitsToSend: units, midGapArrivalMs,
-    }));
-    window.open(
-      `${location.origin}/game.php?${sitterPrefix()}village=${encodeURIComponent(candidate.src.villageId!)}&screen=place`,
-      "_blank", "noopener,noreferrer"
-    );
-  }, [candidate, amounts, target, midGapArrivalMs]);
+  // Population bar — scales every non-overridden viable unit to pct% of its own
+  // troop count at once (already the effective/available amount — see effectiveTroops
+  // in the parent, which pre-subtracts anything already queued elsewhere).
+  const applyFillPct = useCallback((pct: number) => {
+    setFillPct(pct);
+    const next: Record<string, number> = { ...amounts };
+    for (const u of candidate.allowedUnits) {
+      if (overriddenUnits.has(u)) continue;
+      next[u] = Math.round((candidate.src.troops[u] ?? 0) * pct / 100);
+    }
+    setAmounts(next);
+    setDrafts(prev => {
+      const nd = { ...prev };
+      for (const u of candidate.allowedUnits) if (!overriddenUnits.has(u)) nd[u] = String(next[u]);
+      return nd;
+    });
+  }, [candidate, amounts, overriddenUnits]);
 
   const hasSelection = Object.values(amounts).some((v) => v > 0);
 
@@ -967,39 +997,82 @@ function CandidateCard({ candidate, target, midGapArrivalMs, gapLabel, onQueue, 
   // Render in standard TW display order, not in algorithmic fast-to-slow order
   const displayUnits = UNIT_ORDER_DISPLAY.filter(u => allowedSet.has(u));
 
+  const populationTotal = candidate.allowedUnits.reduce((sum, u) => sum + (amounts[u] ?? 0), 0);
+  const populationColor = populationTotal < 1000 ? "var(--g600)"
+    : populationTotal <= 5000 ? "var(--a500)"
+    : "var(--r500)";
+
   const { x, y } = candidate.src.coord;
   return (
     <div className="snipe-card">
       <div className="snipe-card-header">
-        <span className="snipe-card-coord">{x}|{y}</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+          <button className="gluer-map-btn"
+            onClick={() => window.open(mapUrl(x, y), "_blank", "noopener,noreferrer")}
+            title="Ver localização no mapa" aria-label="Ver localização no mapa">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 2C7.86 2 4.5 5.36 4.5 9.5c0 5.5 6.5 12 7 12.5.28.28.72.28 1 0 .5-.5 7-7 7-12.5C19.5 5.36 16.14 2 12 2zm0 10.25a2.75 2.75 0 1 1 0-5.5 2.75 2.75 0 0 1 0 5.5z"/>
+            </svg>
+          </button>
+          <span className="snipe-card-coord">{x}|{y}</span>
+        </span>
         <span className="snipe-card-meta">
           slowest: <strong>{effectiveSlowest ?? candidate.chosenSlowestUnit}</strong>
-          &nbsp;·&nbsp;send: <strong>{fmtDateMs(activeSendMs)}</strong>
+          &nbsp;·&nbsp;saída: <strong>{fmtDateMs(activeSendMs)}</strong>
         </span>
       </div>
       <div className="snipe-card-row">
-        <button className="btn btn-ghost snipe-timer-btn" onClick={() => setTimerActive((t) => !t)}>
-          {timerActive ? "Stop" : "Timer"}
+        <button type="button"
+          className={`gluer-toggle${timerActive ? "" : " gluer-toggle--off"}`}
+          onClick={() => setTimerActive((t) => !t)}
+          role="switch" aria-checked={timerActive} aria-label="Timer"
+          title={timerActive ? "Parar" : "Iniciar timer"}>
+          <span className="gluer-toggle-knob" />
         </button>
         {timerActive && (
           <span className={`snipe-countdown${past ? " snipe-countdown--past" : ""}`}>{display}</span>
         )}
-        <button className="btn btn-ghost" onClick={selectAll}>Select all</button>
-        <button className="btn btn-save btn-save--dirty" onClick={openSupport}>Open support</button>
-        <button
-          className={`btn${queued ? " btn-save btn-save--saved" : " btn-save btn-save--dirty"}`}
-          onClick={handleQueue}
-          disabled={past || !hasSelection || (timingMismatch && !recomputedTiming)}
-        >🎯 Queue</button>
+        <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
+          <button className="btn btn-ghost snipe-timer-btn--icon"
+            onClick={() => setShowPopulation(s => !s)}
+            title="Preencher por população" aria-pressed={showPopulation}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+              <circle cx="12" cy="7" r="4" />
+            </svg>
+          </button>
+          <button className="btn btn-ghost" style={{ flex: 1 }} onClick={selectAll}>Todos</button>
+          <button
+            className={`btn${queued ? " btn-save btn-save--saved" : " btn-save btn-save--dirty"}`}
+            style={{ flex: 1 }}
+            onClick={handleQueue}
+            disabled={past || !hasSelection || (timingMismatch && !recomputedTiming)}
+          >Queue</button>
+        </div>
       </div>
+
+      {showPopulation && (
+        <div className="gluer-pop-row">
+          <input type="range" min={0} max={100} value={fillPct}
+            className="gluer-pop-bar" style={{ accentColor: populationColor }}
+            onChange={e => applyFillPct(Number(e.target.value))} />
+          <span className="gluer-pop-total" style={{ color: populationColor }}>
+            {populationTotal.toLocaleString("pt-PT")}
+          </span>
+        </div>
+      )}
+
       <div className="snipe-units">
         {displayUnits.map((unit) => {
           const avail = candidate.src.troops[unit] ?? 0;
           const val   = amounts[unit] ?? 0;
+          const locked = showPopulation && overriddenUnits.has(unit);
           return (
-            <div key={unit} className={`snipe-unitbox${val > 0 ? " snipe-unitbox--on" : ""}`}>
+            <div key={unit}
+              className={`snipe-unitbox gluer-unitbox--compact${val > 0 ? " snipe-unitbox--on" : ""}${locked ? " gluer-unitbox--locked" : ""}`}
+              title={locked ? `${unit}: fixado — a barra de população não altera esta unidade` : unit}>
               <img src={unitIconUrl(unit)} alt={unit} className="snipe-unit-icon"
-                   onClick={() => toggleUnit(unit)} title={`Click to toggle all ${unit}`} />
+                   onClick={() => toggleUnit(unit)} />
               <div className="snipe-unit-avail">{avail}</div>
               <input
                 className="snipe-unit-input"
@@ -1010,6 +1083,7 @@ function CandidateCard({ candidate, target, midGapArrivalMs, gapLabel, onQueue, 
                   setDrafts((p) => ({ ...p, [unit]: raw }));
                   const n = clampInt(parseInt(raw, 10), 0, avail);
                   if (Number.isFinite(n)) setAmounts((p) => ({ ...p, [unit]: n }));
+                  setOverriddenUnits((p) => new Set(p).add(unit));
                 }}
                 onBlur={() => {
                   const n = parseInt(drafts[unit] ?? "0", 10);
@@ -1322,6 +1396,13 @@ export function SnipeView({ visible, onBack }: {
   visible: boolean; onBack: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("auto");
+  const [now, setNow] = useState(() => getServerNowMs());
+
+  useEffect(() => {
+    if (!visible) return;
+    const id = setInterval(() => setNow(getServerNowMs()), 1000);
+    return () => clearInterval(id);
+  }, [visible]);
 
   const [nobleOnly, setNobleOnly] = useState(false);
 
@@ -1531,23 +1612,23 @@ export function SnipeView({ visible, onBack }: {
 
       <div className="cfg-body snipe-body">
 
-        {/* ── Tab bar — uses existing btn classes only, no new CSS ── */}
+        {/* ── Tab bar ── */}
         <div className="cfg-section" style={{ paddingBottom: 0 }}>
           <div style={{ display: "flex", gap: 4 }}>
             <button
-              className={`btn${tab === "auto" ? " btn-save" : " btn-ghost"}`}
+              className={`btn snipe-tab-btn${tab === "auto" ? " btn-save" : " btn-ghost"}`}
               onClick={() => setTab("auto")}
             >🏹 Auto</button>
             <button
-              className={`btn${tab === "manual" ? " btn-save" : " btn-ghost"}`}
+              className={`btn snipe-tab-btn${tab === "manual" ? " btn-save" : " btn-ghost"}`}
               onClick={() => setTab("manual")}
             >✏️ Manual</button>
             <button
-              className={`btn${tab === "recall" ? " btn-save" : " btn-ghost"}`}
+              className={`btn snipe-tab-btn${tab === "recall" ? " btn-save" : " btn-ghost"}`}
               onClick={() => setTab("recall")}
             >🔄 Snipe Cancel</button>
             <button
-              className={`btn${tab === "settings" ? " btn-save" : " btn-ghost"}`}
+              className={`btn snipe-tab-btn${tab === "settings" ? " btn-save" : " btn-ghost"}`}
               onClick={() => setTab("settings")}
             >⚙ Settings</button>
           </div>
@@ -1581,20 +1662,15 @@ export function SnipeView({ visible, onBack }: {
 
         {/* ── Troops — shared ── */}
         <div className="cfg-section">
-          <div className="snipe-summary-row">
-            <span className="snipe-summary-item">Villages loaded: <strong>{troops.length}</strong></span>
+          <div className="snipe-summary-row" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button className="btn btn-ghost snipe-timer-btn--icon"
+              onClick={loadTroops} disabled={loadingTroops}
+              title={troops.length ? "Recarregar tropas" : "Carregar tropas"}>
+              {loadingTroops ? <span className="spinner" /> : "↺"}
+            </button>
+            <span className="snipe-summary-item">Aldeias carregadas: <strong>{troops.length}</strong></span>
           </div>
           {troopsError && <div className="snipe-error" style={{ marginTop: 4 }}>{troopsError}</div>}
-          <button
-            className="btn btn-save btn-save--dirty"
-            onClick={loadTroops}
-            disabled={loadingTroops}
-            style={{ marginTop: 6 }}
-          >
-            {loadingTroops
-              ? <><span className="spinner" /> Loading troops…</>
-              : troops.length ? "↺ Reload troops" : "Load troops"}
-          </button>
         </div>
 
         {/* ── AUTO TAB ── */}
@@ -1815,23 +1891,30 @@ export function SnipeView({ visible, onBack }: {
               </button>
             </div>
             <div style={{ padding: "0 14px" }}>
-              {snipeQueue.map((e, i) => (
-                <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 12 }}>
-                  <span style={{ color: "var(--n400)", minWidth: 18 }}>#{i + 1}</span>
-                  <span style={{ fontFamily: "var(--mono)", flex: 1 }}>{e.source} → {e.target.x}|{e.target.y}</span>
-                  <span style={{ color: "var(--n400)", fontFamily: "var(--mono)", fontSize: 11 }}>{fmtDateMs(e.sendMs).split(" ")[1]}</span>
-                  <button className="btn btn-save btn-save--dirty"
-                    style={{ fontSize: 11, padding: "1px 8px" }}
-                    onClick={() => openQueueEntry(e)}>
-                    Abrir
-                  </button>
-                  <button className="btn btn-ghost"
-                    style={{ fontSize: 11, padding: "1px 6px", color: "var(--r500)" }}
-                    onClick={() => removeFromSnipeQueue(e.id)}>
-                    ✕
-                  </button>
-                </div>
-              ))}
+              {snipeQueue.map((e, i) => {
+                const diff     = e.sendMs - now;
+                const sent     = diff <= 0;
+                const etaState = sent ? "sent" : diff > 3_600_000 ? "ok" : diff > 600_000 ? "soon" : "urgent";
+                return (
+                  <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 12 }}>
+                    <span style={{ color: "var(--n400)", minWidth: 18 }}>#{i + 1}</span>
+                    <span style={{ fontFamily: "var(--mono)", flex: 1 }}>{e.source} → {e.target.x}|{e.target.y}</span>
+                    <span className={`gluer-eta-badge gluer-eta-badge--${etaState}`} title={fmtDateMs(e.sendMs)}>
+                      {sent ? "enviado" : fmtCountdown(diff).split(".")[0]}
+                    </span>
+                    <button className="btn btn-ghost"
+                      style={{ fontSize: 11, padding: "1px 8px" }}
+                      onClick={() => openQueueEntry(e)}>
+                      Abrir
+                    </button>
+                    <button className="btn btn-ghost"
+                      style={{ fontSize: 11, padding: "1px 6px", color: "var(--r500)" }}
+                      onClick={() => removeFromSnipeQueue(e.id)}>
+                      ✕
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
@@ -1843,11 +1926,11 @@ export function SnipeView({ visible, onBack }: {
           <button className="btn btn-ghost" onClick={copySnipeBB} style={{ flex: 1 }}>
             {bbCopied ? "✓ Copiado" : "📋 Copiar BB"}
           </button>
-          <button className="btn btn-save btn-save--dirty" onClick={openInKumin} style={{ flex: 1 }}>
+          <button className="btn btn-ghost" onClick={openInKumin} style={{ flex: 1 }}>
             📜 Kumin
           </button>
-          <button className="btn btn-save btn-save--dirty" onClick={sendToAutosender}
-            style={{ flex: 1, background: "var(--b500)" }}
+          <button className="btn btn-ghost" onClick={sendToAutosender}
+            style={{ flex: 1 }}
             title="Enviar para Auto Sender (xBot)">
             🚀 Autosend
           </button>

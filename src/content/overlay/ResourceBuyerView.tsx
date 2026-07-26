@@ -8,6 +8,7 @@
  *                        xbot:buyer:save    { config }
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { TriggerVisibilityToggle } from "./TriggerVisibilityToggle";
 
 /* ─── useMountAnim ───────────────────────────────────────────────────────── */
 function useMountAnim(trigger: boolean) {
@@ -270,6 +271,7 @@ export function ResourceBuyerView({
         {state.running && (
           <span className="live-pip" style={{ marginLeft: "auto", marginRight: 4 }} />
         )}
+        <TriggerVisibilityToggle moduleId="resource_buyer" />
       </div>
 
       {/* Start / Stop — always visible, not in scroll area */}

@@ -138,6 +138,10 @@ function extensionAssetsPlugin() {
       if (existsSync("colatudo.png"))
         copyFileSync("colatudo.png", "dist/icons/colatudo.png");
 
+      // Copy misc UI-chrome icons (drawer/trigger-visibility toggle, etc.)
+      if (existsSync("Icons/drawer-svgrepo-com.svg"))
+        copyFileSync("Icons/drawer-svgrepo-com.svg", "dist/icons/drawer-svgrepo-com.svg");
+
       const jqSrc = `${MODULES_DIR}/jquery-3.7.1.min.js`;
       if (existsSync(jqSrc))
         copyFileSync(jqSrc, "dist/modules/jquery-3.7.1.min.js");

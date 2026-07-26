@@ -15,6 +15,7 @@ import React, {
   useCallback, useEffect, useRef, useState,
 } from "react";
 import { MODULE_CONFIG_SCHEMAS, FieldDef } from "../../types/config-schemas";
+import { TriggerVisibilityToggle } from "./TriggerVisibilityToggle";
 
 /* ─── Storage helpers (mirrors Overlay.tsx) ───────────────────────────────── */
 function storageGet(keys: string[]): Promise<Record<string, unknown>> {
@@ -613,6 +614,7 @@ export function FakeSenderView({ visible, onBack }: {
         {tab === "status" && rt.paused && (
           <span className="fake-badge fake-badge--warn" style={{ fontSize: 10, padding: "2px 6px" }}>PAUSED</span>
         )}
+        <TriggerVisibilityToggle moduleId="fakes" />
       </div>
 
       {/* ── Tab bar ── */}

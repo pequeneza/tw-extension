@@ -36,7 +36,8 @@
       "PowerShell(git config *)",
       "Bash(git add *)",
       "Bash(git commit *)",
-      "Bash(git merge *)"
+      "Bash(git merge *)",
+      "Bash(echo \"EXIT:$?\")"
     ]
   },
   "enabledPlugins": {

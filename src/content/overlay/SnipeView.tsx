@@ -13,6 +13,7 @@ import React, {
   useCallback, useEffect, useMemo, useRef, useState,
 } from "react";
 import { computeScheduledByVillage, subtractScheduled } from "./queue-utils";
+import { TriggerVisibilityToggle } from "./TriggerVisibilityToggle";
 
 /* ─── Constants ───────────────────────────────────────────────────────────── */
 const STORAGE_KEY_PLAN     = "tw_gap_snipe_plan_v12";
@@ -1608,6 +1609,7 @@ export function SnipeView({ visible, onBack }: {
              target ? `target ${target.x}|${target.y}` : "gap snipe planner"}
           </span>
         </div>
+        <TriggerVisibilityToggle moduleId="tw_snipe_scheduler" />
       </div>
 
       <div className="cfg-body snipe-body">

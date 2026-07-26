@@ -18,6 +18,7 @@ import { LabelView }         from "./LabelView";
 import { AutoSenderView }   from "./AutoSenderView";
 import { TwUtilsView }     from "./TwUtilsView";
 import { TelegramView }   from "./TelegramView";
+import { TRIGGER_VISIBILITY_KEY } from "./TriggerVisibilityToggle";
 
 /* ─── Helpers ─────────────────────────────────────────────────────────────── */
 function _p2(n: number) { return String(n).padStart(2, "0"); }
@@ -589,7 +590,7 @@ function StatsBar() {
 /* ─── Panel ───────────────────────────────────────────────────────────────── */
 function Panel({
   visible, onClose, s, ready, isOn, toggle, view, setViewP, theme, onToggleTheme,
-  onTwUtilsDrawerChange, licenseExpiresAt,
+  licenseExpiresAt,
 }: {
   visible: boolean;
   onClose: () => void;
@@ -601,7 +602,6 @@ function Panel({
   setViewP: (v: View) => void;
   theme: "light" | "dark";
   onToggleTheme: () => void;
-  onTwUtilsDrawerChange: (v: boolean) => void;
   licenseExpiresAt: string | null;
 }) {
   const [search, setSearch] = useState("");
@@ -806,7 +806,6 @@ function Panel({
       <TwUtilsView
         visible={view.type === "twutils"}
         onBack={() => setViewP({ type: "list" })}
-        onShowDrawerChange={onTwUtilsDrawerChange}
       />
       <TelegramView
         visible={view.type === "telegram"}
@@ -840,6 +839,26 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
     chrome.storage.onChanged.addListener(onChange);
     return () => chrome.storage.onChanged.removeListener(onChange);
   }, []);
+
+  // Per-module "pin to trigger-stack" visibility — set from each view's own
+  // cfg-header via <TriggerVisibilityToggle>. Absent from the map = visible
+  // (default), so existing installs keep every trigger showing until the
+  // user explicitly unpins one.
+  const [triggerVis, setTriggerVis] = useState<Partial<Record<ModuleId, boolean>>>({});
+  useEffect(() => {
+    const read = () => {
+      chrome.storage.sync.get(TRIGGER_VISIBILITY_KEY, (r) => {
+        setTriggerVis((r[TRIGGER_VISIBILITY_KEY] as Partial<Record<ModuleId, boolean>>) ?? {});
+      });
+    };
+    read();
+    const onChange = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area === "sync" && changes[TRIGGER_VISIBILITY_KEY]) read();
+    };
+    chrome.storage.onChanged.addListener(onChange);
+    return () => chrome.storage.onChanged.removeListener(onChange);
+  }, []);
+  const triggerVisible = (id: ModuleId) => triggerVis[id] !== false;
 
   // Persist open/closed across page navigations (place→confirm→place loop)
   const [open, setOpenRaw] = useState(() =>
@@ -890,15 +909,6 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
     };
     chrome.storage.onChanged.addListener(onChange);
     return () => chrome.storage.onChanged.removeListener(onChange);
-  }, []);
-
-  // tw_utils: whether to show the ⚙️ drawer trigger button
-  const [twUtilsShowDrawer, setTwUtilsShowDrawer] = useState(true);
-  useEffect(() => {
-    storageGet(["tw_suite_cfg_tw_utils"]).then((r) => {
-      const cfg = (r["tw_suite_cfg_tw_utils"] as Record<string, unknown>) ?? {};
-      setTwUtilsShowDrawer(cfg["showDrawer"] !== false);
-    });
   }, []);
 
   // Desviador state — updated by listening to the userscript's state events
@@ -1086,7 +1096,7 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
         <button className={`trigger${open ? " trigger--open" : ""}`}
           onClick={() => setOpen((o) => !o)} title="xBot" aria-label="xBot">⚡</button>
 
-        {gapCount > 0 && isOn("tw_snipe_scheduler") && (
+        {gapCount > 0 && isOn("tw_snipe_scheduler") && triggerVisible("tw_snipe_scheduler") && (
           <button className="trigger trigger--snipe" onClick={openSnipe}
             title={`${gapCount} gap${gapCount !== 1 ? "s" : ""} — open snipe planner`}
             aria-label="Snipe planner">
@@ -1094,7 +1104,7 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
           </button>
         )}
 
-        {isInfoVillage && isOn("kumin_gluer") && (
+        {isInfoVillage && isOn("kumin_gluer") && triggerVisible("kumin_gluer") && (
           <button className="trigger trigger--gluer"
             onClick={() => { setViewP({ type: "gluer" }); setOpen(true); }}
             title="Kumin Gluer"
@@ -1104,7 +1114,7 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
           </button>
         )}
 
-        {isOn("desviador") && (isIncomingsPage || desvActive) && (
+        {isOn("desviador") && triggerVisible("desviador") && (isIncomingsPage || desvActive) && (
           <button className="trigger trigger--desviador" onClick={openDesviador}
             title={desvActive ? `Desviador — ${desvCount} programado(s)` : "Desviador"}
             aria-label="Desviador">
@@ -1115,13 +1125,13 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
           </button>
         )}
 
-        {isOn("wh_balancer") && (
+        {isOn("wh_balancer") && triggerVisible("wh_balancer") && (
           <button className="trigger trigger--balancer"
             onClick={() => { setViewP({ type: "balancer" }); setOpen(true); }}
             title="WH Balancer" aria-label="WH Balancer">⚖️</button>
         )}
 
-        {isOn("auto_sender") && (
+        {isOn("auto_sender") && triggerVisible("auto_sender") && (
           <button className="trigger trigger--autosender"
             onClick={() => { setViewP({ type: "autosender" }); setOpen(true); }}
             title={asQueueCount > 0 ? `Auto Sender — ${asQueueCount} na fila` : "Auto Sender"}
@@ -1136,7 +1146,7 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
           </button>
         )}
 
-        {isExchangePage && isOn("resource_buyer") && (
+        {isExchangePage && isOn("resource_buyer") && triggerVisible("resource_buyer") && (
           <button className="trigger trigger--buyer"
             onClick={() => { setViewP({ type: "buyer" }); setOpen(true); }}
             title="Resource Buyer" aria-label="Resource Buyer">
@@ -1149,28 +1159,34 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
           </button>
         )}
 
-        {isLabelPage && isOn("mass_label_renamer") && (
+        {isLabelPage && isOn("mass_label_renamer") && triggerVisible("mass_label_renamer") && (
           <button className="trigger trigger--label"
             onClick={() => { setViewP({ type: "label" }); setOpen(true); }}
             title="Label + Renamer" aria-label="Label + Renamer">🏷️</button>
         )}
 
-        {isOn("tw_utils") && twUtilsShowDrawer && (
+        {isOn("tw_utils") && triggerVisible("tw_utils") && (
           <button className="trigger trigger--twutils"
             onClick={() => { setViewP({ type: "twutils" }); setOpen(true); }}
             title="TW Tweaks" aria-label="TW Tweaks">⚙️</button>
         )}
 
-        {isMapPage && isOn("tw_utils") && twUtilsShowDrawer && (
+        {isMapPage && isOn("tw_utils") && triggerVisible("tw_utils") && (
           <button className="trigger trigger--mapsel"
             onClick={() => { setViewP({ type: "twutils" }); setOpen(true); }}
             title="Map Draw Select" aria-label="Map Draw Select">⚙️</button>
         )}
 
-        {isOn("telegram_notifier") && (
+        {isOn("telegram_notifier") && triggerVisible("telegram_notifier") && (
           <button className="trigger trigger--telegram"
             onClick={() => { setViewP({ type: "telegram" }); setOpen(true); }}
             title="Telegram Notifier" aria-label="Telegram Notifier">🔔</button>
+        )}
+
+        {isOn("fakes") && triggerVisible("fakes") && (
+          <button className="trigger trigger--fakes"
+            onClick={() => { setViewP({ type: "fakes" }); setOpen(true); }}
+            title="Fake Sender" aria-label="Fake Sender">⚔️</button>
         )}
       </div>
       {/* Backdrop only shown when open */}
@@ -1193,7 +1209,6 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
           s={s} ready={ready} isOn={isOn} toggle={toggle}
           view={view} setViewP={setViewP}
           theme={theme} onToggleTheme={toggleTheme}
-          onTwUtilsDrawerChange={setTwUtilsShowDrawer}
           licenseExpiresAt={licenseExpiresAt}
         />
       </div>

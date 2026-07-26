@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { TriggerVisibilityToggle } from "./TriggerVisibilityToggle";
 
 /* ─── Types ───────────────────────────────────────────────────────────────── */
 interface QueueEntry {
@@ -1145,6 +1146,7 @@ export function AutoSenderView({ visible, onBack }: { visible: boolean; onBack: 
           </span>
         </div>
         {active && <span className="live-pip" style={{ marginLeft: "auto", marginRight: 8 }} />}
+        <TriggerVisibilityToggle moduleId="auto_sender" />
       </div>
 
       {/* Tab bar */}

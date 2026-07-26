@@ -519,12 +519,9 @@ function ModuleCard({ mod, isOn, isLive, hasCfg, onToggle, onCfg, index }: {
         {isLive && <span className="live-pip" />}
         {hasCfg && (
           <button className="cfg-btn"
-            onClick={(e) => { e.stopPropagation(); onCfg(); }} title="Configure">
+            onClick={(e) => { e.stopPropagation(); onCfg(); }} title="Abrir">
             <svg width="13" height="13" viewBox="0 0 20 20" fill="none">
-              <path d="M10 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"
-                stroke="currentColor" strokeWidth="1.6"/>
-              <path d="M16.2 10c0-.3 0-.6-.1-.9l1.9-1.5-1.8-3.1-2.2.9c-.5-.4-1-.7-1.6-.9L12 2H8l-.4 2.5c-.6.2-1.1.5-1.6.9l-2.2-.9L2 7.6l1.9 1.5c-.1.3-.1.6-.1.9s0 .6.1.9L2 12.4l1.8 3.1 2.2-.9c.5.4 1 .7 1.6.9L8 18h4l.4-2.5c.6-.2 1.1-.5 1.6-.9l2.2.9 1.8-3.1-1.9-1.5c.1-.3.1-.6.1-.9Z"
-                stroke="currentColor" strokeWidth="1.6"/>
+              <path d="M6 4.5v11l9-5.5-9-5.5Z" fill="currentColor"/>
             </svg>
           </button>
         )}

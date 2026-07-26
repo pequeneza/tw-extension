@@ -1,0 +1,120 @@
+(async function () {
+  const village = new URLSearchParams(location.search).get('village');
+  const hInput = document.querySelector('input[name="h"]');
+  if (!hInput) {
+    console.error('CSRF token not found — make sure you are on screen=overview_villages&mode=groups&type=dynamic');
+    return;
+  }
+  const h = hInput.value;
+  const base = `/game.php?village=${village}&screen=overview_villages&mode=groups&type=dynamic`;
+
+  const STATIC_ATAQUE = '25177';
+  const STATIC_DEFESA = '25178';
+
+  // unit filter tuple: [unitType, operator, count]
+  const groups = [
+    { name: 'Atq 0/4', staticGroup: STATIC_ATAQUE, units: [
+      ['axe', '<', 1475],
+    ] },
+    { name: 'Atq 1/4', staticGroup: STATIC_ATAQUE, units: [
+      ['axe', '>=', 1475], ['axe', '<', 2950],
+      ['light', '>=', 713], ['ram', '>=', 75], ['catapult', '>=', 25],
+    ] },
+    { name: 'Atq 2/4', staticGroup: STATIC_ATAQUE, units: [
+      ['axe', '>=', 2950], ['axe', '<', 4425],
+      ['light', '>=', 1425], ['ram', '>=', 150], ['catapult', '>=', 50],
+    ] },
+    { name: 'Atq 3/4', staticGroup: STATIC_ATAQUE, units: [
+      ['axe', '>=', 4425], ['axe', '<', 5800],
+      ['light', '>=', 2138], ['ram', '>=', 225], ['catapult', '>=', 75],
+    ] },
+    { name: 'Atq 4/4', staticGroup: STATIC_ATAQUE, units: [
+      ['axe', '>=', 5800],
+      ['light', '>=', 2800], ['ram', '>=', 295], ['catapult', '>=', 95],
+    ] },
+    { name: 'Def 0/4', staticGroup: STATIC_DEFESA, units: [
+      ['spear', '<', 1500],
+    ] },
+    { name: 'Def 1/4', staticGroup: STATIC_DEFESA, units: [
+      ['spear', '>=', 1500], ['spear', '<', 3000],
+      ['heavy', '>=', 138],
+    ] },
+    { name: 'Def 2/4', staticGroup: STATIC_DEFESA, units: [
+      ['spear', '>=', 3000], ['spear', '<', 4500],
+      ['heavy', '>=', 275],
+    ] },
+    { name: 'Def 3/4', staticGroup: STATIC_DEFESA, units: [
+      ['spear', '>=', 4500], ['spear', '<', 5900],
+      ['heavy', '>=', 413],
+    ] },
+    { name: 'Def 4/4', staticGroup: STATIC_DEFESA, units: [
+      ['spear', '>=', 5900],
+      ['heavy', '>=', 540],
+    ] },
+  ];
+
+  const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  async function createGroup(name) {
+    const body = new URLSearchParams({ group_name: name, h });
+    const res = await fetch(`${base}&action=create_dynamic`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    });
+    return res.text();
+  }
+
+  function findGroupId(html, name) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    for (const span of doc.querySelectorAll('.quickedit-group')) {
+      const label = span.querySelector('.quickedit-label');
+      if (label && label.textContent.trim() === name) return span.getAttribute('data-id');
+    }
+    return null;
+  }
+
+  async function saveFilters(groupId, units, staticGroup) {
+    const params = new URLSearchParams({
+      group_id: groupId,
+      custom_logic: JSON.stringify({ operator: 'AND', filters_in: [] }),
+      use_custom_logic: '0',
+      h,
+    });
+    units.forEach(([unitType, operator, count], idx) => {
+      params.append(`active_unit_${idx}`, 'on');
+      params.append(`unit_type_${idx}`, unitType);
+      params.append(`unit_status_${idx}`, 'home');
+      params.append(`unit_operator_${idx}`, operator);
+      params.append(`unit_count_${idx}`, String(count));
+    });
+  params.append('group_static_status_0', '1');
+    params.append('group_static_0', staticGroup);
+
+    const res = await fetch(`${base}&action=set_filters`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString(),
+    });
+    return res.ok;
+  }
+
+  for (const g of groups) {
+    console.log(`Creating "${g.name}"...`);
+    const html = await createGroup(g.name);
+    await delay(400);
+    const id = findGroupId(html, g.name);
+    if (!id) {
+      console.error(`  -> could not find new group id for "${g.name}", skipping filters. Check manually.`);
+      continue;
+    }
+    console.log(`  -> id ${id}, saving filters`);
+    const ok = await saveFilters(id, g.units, g.staticGroup);
+    console.log(ok ? '  -> saved' : '  -> FAILED (check network tab)');
+    await delay(400);
+  }
+
+  console.log('Done — reload the page to verify results.');
+})();

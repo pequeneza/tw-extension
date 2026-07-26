@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      2.0.7
 // @description  Send support templates to multiple target coordinates with batch automation
-// @author       Enhanced from original by Costache Madalin
+// @author       Enhanced by xBot & xStriker from original by Costache Madalin
 // @match        https://*.tribalwars.com.pt/game.php*
 // @grant        none
 // @run-at       document-end
@@ -37,11 +37,51 @@
     const SETTINGS_KEY   = W + 'support_sender_settings2';
     const THEME_KEY      = 'supportSenderTheme';
     const GROUP_KEY      = W + '_mapoios_group';
+    const UI_KEY         = W + '_mapoios_ui_v1';
+
+    // ─── UI state (docked vs floating) ──────────────────────────────────────────
+    // Docked = inserted into the page flow right after .info_box (same posture planeador
+    // defaults to); floating = today's position:fixed draggable panel. Minimized state is
+    // NOT persisted here on purpose — the panel is meant to always open collapsed.
+    function getUIState() {
+        try {
+            var s = JSON.parse(localStorage.getItem(UI_KEY) || 'null');
+            return { docked: s && typeof s.docked === 'boolean' ? s.docked : true };
+        } catch (e) { return { docked: true }; }
+    }
+    function saveUIState(s) { localStorage.setItem(UI_KEY, JSON.stringify(s)); }
 
     // ─── Batch helpers ───────────────────────────────────────────────────────────
     function getBatch()   { try { return JSON.parse(localStorage.getItem(BATCH_KEY) || 'null'); } catch { return null; } }
-    function setBatch(b)  { localStorage.setItem(BATCH_KEY, JSON.stringify(b)); }
-    function clearBatch() { localStorage.removeItem(BATCH_KEY); }
+    // Every persist stamps lastActivity — this is how runBatchHandler tells an actively
+    // progressing batch (a few seconds between stamps) from an abandoned one (tab closed,
+    // crash, browser restart) that happens to still have running:true sitting in storage.
+    function setBatch(b)  { if (b) b.lastActivity = Date.now(); localStorage.setItem(BATCH_KEY, JSON.stringify(b)); }
+    function clearBatch() { localStorage.removeItem(BATCH_KEY); removeEmergencyStopBanner(); }
+
+    // Abandoned-batch cutoff: normal cycle time between persists is well under 5s (autocomplete
+    // poll maxes at 4s, fill/submit delays are ~1.5-2.4s). 90s of silence means whatever last
+    // touched this batch is gone, so auto-resuming on an unrelated page visit would be a footgun.
+    var BATCH_STALE_MS = 90 * 1000;
+
+    // Rendered with plain DOM APIs (no jQuery dependency) so a Stop control exists the instant
+    // a running batch is detected — not only after jQuery loads and the full panel builds, which
+    // was the window during which the batch was effectively unstoppable.
+    function showEmergencyStopBanner(batch) {
+        var el = document.getElementById('mapoios_estop');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'mapoios_estop';
+            el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999999;background:#c0392b;color:#fff;padding:10px;text-align:center;font:bold 13px Arial,sans-serif;cursor:pointer;';
+            el.addEventListener('click', function () { clearBatch(); });
+            document.body.appendChild(el);
+        }
+        el.textContent = '⛔ Lote xBot em execução (alvo ' + (batch.index + 1) + '/' + batch.targets.length + ') — clica para PARAR';
+    }
+    function removeEmergencyStopBanner() {
+        var el = document.getElementById('mapoios_estop');
+        if (el) el.remove();
+    }
 
     // ─── Confirm page (safety net — mass support usually doesn't redirect here) ───
     if (isConfirm) {
@@ -111,6 +151,19 @@
     (function runBatchHandler() {
         var batch = getBatch();
         if (!batch || !batch.running) return;
+
+        // Refuse to silently resume a batch nobody has touched in a while — this is what
+        // used to make the script start sending the moment this screen was opened for an
+        // unrelated reason, with a leftover batch from a session that was never cleanly
+        // stopped (closed tab, crash, restart).
+        if (batch.lastActivity && (Date.now() - batch.lastActivity) > BATCH_STALE_MS) {
+            batch.running = false;
+            setBatch(batch);
+            showBatchNotice('Batch abandonado detetado (inativo há mais de ' + Math.round((Date.now() - batch.lastActivity) / 1000) + 's) — parado por segurança. Reinicia manualmente se quiseres continuar.');
+            return;
+        }
+
+        showEmergencyStopBanner(batch);
 
         if (batch.state === 'filling') {
             // Target was selected; fill troops and send
@@ -387,6 +440,9 @@
         s.id = 'mapoios-css';
         s.textContent = [
             '.mapoios-wrap{position:fixed;top:20px;left:20px;z-index:10000;border-radius:5px;width:50%;min-width:360px;font-size:12px;font-family:Arial,sans-serif;box-shadow:0 4px 24px rgba(0,0,0,.7);overflow:hidden;}',
+            // Docked = sits in the normal page flow right after .info_box, full content width,
+            // no shadow/fixed-position chrome (those only make sense for the floating overlay).
+            '.mapoios-wrap.mapoios-docked{position:static;top:auto;left:auto;width:100%;min-width:0;box-shadow:none;margin:8px 0;}',
             '.mapoios-header{padding:8px 10px;position:relative;border-radius:5px 5px 0 0;cursor:move;text-align:center;}',
             '.mapoios-header h2{margin:2px 0;font-size:15px;}',
             '.mapoios-body{}',
@@ -447,6 +503,46 @@
         }
     }
 
+    // ─── Panel placement (docked under .info_box vs floating) ──────────────────────
+    // Docked mirrors planeador's default posture: inserted into the page flow instead of
+    // floating over it. If .info_box isn't found (e.g. a layout that doesn't have it) we
+    // still fall back to the old prepend-into-contentContainer spot, just without the
+    // fixed-position/draggable floating chrome.
+    function insertPanel(html, docked) {
+        if (docked) {
+            var infoBox = document.querySelector('.info_box');
+            if (infoBox && infoBox.parentNode) {
+                infoBox.insertAdjacentHTML('afterend', html);
+            } else {
+                $('#contentContainer').eq(0).prepend(html);
+                $('#mobileContent').eq(0).prepend(html);
+            }
+            // The panel's inline width:X% (baked in for the floating case) has higher
+            // specificity than the .mapoios-docked stylesheet rule, so it has to be cleared
+            // here for the docked full-width layout to actually take effect.
+            $('#div_container').addClass('mapoios-docked').css('width', '');
+            return;
+        }
+        $('#contentContainer').eq(0).prepend(html);
+        $('#mobileContent').eq(0).prepend(html);
+        $('#div_container').css('position', 'fixed');
+        if (typeof $.fn.draggable === 'function') {
+            $('#div_container').draggable({ handle: '.mapoios-header' });
+        }
+    }
+
+    // Minimize only hides the body — shrinking the container to 10% width only makes visual
+    // sense for the floating overlay, so leave width alone while docked (it already spans the
+    // full content column there).
+    function applyMinimized() {
+        $('#mapoios-body').hide();
+        if (!$('#div_container').hasClass('mapoios-docked')) $('#div_container').css('width', '10%');
+    }
+    function applyExpanded() {
+        $('#mapoios-body').show();
+        if (!$('#div_container').hasClass('mapoios-docked')) $('#div_container').css('width', widthInterface + '%');
+    }
+
     // ─── Main interface ───────────────────────────────────────────────────────────
     function createMainInterface() {
         var dispUnits = units.filter(function (u) {
@@ -475,6 +571,7 @@
             '<div style="position:absolute;top:10px;right:10px"><a id="btn_close_panel" href="#"><img src="https://img.icons8.com/emoji/24/000000/cross-mark-button-emoji.png"/></a></div>' +
             '<div style="position:absolute;top:8px;right:35px" id="div_minimize"><a href="#"><img src="https://img.icons8.com/plasticine/28/000000/minimize-window.png"/></a></div>' +
             '<div style="position:absolute;top:10px;right:60px"><a id="btn_toggle_theme" href="#"><img src="https://img.icons8.com/material-sharp/24/fa314a/change-theme.png"/></a></div>' +
+            '<div style="position:absolute;top:10px;right:85px" title="Fixar / Flutuar"><a id="btn_toggle_dock" href="#" style="font-size:16px;text-decoration:none;line-height:1">📌</a></div>' +
             '</div>' +
             '<div id="theme_settings" style="background:' + backgroundMainTable + '"></div>' +
             '<div id="mapoios-body">' +
@@ -564,23 +661,28 @@
             '</div>' +
 
             '</div>' + // mapoios-body
-            '<div class="mapoios-footer" style="background:' + backgroundHeader + ';color:' + textColor + '">by Costache | melhorado v2</div>' +
+            '<div class="mapoios-footer" style="background:' + backgroundHeader + ';color:' + textColor + '">by Costache Madalin — melhorado por xBot &amp; xStriker | v2</div>' +
             '</div>';
 
         $('#div_container').remove();
-        $('#contentContainer').eq(0).prepend(html);
-        $('#mobileContent').eq(0).prepend(html);
-
-        $('#div_container').css('position', 'fixed');
-        if (typeof $.fn.draggable === 'function') {
-            $('#div_container').draggable({ handle: '.mapoios-header' });
-        }
+        insertPanel(html, getUIState().docked);
 
         $('#div_minimize').on('click', function () {
-            var pct = Math.ceil($('#div_container').width() / $('body').width() * 100);
-            if (pct >= widthInterface) { $('#div_container').css('width', '10%'); $('#mapoios-body').hide(); }
-            else { $('#div_container').css('width', widthInterface + '%'); $('#mapoios-body').show(); }
+            if ($('#mapoios-body').is(':visible')) applyMinimized();
+            else applyExpanded();
         });
+
+        $('#btn_toggle_dock').on('click', function (e) {
+            e.preventDefault();
+            var s = getUIState();
+            s.docked = !s.docked;
+            saveUIState(s);
+            buildUI(); // rebuild in the new position; re-applies the always-minimized default too
+        });
+
+        // Always starts collapsed — the user has to deliberately expand it, regardless of
+        // docked/floating mode or what state it was left in on a previous visit.
+        applyMinimized();
 
         // Tab switching
         $('#div_container').on('click', '.mapoios-tab-btn', function () {
@@ -1007,6 +1109,7 @@
             var coord = batch.targets[batch.index] || '';
             $('#batch_progress').text('Target ' + (batch.index + 1) + ' / ' + batch.targets.length + '  (' + coord + ')');
         } else {
+            removeEmergencyStopBanner();
             $('#btn_start_batch').show();
             $('#btn_stop_batch').hide();
             if (batch && batch.finished) {
@@ -1066,14 +1169,7 @@
             if (ix2 && iy2) coordDestination = ix2.value + '|' + iy2.value;
         }
 
-        var speedConst = getSpeedConstant();
-        var sw = speedConst.worldSpeed, su = speedConst.unitSpeed;
-        var speedTroop = {
-            snob:2100*1000/(sw*su), ram:1800*1000/(sw*su), catapult:1800*1000/(sw*su),
-            sword:1320*1000/(sw*su), axe:1080*1000/(sw*su), spear:1080*1000/(sw*su),
-            archer:1080*1000/(sw*su), heavy:660*1000/(sw*su), light:600*1000/(sw*su),
-            marcher:600*1000/(sw*su), knight:600*1000/(sw*su), spy:540*1000/(sw*su)
-        };
+        var speedTroop = getUnitSpeedTable();
 
         Array.from(document.querySelectorAll('#village_troup_list tbody tr')).forEach(function (row) {
             var m2 = row.children[0] ? row.children[0].innerText.match(/\d+\|\d+/) : null;
@@ -1108,12 +1204,19 @@
             mapVillages.set(coord, objTroops);
         });
 
-        // Sum all units across all villages (raw available count after reserve subtraction)
+        // Sum troops across villages, but only the units each village can actually deliver within
+        // the requested landing window. A support command travels at the pace of its SLOWEST
+        // included unit, so once we know the slowest unit that — sent alone — would still land
+        // in-window from a given village, every unit at least as fast lands in-window too once
+        // bundled with it. This restores the original script's "packets land between" filtering,
+        // which had been dropped in favour of unconditionally summing every village's raw troops.
         var objTotal = {};
         units.forEach(function(u) { objTotal[u] = 0; });
         Array.from(mapVillages.keys()).forEach(function (key) {
             var obj = mapVillages.get(key);
-            units.forEach(function(u) { objTotal[u] += obj[u] || 0; });
+            var anchor = villageAnchorSpeed(obj, speedTroop);
+            if (anchor < 0) return; // nothing from this village lands in the window
+            units.forEach(function (u) { if (speedTroop[u] <= anchor) objTotal[u] += obj[u] || 0; });
         });
 
         var popWeights = getPopWeights();
@@ -1151,12 +1254,19 @@
         document.getElementById('place_call_select_all').click();
         $('#village_troup_list input[type=number]:visible').val(0);
 
+        var speedTroop = getUnitSpeedTable();
         var listTotal = [];
         Array.from(mapVillages.keys()).forEach(function (key) {
             var obj = mapVillages.get(key);
-            // Support script: distribute all requested units across all villages regardless of speed
-            var ot = { coord: key, speedTroop: 'support' };
-            units.forEach(function (u) { ot[u] = (sendTotalObj[u] > 0) ? obj[u] || 0 : 0; });
+            // Only units at least as fast as this village's landing-window anchor get bundled in
+            // — anything slower would drag the whole command outside the requested window (see
+            // villageAnchorSpeed / the equivalent filtering in countTotalTroops).
+            var anchor = villageAnchorSpeed(obj, speedTroop);
+            var ot = { coord: key, speedTroop: anchor >= 0 ? 'ok' : null };
+            units.forEach(function (u) {
+                var eligible = anchor >= 0 && speedTroop[u] <= anchor;
+                ot[u] = (eligible && sendTotalObj[u] > 0) ? obj[u] || 0 : 0;
+            });
             var tw2 = document.getElementById('checkbox_window').checked;
             if (!tw2) { ot.ram = 0; ot.catapult = 0; }
             listTotal.push(ot);
@@ -1273,6 +1383,33 @@
         };
         localStorage.setItem(key, JSON.stringify(obj));
         return obj;
+    }
+
+    // ms-per-field for each unit type on this world, used both to display the "arrives at"
+    // check and to work out which units can be safely bundled into one command (see
+    // villageAnchorSpeed below).
+    function getUnitSpeedTable() {
+        var speedConst = getSpeedConstant();
+        var sw = speedConst.worldSpeed, su = speedConst.unitSpeed;
+        return {
+            snob:2100*1000/(sw*su), ram:1800*1000/(sw*su), catapult:1800*1000/(sw*su),
+            sword:1320*1000/(sw*su), axe:1080*1000/(sw*su), spear:1080*1000/(sw*su),
+            archer:1080*1000/(sw*su), heavy:660*1000/(sw*su), light:600*1000/(sw*su),
+            marcher:600*1000/(sw*su), knight:600*1000/(sw*su), spy:540*1000/(sw*su)
+        };
+    }
+
+    // The slowest unit type this village could send ALONE and still land inside the requested
+    // window (higher ms-per-field = slower), or -1 if nothing from this village lands in time.
+    // A support command travels at the pace of its slowest included unit, so any unit at least
+    // as fast as this anchor also lands on time once bundled with it — this is what lets a
+    // command mix e.g. spear + heavy from a village where only heavy alone would make the cut.
+    function villageAnchorSpeed(obj, speedTroop) {
+        var anchor = -1;
+        units.forEach(function (u) {
+            if (obj[u + '_speed'] !== undefined && speedTroop[u] > anchor) anchor = speedTroop[u];
+        });
+        return anchor;
     }
 
     // Expose for inline onclick attributes

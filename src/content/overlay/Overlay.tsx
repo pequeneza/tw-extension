@@ -1104,7 +1104,7 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
           </button>
         )}
 
-        {(isIncomingsPage || desvActive) && (
+        {isOn("desviador") && (isIncomingsPage || desvActive) && (
           <button className="trigger trigger--desviador" onClick={openDesviador}
             title={desvActive ? `Desviador — ${desvCount} programado(s)` : "Desviador"}
             aria-label="Desviador">
@@ -1115,9 +1115,11 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
           </button>
         )}
 
-        <button className="trigger trigger--balancer"
-          onClick={() => { setViewP({ type: "balancer" }); setOpen(true); }}
-          title="WH Balancer" aria-label="WH Balancer">⚖️</button>
+        {isOn("wh_balancer") && (
+          <button className="trigger trigger--balancer"
+            onClick={() => { setViewP({ type: "balancer" }); setOpen(true); }}
+            title="WH Balancer" aria-label="WH Balancer">⚖️</button>
+        )}
 
         {isOn("auto_sender") && (
           <button className="trigger trigger--autosender"

@@ -36,6 +36,66 @@ function fmtTriggerTimer(diffMs: number): string {
   return `${_p2(m)}:${_p2(s)}`;
 }
 
+/* ─── Live account stats — fetched on demand only (see StatsBar) ────────────── */
+
+/** Reads the "Comando (N)" total from the outgoing commands overview for a given type. */
+async function fetchCommandCountPage(type: string, page: number): Promise<number> {
+  const html = await fetch(
+    `${location.origin}/game.php?screen=overview_villages&mode=commands&type=${type}&page=${page}`,
+    { credentials: "include" }
+  ).then(r => r.text());
+  const m = html.match(/Comando\s*\(\s*(\d+)\s*\)/i);
+  return m ? parseInt(m[1]!, 10) : 0;
+}
+
+/** Total outgoing attack commands. TW's per-page count can undercount past 1000, so page 1 is added in too. */
+async function fetchAttackCommandCount(): Promise<number> {
+  const page0 = await fetchCommandCountPage("attack", 0);
+  if (page0 > 1000) {
+    const page1 = await fetchCommandCountPage("attack", 1);
+    return page0 + page1;
+  }
+  return page0;
+}
+
+/**
+ * Count of incoming attacks labelled "Nobre" — same detection mass_label_renamer.user.js
+ * uses (unit icon src contains snob/nobre, or the label text contains "Nobre"), but done
+ * server-side: apply a temporary saved filter (filters[target_comment]=Nobre) on the
+ * incomings overview so TW itself returns just the filtered count, then clear the filter
+ * again so the account's saved incomings view isn't left altered.
+ *
+ * NOTE: overview_filters_manage's exact field/response shape was not verified against a
+ * live session (no logged-in tab was available while building this) — if it silently
+ * returns 0 or errors, check the actual request TW sends when you apply this filter by
+ * hand (Network tab) and report back the real field names/response shape.
+ */
+async function fetchIncomingNobleCount(): Promise<number> {
+  const gd = (window as Window & { game_data?: { csrf?: string } }).game_data;
+  const csrf = gd?.csrf;
+  if (!csrf) return 0;
+
+  const base = `${location.origin}/game.php?screen=overview_villages&mode=incomings&subtype=attacks`;
+  const setFilter = (value: string) => fetch(`${base}&ajax=overview_filters_manage`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: `filters%5Btarget_comment%5D=${encodeURIComponent(value)}&h=${encodeURIComponent(csrf)}`,
+  }).catch(() => null);
+
+  try {
+    await setFilter("Nobre");
+    const html = await fetch(base, { credentials: "include" }).then(r => r.text());
+    const headerMatch = html.match(/Ataques?\s*\(\s*(\d+)\s*\)/i);
+    if (headerMatch) return parseInt(headerMatch[1]!, 10);
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    return doc.querySelectorAll("#incomings_table tbody tr").length;
+  } finally {
+    // Always restore the account's default (unfiltered) incomings view, even on failure above.
+    await setFilter("");
+  }
+}
+
 /* ─── Storage ─────────────────────────────────────────────────────────────── */
 function storageGet(keys: string[]): Promise<Record<string, unknown>> {
   return new Promise((res) =>
@@ -473,6 +533,13 @@ function StatsBar() {
   const [resMoved, setResMoved] = useState("—");
   const [snipes,   setSnipes]   = useState("0");
 
+  // Live account stats — require HTTP round-trips to the game server, so unlike the
+  // local counters above these only update on manual refresh, not on a timer.
+  const [attacks,   setAttacks]   = useState("—");
+  const [nobles,    setNobles]    = useState("—");
+  const [liveLoading, setLiveLoading] = useState(false);
+  const [liveError,   setLiveError]   = useState(false);
+
   useEffect(() => {
     const tick = () => {
       setFakes(localStorage.getItem("fake_sent_v1") ?? "0");
@@ -490,6 +557,21 @@ function StatsBar() {
     return () => clearInterval(id);
   }, []);
 
+  const refreshLiveStats = useCallback(async () => {
+    setLiveLoading(true);
+    setLiveError(false);
+    try {
+      const [a, n] = await Promise.all([fetchAttackCommandCount(), fetchIncomingNobleCount()]);
+      setAttacks(String(a));
+      setNobles(String(n));
+    } catch (err) {
+      console.error("[StatsBar] refreshLiveStats:", err);
+      setLiveError(true);
+    } finally {
+      setLiveLoading(false);
+    }
+  }, []);
+
   return (
     <div className="stats-bar">
       <div className="stat-cell">
@@ -504,6 +586,20 @@ function StatsBar() {
         <span className="stat-label">Snipes</span>
         <span className="stat-value">{snipes}</span>
       </div>
+      <div className="stat-cell">
+        <span className="stat-label">Attacks</span>
+        <span className="stat-value">{attacks}</span>
+      </div>
+      <div className="stat-cell">
+        <span className="stat-label">Nobles inc.</span>
+        <span className="stat-value">{nobles}</span>
+      </div>
+      <button className="stat-refresh-btn"
+        onClick={refreshLiveStats}
+        disabled={liveLoading}
+        title={liveError ? "Falhou — clica para tentar de novo" : "Atualizar Attacks/Nobles inc. (pede dados à Tribal Wars)"}>
+        {liveLoading ? <span className="spinner" /> : liveError ? "⚠" : "↻"}
+      </button>
     </div>
   );
 }

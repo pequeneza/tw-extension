@@ -161,6 +161,29 @@ export const OVERLAY_CSS = `/* TW Suite Overlay — control-panel aesthetic, sem
   white-space: nowrap;
   flex-shrink: 0;
 }
+.stat-refresh-btn {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin-left: 8px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--b500);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.stat-refresh-btn:hover { color: var(--n700); }
+.stat-refresh-btn:disabled { cursor: default; }
+.stat-refresh-btn .spinner {
+  width: 10px;
+  height: 10px;
+  border-width: 1.5px;
+}
 
 /* ── Theme toggle button ─────────────────────────────────────────────────── */
 .theme-btn {

@@ -9,6 +9,7 @@ import {
   MODULE_CONFIG_SCHEMAS, FieldDef, ModuleConfigSchema,
 } from "../../types/config-schemas";
 import { FakeSenderView }  from "./FakeSenderView";
+import { AttackGeneratorView } from "./AttackGeneratorView";
 import { SnipeView }      from "./SnipeView";
 import { BalancerView }   from "./BalancerView";
 import { DesviadorView }  from "./DesviadorView";
@@ -18,6 +19,9 @@ import { LabelView }         from "./LabelView";
 import { AutoSenderView }   from "./AutoSenderView";
 import { TwUtilsView }     from "./TwUtilsView";
 import { TelegramView }   from "./TelegramView";
+import { TRIGGER_VISIBILITY_KEY } from "./TriggerVisibilityToggle";
+
+const SNOB_ICON = "https://dspt.innogamescdn.com/asset/b2fb8d33/graphic/unit/unit_snob.webp";
 
 /* ─── Helpers ─────────────────────────────────────────────────────────────── */
 function _p2(n: number) { return String(n).padStart(2, "0"); }
@@ -70,22 +74,51 @@ async function fetchAttackCommandCount(): Promise<number> {
 }
 
 /**
- * Count of incoming attacks carrying a noble. The incomings overview's own filter panel
- * (screen=overview_villages&mode=incomings) has a purpose-built "Com nobre" checkbox —
- * `filter_icon[2]=2` — keyed to the noble icon itself, which is far more reliable than
- * matching on the command's free-text comment/label. Applied as a plain query-string
- * filter on a GET request (TW's overview tables read filters from the query string on
- * each load, falling back to the account's saved defaults when absent) — no CSRF, no
- * save/restore round-trip, and it never touches the account's saved filter settings.
+ * Count of incoming attacks whose command label is still "Nobre" — TW's default
+ * auto-label for a fresh noble incoming, same convention as "Ataque" for a regular
+ * attack (see mass_label_renamer.user.js's own "Ataque" filter).
+ *
+ * The incomings overview's "Com nobre" checkbox (`filter_icon[2]`) looked like the
+ * obvious way to get this count, but it's backed by a session-persisted POST
+ * (mode=incomings&action=save_filters) that requires a one-time CSRF token read off
+ * a live page — replaying it as a plain query-string GET is silently ignored
+ * server-side (confirmed live: the checkbox stayed unchecked and the count didn't
+ * change), and re-deriving a fresh token on every refresh click just to mutate the
+ * account's saved filter isn't worth it for a read-only stat. Parsing the actual
+ * label text out of each row is simpler and doesn't touch account state at all.
  */
 async function fetchIncomingNobleCount(): Promise<number> {
-  await sleep(jitter(350, 200));
-  const url = `${location.origin}/game.php?screen=overview_villages&mode=incomings&subtype=attacks&filter_icon%5B2%5D=2`;
-  const html = await fetch(url, { credentials: "include" }).then(r => r.text());
-  const headerMatch = html.match(/Comando\s*\(\s*(\d+)\s*\)/i);
-  if (headerMatch) return parseInt(headerMatch[1]!, 10);
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  return doc.querySelectorAll("#incomings_table tbody tr").length;
+  const MAX_PAGES = 25;
+  let total = 0;
+  let rowsSeen = 0;
+  let nobleCount = 0;
+
+  for (let page = 0; page < MAX_PAGES; page++) {
+    await sleep(jitter(350, 200));
+    const html = await fetch(
+      `${location.origin}/game.php?screen=overview_villages&mode=incomings&subtype=attacks&group=0&page=${page}`,
+      { credentials: "include" }
+    ).then(r => r.text());
+
+    if (page === 0) {
+      const headerMatch = html.match(/Comando\s*\(\s*(\d+)\s*\)/i);
+      total = headerMatch ? parseInt(headerMatch[1]!, 10) : 0;
+    }
+
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const rows = doc.querySelectorAll("#incomings_table tr.nowrap");
+    if (!rows.length) break;
+
+    rows.forEach(row => {
+      const label = row.querySelector(".quickedit-label")?.textContent?.trim() ?? "";
+      if (label.toLowerCase() === "nobre") nobleCount++;
+    });
+
+    rowsSeen += rows.length;
+    if (rowsSeen >= total) break;
+  }
+
+  return nobleCount;
 }
 
 /** Caches the last successful Attacks/Nobles fetch so the stats bar shows real
@@ -104,6 +137,7 @@ function saveLiveStats(attacks: string, nobles: string) {
 }
 
 const BOT_ENABLED_KEY = "xbot_enabled";
+const THEME_KEY = "xbot_theme";
 
 /* ─── Storage ─────────────────────────────────────────────────────────────── */
 function storageGet(keys: string[]): Promise<Record<string, unknown>> {
@@ -119,6 +153,7 @@ type CfgValues = Record<string, string | number | boolean>;
 type View = { type: "list" } |
             { type: "config"; id: ModuleId } |
             { type: "fakes" } |
+            { type: "attackgen" } |
             { type: "snipe" } |
             { type: "balancer" } |
             { type: "desviador" } |
@@ -518,12 +553,9 @@ function ModuleCard({ mod, isOn, isLive, hasCfg, onToggle, onCfg, index }: {
         {isLive && <span className="live-pip" />}
         {hasCfg && (
           <button className="cfg-btn"
-            onClick={(e) => { e.stopPropagation(); onCfg(); }} title="Configure">
+            onClick={(e) => { e.stopPropagation(); onCfg(); }} title="Abrir">
             <svg width="13" height="13" viewBox="0 0 20 20" fill="none">
-              <path d="M10 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"
-                stroke="currentColor" strokeWidth="1.6"/>
-              <path d="M16.2 10c0-.3 0-.6-.1-.9l1.9-1.5-1.8-3.1-2.2.9c-.5-.4-1-.7-1.6-.9L12 2H8l-.4 2.5c-.6.2-1.1.5-1.6.9l-2.2-.9L2 7.6l1.9 1.5c-.1.3-.1.6-.1.9s0 .6.1.9L2 12.4l1.8 3.1 2.2-.9c.5.4 1 .7 1.6.9L8 18h4l.4-2.5c.6-.2 1.1-.5 1.6-.9l2.2.9 1.8-3.1-1.9-1.5c.1-.3.1-.6.1-.9Z"
-                stroke="currentColor" strokeWidth="1.6"/>
+              <path d="M6 4.5v11l9-5.5-9-5.5Z" fill="currentColor"/>
             </svg>
           </button>
         )}
@@ -573,7 +605,9 @@ function StatsBar() {
         <span className="stat-value">{attacks}</span>
       </div>
       <div className="stat-cell">
-        <span className="stat-label">Nobres</span>
+        <span className="stat-label">
+          <img src={SNOB_ICON} alt="Nobres" style={{ width: 14, height: 14, verticalAlign: "middle" }} />
+        </span>
         <span className="stat-value">{nobles}</span>
       </div>
       <button className="stat-refresh-btn"
@@ -589,7 +623,7 @@ function StatsBar() {
 /* ─── Panel ───────────────────────────────────────────────────────────────── */
 function Panel({
   visible, onClose, s, ready, isOn, toggle, view, setViewP, theme, onToggleTheme,
-  onTwUtilsDrawerChange, licenseExpiresAt,
+  licenseExpiresAt,
 }: {
   visible: boolean;
   onClose: () => void;
@@ -601,7 +635,6 @@ function Panel({
   setViewP: (v: View) => void;
   theme: "light" | "dark";
   onToggleTheme: () => void;
-  onTwUtilsDrawerChange: (v: boolean) => void;
   licenseExpiresAt: string | null;
 }) {
   const [search, setSearch] = useState("");
@@ -721,10 +754,14 @@ function Panel({
                 onCfg={() => {
                   if (mod.id === "fakes") {
                     setViewP({ type: "fakes" });
+                  } else if (mod.id === "attack_generator") {
+                    setViewP({ type: "attackgen" });
                   } else if (mod.id === "tw_snipe_scheduler") {
                     setViewP({ type: "snipe" });
                   } else if (mod.id === "wh_balancer") {
                     setViewP({ type: "balancer" });
+                  } else if (mod.id === "desviador") {
+                    setViewP({ type: "desviador" });
                   } else if (mod.id === "kumin_gluer") {
                     setViewP({ type: "gluer" });
                   } else if (mod.id === "resource_buyer") {
@@ -733,6 +770,8 @@ function Panel({
                     setViewP({ type: "autosender" });
                   } else if (mod.id === "tw_utils") {
                     setViewP({ type: "twutils" });
+                  } else if (mod.id === "mass_label_renamer") {
+                    setViewP({ type: "label" });
                   } else {
                     setViewP({ type: "config", id: mod.id });
                   }
@@ -760,7 +799,9 @@ function Panel({
       </div>
 
       {/* Config view — one per possible cfgId, shown/hidden */}
-      {MODULE_CONFIGS.filter((m) => Boolean(MODULE_CONFIG_SCHEMAS[m.id]) && m.id !== "fakes").map((m) => (
+      {MODULE_CONFIGS.filter((m) =>
+        Boolean(MODULE_CONFIG_SCHEMAS[m.id]) && m.id !== "fakes" && m.id !== "attack_generator" && m.id !== "mass_label_renamer"
+      ).map((m) => (
         <ConfigView key={m.id} id={m.id}
           visible={view.type === "config" && view.id === m.id}
           onBack={() => setViewP({ type: "list" })}
@@ -770,6 +811,12 @@ function Panel({
       {/* Fake Sender — dedicated panel with Status + Settings tabs */}
       <FakeSenderView
         visible={view.type === "fakes"}
+        onBack={() => setViewP({ type: "list" })}
+      />
+
+      {/* Attack Generator — dedicated panel with Status + Settings tabs */}
+      <AttackGeneratorView
+        visible={view.type === "attackgen"}
         onBack={() => setViewP({ type: "list" })}
       />
 
@@ -806,7 +853,6 @@ function Panel({
       <TwUtilsView
         visible={view.type === "twutils"}
         onBack={() => setViewP({ type: "list" })}
-        onShowDrawerChange={onTwUtilsDrawerChange}
       />
       <TelegramView
         visible={view.type === "telegram"}
@@ -841,6 +887,26 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
     return () => chrome.storage.onChanged.removeListener(onChange);
   }, []);
 
+  // Per-module "pin to trigger-stack" visibility — set from each view's own
+  // cfg-header via <TriggerVisibilityToggle>. Absent from the map = visible
+  // (default), so existing installs keep every trigger showing until the
+  // user explicitly unpins one.
+  const [triggerVis, setTriggerVis] = useState<Partial<Record<ModuleId, boolean>>>({});
+  useEffect(() => {
+    const read = () => {
+      chrome.storage.sync.get(TRIGGER_VISIBILITY_KEY, (r) => {
+        setTriggerVis((r[TRIGGER_VISIBILITY_KEY] as Partial<Record<ModuleId, boolean>>) ?? {});
+      });
+    };
+    read();
+    const onChange = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area === "sync" && changes[TRIGGER_VISIBILITY_KEY]) read();
+    };
+    chrome.storage.onChanged.addListener(onChange);
+    return () => chrome.storage.onChanged.removeListener(onChange);
+  }, []);
+  const triggerVisible = (id: ModuleId) => triggerVis[id] !== false;
+
   // Persist open/closed across page navigations (place→confirm→place loop)
   const [open, setOpenRaw] = useState(() =>
     sessionStorage.getItem("xbot_overlay_open") === "1"
@@ -853,10 +919,23 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
     });
   };
 
-  // Dark / light theme — read sessionStorage on mount, apply to shadow host
-  const [theme, setTheme] = useState<"light" | "dark">(() => {
-    return (sessionStorage.getItem("xbot_theme") as "light" | "dark") ?? "light";
-  });
+  // Dark / light theme — shared with the toolbar popup via chrome.storage.sync
+  // (previously sessionStorage, which is scoped to the game page's own origin
+  // and invisible to the popup's separate chrome-extension:// origin).
+  const [theme, setTheme] = useState<"light" | "dark">("light");
+  useEffect(() => {
+    const read = () => {
+      chrome.storage.sync.get(THEME_KEY, (r) => {
+        setTheme((r[THEME_KEY] as "light" | "dark") ?? "light");
+      });
+    };
+    read();
+    const onChange = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area === "sync" && changes[THEME_KEY]) read();
+    };
+    chrome.storage.onChanged.addListener(onChange);
+    return () => chrome.storage.onChanged.removeListener(onChange);
+  }, []);
   // Sync theme attribute to shadow host element on every change
   useEffect(() => {
     if (theme === "dark") {
@@ -864,11 +943,14 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
     } else {
       delete (shadowHost as HTMLElement).dataset.theme;
     }
-    sessionStorage.setItem("xbot_theme", theme);
   }, [theme, shadowHost]);
 
   const toggleTheme = useCallback(() => {
-    setTheme((t) => (t === "dark" ? "light" : "dark"));
+    setTheme((t) => {
+      const next = t === "dark" ? "light" : "dark";
+      chrome.storage.sync.set({ [THEME_KEY]: next });
+      return next;
+    });
   }, []);
 
   // Settings live HERE — never unmount, never reset on close
@@ -890,15 +972,6 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
     };
     chrome.storage.onChanged.addListener(onChange);
     return () => chrome.storage.onChanged.removeListener(onChange);
-  }, []);
-
-  // tw_utils: whether to show the ⚙️ drawer trigger button
-  const [twUtilsShowDrawer, setTwUtilsShowDrawer] = useState(true);
-  useEffect(() => {
-    storageGet(["tw_suite_cfg_tw_utils"]).then((r) => {
-      const cfg = (r["tw_suite_cfg_tw_utils"] as Record<string, unknown>) ?? {};
-      setTwUtilsShowDrawer(cfg["showDrawer"] !== false);
-    });
   }, []);
 
   // Desviador state — updated by listening to the userscript's state events
@@ -997,6 +1070,7 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
   const [view, setView] = useState<View>(() => {
     const v = sessionStorage.getItem("xbot_panel_view");
     if (v === "fakes")     return { type: "fakes" };
+    if (v === "attackgen") return { type: "attackgen" };
     if (v === "snipe")     return { type: "snipe" };
     if (v === "balancer")  return { type: "balancer" };
     if (v === "desviador") return { type: "desviador" };
@@ -1086,7 +1160,7 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
         <button className={`trigger${open ? " trigger--open" : ""}`}
           onClick={() => setOpen((o) => !o)} title="xBot" aria-label="xBot">⚡</button>
 
-        {gapCount > 0 && isOn("tw_snipe_scheduler") && (
+        {gapCount > 0 && isOn("tw_snipe_scheduler") && triggerVisible("tw_snipe_scheduler") && (
           <button className="trigger trigger--snipe" onClick={openSnipe}
             title={`${gapCount} gap${gapCount !== 1 ? "s" : ""} — open snipe planner`}
             aria-label="Snipe planner">
@@ -1094,7 +1168,7 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
           </button>
         )}
 
-        {isInfoVillage && isOn("kumin_gluer") && (
+        {isInfoVillage && isOn("kumin_gluer") && triggerVisible("kumin_gluer") && (
           <button className="trigger trigger--gluer"
             onClick={() => { setViewP({ type: "gluer" }); setOpen(true); }}
             title="Kumin Gluer"
@@ -1104,7 +1178,7 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
           </button>
         )}
 
-        {isOn("desviador") && (isIncomingsPage || desvActive) && (
+        {isOn("desviador") && triggerVisible("desviador") && (isIncomingsPage || desvActive) && (
           <button className="trigger trigger--desviador" onClick={openDesviador}
             title={desvActive ? `Desviador — ${desvCount} programado(s)` : "Desviador"}
             aria-label="Desviador">
@@ -1115,13 +1189,13 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
           </button>
         )}
 
-        {isOn("wh_balancer") && (
+        {isOn("wh_balancer") && triggerVisible("wh_balancer") && (
           <button className="trigger trigger--balancer"
             onClick={() => { setViewP({ type: "balancer" }); setOpen(true); }}
             title="WH Balancer" aria-label="WH Balancer">⚖️</button>
         )}
 
-        {isOn("auto_sender") && (
+        {isOn("auto_sender") && triggerVisible("auto_sender") && (
           <button className="trigger trigger--autosender"
             onClick={() => { setViewP({ type: "autosender" }); setOpen(true); }}
             title={asQueueCount > 0 ? `Auto Sender — ${asQueueCount} na fila` : "Auto Sender"}
@@ -1136,7 +1210,7 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
           </button>
         )}
 
-        {isExchangePage && isOn("resource_buyer") && (
+        {isExchangePage && isOn("resource_buyer") && triggerVisible("resource_buyer") && (
           <button className="trigger trigger--buyer"
             onClick={() => { setViewP({ type: "buyer" }); setOpen(true); }}
             title="Resource Buyer" aria-label="Resource Buyer">
@@ -1149,28 +1223,40 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
           </button>
         )}
 
-        {isLabelPage && isOn("mass_label_renamer") && (
+        {isLabelPage && isOn("mass_label_renamer") && triggerVisible("mass_label_renamer") && (
           <button className="trigger trigger--label"
             onClick={() => { setViewP({ type: "label" }); setOpen(true); }}
             title="Label + Renamer" aria-label="Label + Renamer">🏷️</button>
         )}
 
-        {isOn("tw_utils") && twUtilsShowDrawer && (
+        {isOn("tw_utils") && triggerVisible("tw_utils") && (
           <button className="trigger trigger--twutils"
             onClick={() => { setViewP({ type: "twutils" }); setOpen(true); }}
             title="TW Tweaks" aria-label="TW Tweaks">⚙️</button>
         )}
 
-        {isMapPage && isOn("tw_utils") && twUtilsShowDrawer && (
+        {isMapPage && isOn("tw_utils") && triggerVisible("tw_utils") && (
           <button className="trigger trigger--mapsel"
             onClick={() => { setViewP({ type: "twutils" }); setOpen(true); }}
             title="Map Draw Select" aria-label="Map Draw Select">⚙️</button>
         )}
 
-        {isOn("telegram_notifier") && (
+        {isOn("telegram_notifier") && triggerVisible("telegram_notifier") && (
           <button className="trigger trigger--telegram"
             onClick={() => { setViewP({ type: "telegram" }); setOpen(true); }}
             title="Telegram Notifier" aria-label="Telegram Notifier">🔔</button>
+        )}
+
+        {isOn("fakes") && triggerVisible("fakes") && (
+          <button className="trigger trigger--fakes"
+            onClick={() => { setViewP({ type: "fakes" }); setOpen(true); }}
+            title="Fake Sender" aria-label="Fake Sender">⚔️</button>
+        )}
+
+        {isOn("attack_generator") && triggerVisible("attack_generator") && (
+          <button className="trigger trigger--attackgen"
+            onClick={() => { setViewP({ type: "attackgen" }); setOpen(true); }}
+            title="Attack Generator" aria-label="Attack Generator">🗡️</button>
         )}
       </div>
       {/* Backdrop only shown when open */}
@@ -1193,7 +1279,6 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
           s={s} ready={ready} isOn={isOn} toggle={toggle}
           view={view} setViewP={setViewP}
           theme={theme} onToggleTheme={toggleTheme}
-          onTwUtilsDrawerChange={setTwUtilsShowDrawer}
           licenseExpiresAt={licenseExpiresAt}
         />
       </div>

@@ -19,7 +19,8 @@ const VALIDATION_URL = "https://license.vivaomadeira.com/validate";
 type BgMessage =
   | { type: "GET_ACTIVE_TAB_URL" }
   | { type: "RELOAD_ACTIVE_TAB" }
-  | { type: "VALIDATE_LICENSE"; key: string };
+  | { type: "VALIDATE_LICENSE"; key: string }
+  | { type: "ARM_NEXT_TAB" };
 
 type BgResponse =
   | { type: "ACTIVE_TAB_URL"; url: string | null }
@@ -67,6 +68,50 @@ chrome.runtime.onInstalled.addListener(({ reason }) => {
   }
 });
 
+// ─── Open the next tab pinned and non-focused ──────────────────────────────
+// A userscript that's about to call window.open() first asks us (via ARM_NEXT_TAB)
+// to "arm" its window and WAITS for our ack before actually opening the tab —
+// chrome.runtime.sendMessage is asynchronous, so without that handshake
+// window.open() could fire before this listener is registered, silently
+// dropping the pin/unfocus.
+// Once armed, the very next tab created in that window gets pinned and
+// deactivated. Deactivating the new tab alone isn't reliable enough — Chrome
+// doesn't guarantee it falls back to specifically the opener tab (confirmed:
+// the tab still visibly took over even with active:false applied), so we also
+// explicitly re-activate the opener tab by id. A brief flash before focus
+// snaps back is possible — there's no JS/extension API to stop window.open()
+// from focusing the tab it creates in the first place — but this guarantees
+// where focus actually lands afterward. Disarms after one use or after
+// ARM_TIMEOUT_MS, whichever comes first.
+const ARM_TIMEOUT_MS = 4_000;
+let armedWindowId: number | null = null;
+let armedOpenerTabId: number | null = null;
+let armTimer: ReturnType<typeof setTimeout> | null = null;
+
+function armNextTab(windowId: number, openerTabId: number): void {
+  armedWindowId = windowId;
+  armedOpenerTabId = openerTabId;
+  if (armTimer) clearTimeout(armTimer);
+  armTimer = setTimeout(() => {
+    armedWindowId = null;
+    armedOpenerTabId = null;
+    armTimer = null;
+  }, ARM_TIMEOUT_MS);
+}
+
+chrome.tabs.onCreated.addListener((tab) => {
+  if (armedWindowId == null || tab.windowId !== armedWindowId) return;
+  const openerTabId = armedOpenerTabId;
+  armedWindowId = null;
+  armedOpenerTabId = null;
+  if (armTimer) {
+    clearTimeout(armTimer);
+    armTimer = null;
+  }
+  if (tab.id != null) chrome.tabs.update(tab.id, { active: false, pinned: true });
+  if (openerTabId != null) chrome.tabs.update(openerTabId, { active: true });
+});
+
 // ─── Message bus ──────────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener(
   (
@@ -88,6 +133,14 @@ chrome.runtime.onMessage.addListener(
           sendResponse({ type: "ACK" });
         });
         return true;
+
+      case "ARM_NEXT_TAB": {
+        const windowId = _sender.tab?.windowId;
+        const tabId = _sender.tab?.id;
+        if (windowId != null && tabId != null) armNextTab(windowId, tabId);
+        sendResponse({ type: "ACK" });
+        return true;
+      }
 
       case "VALIDATE_LICENSE":
         fetch(VALIDATION_URL, {

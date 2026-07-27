@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Desviador
 // @namespace    tw_desviador
-// @version      3.0.0
+// @version      3.5.0
 // @description  Desvio automático via place-screen tabs — isolados por cmdId
 // @match        https://*.tribalwars.com.pt/game.php*
 // ==/UserScript==
@@ -18,6 +18,8 @@
     const CANCEL_SEC_KEY       = 'twDesviador_cancelSec';
     const ALERT_SEC_KEY        = 'twDesviador_alertSec';
     const TAB_CMD_KEY          = 'twDesviador_tabCmdId';  /* sessionStorage — per tab  */
+    const HANDOFF_KEY          = 'twDesviador_pendingHandoff'; /* sessionStorage — one-shot cmdId carried into a freshly opened place tab */
+    const HANDOFF_TTL_MS       = 30_000;
     const LAST_CANCEL_KEY      = 'twDesviador_lastCancel';/* cross-tab cancel signal   */
     const MUTE_KEY             = 'twDesviador_muteSound'; /* beep mute flag             */
     const ALL_COMMANDS_KEY     = 'twDesviador_allCommands';/* ignore [Desviar] filter   */
@@ -40,7 +42,6 @@
     const subtype   = params.get('subtype');
     const tryParam  = params.get('try');
     const village   = params.get('village');
-    const desvCmdId = params.get('__desv');
     const tParam    = params.get('t');
 
     const isIncomings = screenId === 'overview_villages' &&
@@ -93,14 +94,52 @@
 
     /* Bind this tab to its cmdId via sessionStorage.
      * sessionStorage persists across navigations within the same tab but is
-     * never shared between tabs — so two concurrent tabs never collide. */
+     * never shared between tabs — so two concurrent tabs never collide.
+     * A freshly opened place tab has no TAB_CMD_KEY of its own yet; it recovers
+     * the cmdId from HANDOFF_KEY, which window.open() clones from the opener's
+     * sessionStorage into the new tab (same-origin only). Consumed once. */
     function resolveTabCmdId() {
         let id = sessionStorage.getItem(TAB_CMD_KEY);
-        if (!id && desvCmdId) {
-            id = desvCmdId;
-            sessionStorage.setItem(TAB_CMD_KEY, id);
+        if (!id) {
+            try {
+                const raw = sessionStorage.getItem(HANDOFF_KEY);
+                if (raw) {
+                    sessionStorage.removeItem(HANDOFF_KEY);
+                    const { cmdId, ts } = JSON.parse(raw);
+                    if (cmdId && Date.now() - ts < HANDOFF_TTL_MS) id = cmdId;
+                }
+            } catch (_) {}
+            if (id) sessionStorage.setItem(TAB_CMD_KEY, id);
         }
         return id;
+    }
+
+    /* Opens the place tab for cmdId, unfocused + pinned. Hands the id off via
+     * sessionStorage instead of a URL query param (never sent to the game
+     * server) — window.open() clones this tab's sessionStorage into the new
+     * one, so it must be set synchronously right before opening.
+     * Unfocus/pin is done via the background service worker (through router.ts),
+     * since chrome.tabs isn't reachable from page context. We wait for its ack
+     * (xbot:tabs:armed) before calling window.open() — chrome.runtime.sendMessage
+     * is async, so opening immediately after dispatching the arm request risks
+     * creating the tab before the background has actually armed, silently
+     * dropping the pin/unfocus. A short timeout fallback still opens the tab
+     * (unpinned/focused) if the extension bridge doesn't respond in time. */
+    function openPlaceTab(destVillage, cmdId) {
+        try {
+            sessionStorage.setItem(HANDOFF_KEY, JSON.stringify({ cmdId, ts: Date.now() }));
+        } catch (_) {}
+
+        let launched = false;
+        function launch() {
+            if (launched) return;
+            launched = true;
+            document.removeEventListener('xbot:tabs:armed', launch);
+            window.open(`/game.php?${sitterPrefix()}village=${destVillage}&screen=place`, '_blank');
+        }
+        document.addEventListener('xbot:tabs:armed', launch);
+        document.dispatchEvent(new CustomEvent('xbot:tabs:armNextTab'));
+        setTimeout(launch, 200);
     }
 
     /* ── stale schedule cleanup on every page load ───────────────────────────*/
@@ -470,7 +509,7 @@
                         localStorage.removeItem(SCHED_PREFIX + cmdId);
                         addHistory({ cmdId, label: labelText, villageName, village: destVillage, arrivalMs, firedAt: Date.now() });
                         setPending({ phase: 'send', village: destVillage, cancelMs, cmdId });
-                        window.open(`/game.php?${sitterPrefix()}village=${destVillage}&screen=place&__desv=${cmdId}`, '_blank');
+                        openPlaceTab(destVillage, cmdId);
                         return;
                     }
 
@@ -490,7 +529,7 @@
                         if (td1) td1.style.outline = '2px solid #d97706';
                         addHistory({ cmdId, label: labelText, villageName, village: destVillage, arrivalMs, firedAt: Date.now() });
                         setPending({ phase: 'send', village: destVillage, cancelMs, cmdId });
-                        window.open(`/game.php?${sitterPrefix()}village=${destVillage}&screen=place&__desv=${cmdId}`, '_blank');
+                        openPlaceTab(destVillage, cmdId);
                         dispatchState();
                     }, delay));
 

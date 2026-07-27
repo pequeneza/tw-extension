@@ -13,6 +13,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { computeScheduledByVillage, fetchWorldSpeed } from "./queue-utils";
+import { TriggerVisibilityToggle } from "./TriggerVisibilityToggle";
 
 /* ─── Constants ───────────────────────────────────────────────────────────── */
 const QUEUE_KEY    = "twKuminGluer_queue";
@@ -940,6 +941,7 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
           title="Presets de tropas" aria-label="Presets de tropas">
           ⚙
         </button>
+        <TriggerVisibilityToggle moduleId="kumin_gluer" />
       </div>
 
       <div className="cfg-body snipe-body">

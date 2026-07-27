@@ -2,6 +2,10 @@ import React, { useEffect, useState } from "react";
 import { STORAGE_KEY, ModuleSettings, MODULE_CONFIGS, LICENSE_STORAGE_KEY, LICENSE_CACHE_KEY } from "../types/modules";
 
 const BOT_ENABLED_KEY = "xbot_enabled";
+// Same key the in-game overlay's light/dark toggle reads/writes (chrome.storage.sync,
+// not sessionStorage — the popup is a separate chrome-extension:// origin and can't
+// see the overlay's page-scoped sessionStorage at all).
+const THEME_KEY = "xbot_theme";
 
 function readStorage(): Promise<{ enabled: boolean; settings: ModuleSettings; licenseKey: string }> {
   return new Promise((res) =>
@@ -39,6 +43,7 @@ export function App() {
   const [licenseInput, setLicenseInput] = useState("");
   const [licenseStatus, setLicenseStatus] = useState<"idle" | "saving">("idle");
   const [licenseVisible, setLicenseVisible] = useState(false);
+  const [theme, setTheme] = useState<"light" | "dark">("light");
 
   useEffect(() => {
     readStorage().then(({ enabled, settings, licenseKey }) => {
@@ -48,6 +53,26 @@ export function App() {
       setLicenseInput(licenseKey);
     });
   }, []);
+
+  useEffect(() => {
+    const read = () => {
+      chrome.storage.sync.get(THEME_KEY, (r) => {
+        setTheme((r[THEME_KEY] as "light" | "dark") ?? "light");
+      });
+    };
+    read();
+    const onChange = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area === "sync" && changes[THEME_KEY]) read();
+    };
+    chrome.storage.onChanged.addListener(onChange);
+    return () => chrome.storage.onChanged.removeListener(onChange);
+  }, []);
+
+  function toggleTheme() {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    chrome.storage.sync.set({ [THEME_KEY]: next });
+  }
 
   async function toggle() {
     if (enabled === null) return;
@@ -90,10 +115,19 @@ export function App() {
   return (
     <>
       <style>{CSS}</style>
-      <div className="shell">
+      <div className="shell" data-theme={theme}>
         <div className="header">
           <span className="logo">⚡</span>
           <span className="name">xBot</span>
+          <button
+            type="button"
+            className="theme-btn"
+            onClick={toggleTheme}
+            aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            title={theme === "dark" ? "Light mode" : "Dark mode"}
+          >
+            {theme === "dark" ? "☀" : "☾"}
+          </button>
         </div>
 
         <div className="body">
@@ -179,20 +213,62 @@ const CSS = `
     width: 200px;
     font-family: 'DM Sans', -apple-system, sans-serif;
     font-size: 13px;
-    background: #fff;
-    color: #111827;
     -webkit-font-smoothing: antialiased;
   }
 
-  .shell { display: flex; flex-direction: column; width: 200px; }
+  /* Theme tokens — same light/dark split as the in-game overlay (overlay-css.ts),
+     scoped to .shell (the popup's own root) since data-theme lives there, not on
+     <body> — .shell owns the visible background/text color for that reason. */
+  .shell {
+    --bg:      #fff;
+    --text:    #111827;
+    --border:  #f3f4f6;
+    --border2: #e5e7eb;
+    --border3: #d1d5db;
+    --surface: #f9fafb;
+    --surface2: #f3f4f6;
+    --muted:   #9ca3af;
+    --muted2:  #6b7280;
+    --heading: #374151;
+
+    display: flex; flex-direction: column; width: 200px;
+    background: var(--bg); color: var(--text);
+  }
+  .shell[data-theme="dark"] {
+    --bg:      #0f1117;
+    --text:    #f0f2f7;
+    --border:  #2a2d3a;
+    --border2: #2a2d3a;
+    --border3: #3a3d4a;
+    --surface: #1a1d27;
+    --surface2: #1e2130;
+    --muted:   #9ca3af;
+    --muted2:  #9ca3af;
+    --heading: #c4c8d4;
+  }
 
   .header {
     display: flex; align-items: center; gap: 7px;
     padding: 12px 14px 10px;
-    border-bottom: 1px solid #f3f4f6;
+    border-bottom: 1px solid var(--border);
   }
   .logo { font-size: 16px; line-height: 1; }
-  .name { font-size: 14px; font-weight: 600; color: #111827; letter-spacing: -0.01em; }
+  .name { font-size: 14px; font-weight: 600; color: var(--text); letter-spacing: -0.01em; }
+
+  .theme-btn {
+    margin-left: auto;
+    width: 22px; height: 22px;
+    border-radius: 6px;
+    border: 1px solid var(--border2);
+    background: var(--surface);
+    color: var(--muted2);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; line-height: 1;
+    font-family: inherit;
+    transition: all 0.15s ease;
+  }
+  .theme-btn:hover { background: var(--surface2); border-color: var(--border3); }
 
   .body {
     display: flex; flex-direction: column; align-items: center;
@@ -201,11 +277,11 @@ const CSS = `
 
   .big-toggle {
     width: 64px; height: 64px; border-radius: 50%;
-    border: 2px solid #e5e7eb; background: #f9fafb;
+    border: 2px solid var(--border2); background: var(--surface);
     cursor: pointer; display: flex; align-items: center; justify-content: center;
     transition: all 0.2s ease; outline: none;
   }
-  .big-toggle:hover:not(:disabled) { border-color: #d1d5db; transform: scale(1.04); }
+  .big-toggle:hover:not(:disabled) { border-color: var(--border3); transform: scale(1.04); }
   .big-toggle:active:not(:disabled) { transform: scale(0.97); }
   .big-toggle:disabled { opacity: 0.5; cursor: default; }
   .big-toggle.on {
@@ -215,10 +291,16 @@ const CSS = `
   .big-toggle.on:hover:not(:disabled) {
     border-color: #16a34a; background: #dcfce7;
   }
+  .shell[data-theme="dark"] .big-toggle.on {
+    background: color-mix(in srgb, #22c55e 14%, var(--surface));
+  }
+  .shell[data-theme="dark"] .big-toggle.on:hover:not(:disabled) {
+    background: color-mix(in srgb, #22c55e 22%, var(--surface));
+  }
 
   .toggle-ring {
     width: 36px; height: 36px; border-radius: 50%;
-    border: 2.5px solid #d1d5db;
+    border: 2.5px solid var(--border3);
     display: flex; align-items: center; justify-content: center;
     transition: border-color 0.2s ease;
   }
@@ -226,7 +308,7 @@ const CSS = `
 
   .toggle-dot {
     width: 14px; height: 14px; border-radius: 50%;
-    background: #d1d5db; transition: background 0.2s ease, transform 0.2s ease;
+    background: var(--border3); transition: background 0.2s ease, transform 0.2s ease;
   }
   .big-toggle.on .toggle-dot { background: #16a34a; transform: scale(1.1); }
 
@@ -234,22 +316,23 @@ const CSS = `
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
 
   .status-label {
-    font-size: 15px; font-weight: 600; color: #374151;
+    font-size: 15px; font-weight: 600; color: var(--heading);
     transition: color 0.2s ease;
   }
   .status-label.active { color: #15803d; }
+  .shell[data-theme="dark"] .status-label.active { color: #4ade80; }
 
-  .status-hint { font-size: 11px; color: #9ca3af; text-align: center; min-height: 16px; }
+  .status-hint { font-size: 11px; color: var(--muted); text-align: center; min-height: 16px; }
 
   .license-section {
     padding: 0 14px 12px;
-    border-top: 1px solid #f3f4f6;
+    border-top: 1px solid var(--border);
     padding-top: 10px;
     display: flex; flex-direction: column; gap: 5px;
   }
 
   .license-label {
-    font-size: 10px; font-weight: 600; color: #6b7280;
+    font-size: 10px; font-weight: 600; color: var(--muted2);
     text-transform: uppercase; letter-spacing: 0.05em;
   }
 
@@ -259,16 +342,16 @@ const CSS = `
     flex: 1; min-width: 0;
     padding: 4px 6px;
     font-size: 10.5px; font-family: monospace;
-    border: 1px solid #e5e7eb; border-radius: 5px;
-    color: #111827; background: #f9fafb;
+    border: 1px solid var(--border2); border-radius: 5px;
+    color: var(--text); background: var(--surface);
     outline: none;
   }
-  .license-input:focus { border-color: #6b7280; background: #fff; }
+  .license-input:focus { border-color: var(--muted2); background: var(--bg); }
 
   .license-save {
     padding: 4px 8px;
     font-size: 10.5px; font-weight: 600;
-    background: #111827; color: #fff;
+    background: var(--text); color: var(--bg);
     border: none; border-radius: 5px; cursor: pointer;
   }
   .license-save:disabled { opacity: 0.5; }
@@ -278,18 +361,19 @@ const CSS = `
     width: 24px;
     padding: 4px 0;
     font-size: 11px;
-    background: #f9fafb;
-    border: 1px solid #e5e7eb; border-radius: 5px;
+    background: var(--surface);
+    border: 1px solid var(--border2); border-radius: 5px;
     cursor: pointer;
     user-select: none;
   }
-  .license-eye:hover { background: #f3f4f6; }
-  .license-eye:active { background: #e5e7eb; }
+  .license-eye:hover { background: var(--surface2); }
+  .license-eye:active { background: var(--border2); }
 
   .license-ok { font-size: 10px; color: #16a34a; }
+  .shell[data-theme="dark"] .license-ok { color: #4ade80; }
 
   .footer {
-    padding: 8px 14px 10px; border-top: 1px solid #f3f4f6;
-    font-size: 10.5px; color: #9ca3af; text-align: center;
+    padding: 8px 14px 10px; border-top: 1px solid var(--border);
+    font-size: 10.5px; color: var(--muted); text-align: center;
   }
 `;

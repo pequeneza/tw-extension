@@ -63,6 +63,7 @@ function pngChunk(type: string, data: Buffer): Buffer {
 // ─── Userscript map ───────────────────────────────────────────────────────────
 const MODULES_DIR = "tw-suite-extension/modules";
 const USERSCRIPT_MAP: Record<string, string> = {
+  [`${MODULES_DIR}/attack_generator.user.js`]:     "attack_generator.user.js",
   [`${MODULES_DIR}/auto_mint.user.js`]:            "auto_mint.user.js",
   [`${MODULES_DIR}/auto_sender.user.js`]:          "auto_sender.user.js",
   [`${MODULES_DIR}/desviador.user.js`]:            "desviador.user.js",
@@ -137,6 +138,10 @@ function extensionAssetsPlugin() {
       // Copy custom module icons
       if (existsSync("colatudo.png"))
         copyFileSync("colatudo.png", "dist/icons/colatudo.png");
+
+      // Copy misc UI-chrome icons (drawer/trigger-visibility toggle, etc.)
+      if (existsSync("Icons/drawer-svgrepo-com.svg"))
+        copyFileSync("Icons/drawer-svgrepo-com.svg", "dist/icons/drawer-svgrepo-com.svg");
 
       const jqSrc = `${MODULES_DIR}/jquery-3.7.1.min.js`;
       if (existsSync(jqSrc))

@@ -1,23 +1,25 @@
 /**
- * FakeSenderView — in-overlay control panel for the Fake Sender module.
+ * AttackGeneratorView — in-overlay control panel for the Attack Generator module.
  *
- * Design contract:
- *  - Uses exclusively CSS classes from overlay.css (no inline styles except layout necessities)
- *  - Slides in as a cfg-view (same animation + shell as ConfigView)
- *  - Two tabs: STATUS (live runtime) and SETTINGS (persisted config via chrome.storage.sync)
+ * Structurally cloned from FakeSenderView.tsx:
  *  - Runtime state polled from sessionStorage/localStorage every 500 ms (bridge to the
- *    injected fakes.user.js which writes these keys)
- *  - Config changes written to chrome.storage.sync → fakes.user.js picks them up on next
- *    cycle via window.__twSuiteCfg('fakes') integration already present in the script
+ *    injected attack_generator.user.js, which mirrors the same "fake_*"-style keys under
+ *    an "attackgen_*" prefix)
+ *  - Config changes written to chrome.storage.sync → attack_generator.user.js picks them
+ *    up on next cycle via window.__twSuiteCfg('attack_generator')
+ *  - Adds: attack-type selector (+ custom unit-count picker), target-mode selector
+ *    (manual coords vs auto player/tribe/continent/points filters with a one-shot
+ *    "Generate coords" bridge), and execution-mode selector (sequential send-now vs
+ *    timed queue-to-Autosender)
  */
 
 import React, {
-  useCallback, useEffect, useRef, useState,
+  useCallback, useEffect, useState,
 } from "react";
 import { MODULE_CONFIG_SCHEMAS, FieldDef } from "../../types/config-schemas";
 import { TriggerVisibilityToggle } from "./TriggerVisibilityToggle";
 
-/* ─── Storage helpers (mirrors Overlay.tsx) ───────────────────────────────── */
+/* ─── Storage helpers ─────────────────────────────────────────────────────── */
 function storageGet(keys: string[]): Promise<Record<string, unknown>> {
   return new Promise((res) =>
     chrome.storage.sync.get(keys, (r) => res(r as Record<string, unknown>))
@@ -33,8 +35,9 @@ type LogLevel = "info" | "warn" | "err";
 interface LogEntry { ts: string; message: string; level: LogLevel; }
 type CfgValues = Record<string, string | number | boolean>;
 
-/* ─── Runtime state (read from sessionStorage / localStorage) ─────────────── */
-interface FakeRuntime {
+/* ─── Runtime state ───────────────────────────────────────────────────────── */
+interface AtkGenRuntime {
+  active: boolean;
   paused: boolean;
   sent: number;
   total: number;
@@ -44,21 +47,21 @@ interface FakeRuntime {
   log: LogEntry[];
 }
 
-const SS_PAUSED        = "fake_paused";        // volatile – sessionStorage only
-const LS_SENT          = "fake_sent_v1";       // persistent
-const LS_LOG           = "fake_ui_log_v1";     // persistent
-const LS_TOTAL         = "fake_total_coords_v1"; // persistent
-const LS_PENDING       = "fake_pending_target_v1"; // persistent
-const LS_RUN_ID        = "fake_run_id_v1";
-const LS_TARGET_PLAN   = "fake_target_plan_v1";
-const COOKIE_INDEX     = "fake_index";
+const SS_ACTIVE   = "attackgen_active";
+const SS_PAUSED   = "attackgen_paused";
+const LS_SENT     = "attackgen_sent_v1";
+const LS_LOG      = "attackgen_ui_log_v1";
+const LS_TOTAL    = "attackgen_total_coords_v1";
+const LS_PENDING  = "attackgen_pending_target_v1";
+const LS_RUN_ID   = "attackgen_run_id_v1";
+const LS_TARGET_PLAN = "attackgen_target_plan_v1";
+const COOKIE_INDEX   = "attackgen_index";
 
-// Legacy sessionStorage keys written by fakes.user.js — we read both
-// so the overlay stays live during an active tab session.
-const SS_SENT    = "fake_sent";
-const SS_LOG     = "fake_ui_log";
-const SS_TOTAL   = "fake_total_coords";
-const SS_PENDING = "fake_pending_target";
+const SS_SENT    = "attackgen_sent";
+const SS_LOG     = "attackgen_ui_log";
+const SS_TOTAL   = "attackgen_total_coords";
+const SS_PENDING = "attackgen_pending_target";
+const SS_GENERATED_COORDS = "attackgen_generated_coords";
 
 function parseSafe<T>(raw: string | null, fallback: T): T {
   if (!raw) return fallback;
@@ -70,21 +73,19 @@ function getCookieValue(name: string): string {
   return m ? decodeURIComponent(m[1] ?? "") : "0";
 }
 
-function readRuntime(): FakeRuntime {
-  // Prefer the live sessionStorage value (written by the injected script each cycle)
-  // but fall back to the persisted localStorage copy so data survives tab closes.
-  const sentRaw   = sessionStorage.getItem(SS_SENT)    ?? localStorage.getItem(LS_SENT)    ?? "0";
-  const totalRaw  = sessionStorage.getItem(SS_TOTAL)   ?? localStorage.getItem(LS_TOTAL)   ?? "0";
-  const pendRaw   = sessionStorage.getItem(SS_PENDING) ?? localStorage.getItem(LS_PENDING) ?? "—";
-  const logRaw    = sessionStorage.getItem(SS_LOG)     ?? localStorage.getItem(LS_LOG)     ?? "[]";
+function readRuntime(): AtkGenRuntime {
+  const sentRaw  = sessionStorage.getItem(SS_SENT)    ?? localStorage.getItem(LS_SENT)    ?? "0";
+  const totalRaw = sessionStorage.getItem(SS_TOTAL)   ?? localStorage.getItem(LS_TOTAL)   ?? "0";
+  const pendRaw  = sessionStorage.getItem(SS_PENDING) ?? localStorage.getItem(LS_PENDING) ?? "—";
+  const logRaw   = sessionStorage.getItem(SS_LOG)     ?? localStorage.getItem(LS_LOG)     ?? "[]";
 
-  // Mirror live sessionStorage values into localStorage so next session has them
   if (sessionStorage.getItem(SS_SENT)    !== null) localStorage.setItem(LS_SENT,    sentRaw);
   if (sessionStorage.getItem(SS_TOTAL)   !== null) localStorage.setItem(LS_TOTAL,   totalRaw);
   if (sessionStorage.getItem(SS_PENDING) !== null) localStorage.setItem(LS_PENDING, pendRaw);
   if (sessionStorage.getItem(SS_LOG)     !== null) localStorage.setItem(LS_LOG,     logRaw);
 
   return {
+    active:        sessionStorage.getItem(SS_ACTIVE) === "1",
     paused:        sessionStorage.getItem(SS_PAUSED) === "1",
     sent:          parseInt(sentRaw, 10) || 0,
     total:         parseInt(totalRaw, 10) || 0,
@@ -95,9 +96,8 @@ function readRuntime(): FakeRuntime {
   };
 }
 
-/* ─── useFakeRuntime — polls sessionStorage every 500 ms ─────────────────── */
-function useFakeRuntime(active: boolean) {
-  const [rt, setRt] = useState<FakeRuntime>(readRuntime);
+function useAtkGenRuntime(active: boolean) {
+  const [rt, setRt] = useState<AtkGenRuntime>(readRuntime);
 
   useEffect(() => {
     if (!active) return;
@@ -105,25 +105,28 @@ function useFakeRuntime(active: boolean) {
     return () => clearInterval(id);
   }, [active]);
 
-  /** Pause / resume by writing the sessionStorage flag the script reads */
-  const setPaused = useCallback((next: boolean) => {
-    sessionStorage.setItem(SS_PAUSED, next ? "1" : "0");
-    setRt((prev) => ({ ...prev, paused: next }));
+  // Attack Generator never starts on its own — these dispatch the manual-start
+  // bridge events that attack_generator.user.js listens for.
+  const start = useCallback(() => {
+    document.dispatchEvent(new CustomEvent("xbot:attackgen:start"));
+    setRt((prev) => ({ ...prev, active: true, paused: false }));
   }, []);
 
-  /** Start a new run: bump runId + reset sent/index */
+  const stop = useCallback(() => {
+    document.dispatchEvent(new CustomEvent("xbot:attackgen:stop"));
+    setRt((prev) => ({ ...prev, paused: true }));
+  }, []);
+
   const newRun = useCallback(() => {
     const id = String(Date.now());
     localStorage.setItem(LS_RUN_ID, id);
-    // Clear both live and persistent copies
     sessionStorage.setItem(SS_SENT, "0");
     localStorage.setItem(LS_SENT, "0");
     sessionStorage.removeItem(SS_PENDING);
     localStorage.removeItem(LS_PENDING);
     localStorage.removeItem(LS_TARGET_PLAN);
-    // Reset index cookie
     const expires = new Date(Date.now() + 10 * 365 * 86400 * 1000).toUTCString();
-    document.cookie = `fake_index=0;expires=${expires};path=/`;
+    document.cookie = `${COOKIE_INDEX}=0;expires=${expires};path=/`;
     setRt(readRuntime());
   }, []);
 
@@ -133,13 +136,13 @@ function useFakeRuntime(active: boolean) {
     setRt((prev) => ({ ...prev, log: [] }));
   }, []);
 
-  return { rt, setPaused, newRun, clearLog };
+  return { rt, start, stop, newRun, clearLog };
 }
 
-/* ─── useFakeCfg — chrome.storage.sync for settings ─────────────────────── */
-const SCHEMA = MODULE_CONFIG_SCHEMAS["fakes"]!;
+/* ─── useAtkGenCfg — chrome.storage.sync for settings ────────────────────── */
+const SCHEMA = MODULE_CONFIG_SCHEMAS["attack_generator"]!;
 
-function useFakeCfg(active: boolean) {
+function useAtkGenCfg(active: boolean) {
   const defaults: CfgValues = Object.fromEntries(
     SCHEMA.fields.map((f: FieldDef) => [f.key, f.default])
   );
@@ -151,35 +154,9 @@ function useFakeCfg(active: boolean) {
     if (!active) return;
     storageGet([SCHEMA.storageKey]).then((r) => {
       const synced = (r[SCHEMA.storageKey] as CfgValues) ?? {};
-
-      // If chrome.storage.sync has no coords saved yet, pull them from the
-      // localStorage config written by fakes.user.js ("fake_sender_config_v1").
-      // This covers first-run and cases where coords were only ever set in the
-      // userscript DEFAULT_CONFIG or via a direct localStorage save.
-      if (!synced.coords) {
-        try {
-          const lsRaw = localStorage.getItem("fake_sender_config_v1");
-          if (lsRaw) {
-            const lsCfg = JSON.parse(lsRaw) as CfgValues;
-            if (lsCfg.coords && String(lsCfg.coords).trim()) synced.coords = lsCfg.coords;
-          }
-        } catch {}
-        // Final fallback: live mirror the script writes each cycle
-        if (!synced.coords) {
-          try {
-            const liveRaw = sessionStorage.getItem("xbot_live_cfg_fakes");
-            if (liveRaw) {
-              const live = JSON.parse(liveRaw) as CfgValues;
-              if (live.coords && String(live.coords).trim()) synced.coords = live.coords;
-            }
-          } catch {}
-        }
-      }
-
       const merged = { ...defaults, ...synced };
       setVals(merged);
-      // Seed the live sessionStorage mirror so the script is up-to-date
-      try { sessionStorage.setItem("xbot_live_cfg_fakes", JSON.stringify(merged)); } catch {}
+      try { sessionStorage.setItem("xbot_live_cfg_attack_generator", JSON.stringify(merged)); } catch {}
       setDirty(false);
       setSaved(false);
     });
@@ -194,9 +171,7 @@ function useFakeCfg(active: boolean) {
 
   const save = useCallback(async () => {
     await storageSet({ [SCHEMA.storageKey]: vals });
-    // Mirror to sessionStorage so fakes.user.js can pick up changes
-    // without a page reload (it reads 'xbot_live_cfg_fakes' each cycle)
-    try { sessionStorage.setItem("xbot_live_cfg_fakes", JSON.stringify(vals)); } catch {}
+    try { sessionStorage.setItem("xbot_live_cfg_attack_generator", JSON.stringify(vals)); } catch {}
     setDirty(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2200);
@@ -224,28 +199,27 @@ function useMountAnim(trigger: boolean) {
 }
 
 /* ─── StatusTab ───────────────────────────────────────────────────────────── */
-function StatusTab({ rt, setPaused, newRun, clearLog }: {
-  rt: FakeRuntime;
-  setPaused: (v: boolean) => void;
+function StatusTab({ rt, start, stop, newRun, clearLog }: {
+  rt: AtkGenRuntime;
+  start: () => void;
+  stop: () => void;
   newRun: () => void;
   clearLog: () => void;
 }) {
-  // Newest entries render at the top (reversed), so no auto-scroll needed
-
   return (
     <div className="cfg-body">
-
-      {/* ── Live stats ── */}
       <div className="cfg-section">
         <div className="section-label">Live stats</div>
 
         <StatRow label="Status">
-          {rt.paused
-            ? <span className="fake-badge fake-badge--warn">⏸ Paused</span>
-            : <span className="fake-badge fake-badge--ok"><span className="live-pip live-pip--sm" /> Running</span>
+          {!rt.active
+            ? <span className="fake-badge">⏹ Idle</span>
+            : rt.paused
+              ? <span className="fake-badge fake-badge--warn">⏸ Stopping…</span>
+              : <span className="fake-badge fake-badge--ok"><span className="live-pip live-pip--sm" /> Running</span>
           }
         </StatRow>
-        <StatRow label="Sent this session">
+        <StatRow label="Sent / queued this session">
           <span style={{ fontVariantNumeric: "tabular-nums" }}>
             {rt.sent}{rt.total > 0 ? ` / ${rt.total}` : ""}
           </span>
@@ -284,17 +258,27 @@ function StatusTab({ rt, setPaused, newRun, clearLog }: {
         </StatRow>
       </div>
 
-      {/* ── Actions ── */}
       <div className="cfg-section cfg-section-checks">
         <div className="section-label">Controls</div>
         <div style={{ display: "flex", gap: 8, padding: "10px 14px" }}>
-          <button
-            className={`btn ${rt.paused ? "btn-save btn-save--dirty" : "btn-ghost"}`}
-            style={{ flex: 1 }}
-            onClick={() => setPaused(!rt.paused)}
-          >
-            {rt.paused ? "▶ Resume" : "⏸ Pause"}
-          </button>
+          {!rt.active ? (
+            <button
+              className="btn btn-save btn-save--dirty"
+              style={{ flex: 1 }}
+              onClick={start}
+            >
+              ▶ Start
+            </button>
+          ) : (
+            <button
+              className="btn btn-ghost"
+              style={{ flex: 1 }}
+              onClick={stop}
+              disabled={rt.paused}
+            >
+              ⏹ Stop
+            </button>
+          )}
           <button
             className="btn btn-ghost"
             style={{ flex: 1 }}
@@ -306,7 +290,6 @@ function StatusTab({ rt, setPaused, newRun, clearLog }: {
         </div>
       </div>
 
-      {/* ── Log ── */}
       <div className="cfg-section">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 14px 4px" }}>
           <div className="section-label" style={{ padding: 0 }}>Log</div>
@@ -363,10 +346,9 @@ function LogLine({ entry }: { entry: LogEntry }) {
     entry.level === "warn" ? "var(--a500)" :
     "var(--n500)";
 
-  // Split "[VillageName (491|592)] rest of message" into label + body
   const labelMatch = entry.message.match(/^\[([^\]]+)\]\s*(.*)/s);
-  const label   = labelMatch ? labelMatch[1] : null;
-  const body    = labelMatch ? labelMatch[2] : entry.message;
+  const label = labelMatch ? labelMatch[1] : null;
+  const body  = labelMatch ? labelMatch[2] : entry.message;
 
   return (
     <div style={{ display: "flex", gap: 8, padding: "3px 14px", alignItems: "flex-start" }}>
@@ -401,25 +383,164 @@ function LogLine({ entry }: { entry: LogEntry }) {
   );
 }
 
-/* ─── SettingsTab ─────────────────────────────────────────────────────────── */
-function SettingsTab({ vals, set }: {
+/* ─── Custom unit-count picker (attackType === "custom") ─────────────────── */
+const CUSTOM_UNIT_KEYS = ["spear","sword","axe","archer","spy","light","marcher","heavy","ram","catapult"];
+const UNIT_LABELS: Record<string, string> = {
+  spear: "Spear", sword: "Sword", axe: "Axe", archer: "Archer", spy: "Scout",
+  light: "Light cav", marcher: "Marcher", heavy: "Heavy cav", ram: "Ram", catapult: "Catapult",
+};
+
+function CustomUnitsEditor({ vals, set }: {
   vals: CfgValues;
   set: (k: string, v: string | number | boolean) => void;
 }) {
-  // Group fields by section
-  const timing   = SCHEMA.fields.filter((f: FieldDef) => ["attackDelay","attackRandom","confirmDelay","confirmRandom","switchDelay","switchRandom"].includes(f.key));
-  const caps     = SCHEMA.fields.filter((f: FieldDef) => ["fakesPerVillage","maxAttacksPerCoord","multiHitAttacks","multiHitChance"].includes(f.key));
-  const troops   = SCHEMA.fields.filter((f: FieldDef) => ["maxCatapults","maxScouts","maxInfantry","maxCavalry"].includes(f.key));
-  const arrival  = SCHEMA.fields.filter((f: FieldDef) => ["arrivalStart","arrivalEnd","stopAtEnd"].includes(f.key));
-  const coordsF  = SCHEMA.fields.filter((f: FieldDef) => f.key === "coords");
+  let parsed: Record<string, number> = {};
+  try { parsed = JSON.parse(String(vals.customUnits || "{}")); } catch { /* ignore */ }
+
+  function updateUnit(unit: string, n: number) {
+    const next = { ...parsed, [unit]: Math.max(0, Math.floor(n) || 0) };
+    set("customUnits", JSON.stringify(next));
+  }
+
+  return (
+    <div className="cfg-section">
+      <div className="section-label">Custom unit counts</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 10px", padding: "6px 14px 12px" }}>
+        {CUSTOM_UNIT_KEYS.map((unit) => (
+          <div key={unit} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <span className="field-label" style={{ fontWeight: 400 }}>{UNIT_LABELS[unit]}</span>
+            <input
+              className="input"
+              type="number"
+              min={0}
+              style={{ width: 72 }}
+              value={parsed[unit] ?? 0}
+              onChange={(e) => updateUnit(unit, parseInt(e.target.value, 10) || 0)}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ─── SettingsTab ─────────────────────────────────────────────────────────── */
+type GenState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "done"; count: number }
+  | { status: "error"; error: string };
+
+function SettingsTab({ vals, set, isLive }: {
+  vals: CfgValues;
+  set: (k: string, v: string | number | boolean) => void;
+  isLive: boolean;
+}) {
+  const [genState, setGenState] = useState<GenState>({ status: "idle" });
+
+  const attackType   = String(vals.attackType   ?? "fake");
+  const targetMode    = String(vals.targetMode   ?? "manual");
+  const executionMode = String(vals.executionMode ?? "sequential");
+
+  const attackTypeF  = SCHEMA.fields.filter((f: FieldDef) => f.key === "attackType");
+  const garrisonF    = SCHEMA.fields.filter((f: FieldDef) => f.key === "garrisonReservePct");
+  const targetModeF  = SCHEMA.fields.filter((f: FieldDef) => f.key === "targetMode");
+  const autoF        = SCHEMA.fields.filter((f: FieldDef) =>
+    ["autoPlayers","autoTribes","autoContinents","autoMinPoints","autoMaxPoints","autoMinX","autoMaxX","autoMinY","autoMaxY"].includes(f.key));
+  const coordsF       = SCHEMA.fields.filter((f: FieldDef) => f.key === "coords");
+  const executionF    = SCHEMA.fields.filter((f: FieldDef) => f.key === "executionMode");
+  const timedF         = SCHEMA.fields.filter((f: FieldDef) => ["timedArrivalMode","timedTargetArrival"].includes(f.key));
+  const timing         = SCHEMA.fields.filter((f: FieldDef) =>
+    ["attackDelay","attackRandom","confirmDelay","confirmRandom","switchDelay","switchRandom"].includes(f.key));
+  const caps           = SCHEMA.fields.filter((f: FieldDef) =>
+    ["attacksPerVillage","maxAttacksPerCoord","multiHitAttacks","multiHitChance"].includes(f.key));
+  const troops         = SCHEMA.fields.filter((f: FieldDef) =>
+    ["maxCatapults","maxRams","maxScouts","maxInfantry","maxCavalry"].includes(f.key));
+  const arrival         = SCHEMA.fields.filter((f: FieldDef) =>
+    ["arrivalStart","arrivalEnd","stopAtEnd"].includes(f.key));
+
+  function generateCoords() {
+    if (!isLive) { setGenState({ status: "error", error: "Open a screen=place tab first." }); return; }
+    sessionStorage.removeItem(SS_GENERATED_COORDS);
+    setGenState({ status: "loading" });
+
+    document.dispatchEvent(new CustomEvent("xbot:attackgen:generateCoords", {
+      detail: {
+        autoPlayers: vals.autoPlayers,
+        autoTribes: vals.autoTribes,
+        autoContinents: vals.autoContinents,
+        autoMinPoints: vals.autoMinPoints,
+        autoMaxPoints: vals.autoMaxPoints,
+        autoMinX: vals.autoMinX,
+        autoMaxX: vals.autoMaxX,
+        autoMinY: vals.autoMinY,
+        autoMaxY: vals.autoMaxY,
+      },
+    }));
+
+    let attempts = 0;
+    const poll = setInterval(() => {
+      attempts++;
+      const raw = sessionStorage.getItem(SS_GENERATED_COORDS);
+      if (raw) {
+        clearInterval(poll);
+        const result = parseSafe<{ coords?: string[]; count?: number; error?: string }>(raw, {});
+        if (result.error) {
+          setGenState({ status: "error", error: result.error });
+        } else {
+          set("coords", (result.coords ?? []).join(" "));
+          setGenState({ status: "done", count: result.count ?? 0 });
+        }
+        return;
+      }
+      if (attempts > 60) {
+        clearInterval(poll);
+        setGenState({ status: "error", error: "Timed out waiting for the page script." });
+      }
+    }, 300);
+  }
 
   return (
     <div className="cfg-body">
+      <SettingsSection label="Attack type" fields={attackTypeF} vals={vals} set={set} />
+      {attackType === "custom" && <CustomUnitsEditor vals={vals} set={set} />}
+      {attackType === "send_all" && (
+        <SettingsSection label="Garrison" fields={garrisonF} vals={vals} set={set} />
+      )}
+
+      <SettingsSection label="Target mode" fields={targetModeF} vals={vals} set={set} />
+      {targetMode === "auto" && (
+        <div className="cfg-section">
+          <div className="section-label">Auto filters</div>
+          {autoF.map((f) => <SettingsField key={f.key} f={f} val={vals[f.key]} set={set} />)}
+          <div style={{ padding: "6px 14px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
+            <button
+              className="btn btn-ghost"
+              onClick={generateCoords}
+              disabled={genState.status === "loading"}
+            >
+              {genState.status === "loading" ? "Generating…" : "Generate coords"}
+            </button>
+            {genState.status === "done" && (
+              <span className="state-msg">Generated {genState.count} coord(s) into Target coords below.</span>
+            )}
+            {genState.status === "error" && (
+              <span className="state-msg" style={{ color: "var(--r500)" }}>{genState.error}</span>
+            )}
+          </div>
+        </div>
+      )}
+      <SettingsSection label="Target coords" fields={coordsF} vals={vals} set={set} />
+
+      <SettingsSection label="Execution mode" fields={executionF} vals={vals} set={set} />
+      {executionMode === "timed" && (
+        <SettingsSection label="Timed landing" fields={timedF} vals={vals} set={set} />
+      )}
+
       <SettingsSection label="Timings" fields={timing} vals={vals} set={set} />
       <SettingsSection label="Caps &amp; Plan" fields={caps} vals={vals} set={set} />
       <SettingsSection label="Troop limits" fields={troops} vals={vals} set={set} />
       <SettingsSection label="Arrival window" fields={arrival} vals={vals} set={set} />
-      <SettingsSection label="Target coords" fields={coordsF} vals={vals} set={set} />
     </div>
   );
 }
@@ -446,7 +567,6 @@ function SettingsSection({ label, fields, vals, set }: {
   const checks = fields.filter((f) => f.type === "checkbox");
   const inputs = fields.filter((f) => f.type !== "checkbox");
 
-  // Render inputs, collapsing paired keys into a single row
   const rendered: React.ReactNode[] = [];
   const consumed = new Set<string>();
   for (const f of inputs) {
@@ -532,6 +652,19 @@ function SettingsField({ f, val, set, inline = false }: {
     </div>
   );
 
+  if (f.type === "select" && f.options) return (
+    <div className="field">
+      <span className="field-label">{f.label}</span>
+      {f.help && <span className="field-help">{f.help}</span>}
+      <select className="input" value={String(v)}
+        onChange={(e) => set(f.key, e.target.value)}>
+        {f.options.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+    </div>
+  );
+
   const isNum = f.type === "number";
   const rangeHint = isNum
     ? [f.min !== undefined && f.max !== undefined ? `${f.min}–${f.max}` : "",
@@ -564,18 +697,17 @@ function SettingsField({ f, val, set, inline = false }: {
   );
 }
 
-/* ─── FakeSenderView — the full panel ────────────────────────────────────── */
-export function FakeSenderView({ visible, onBack }: {
+/* ─── AttackGeneratorView — the full panel ───────────────────────────────── */
+export function AttackGeneratorView({ visible, onBack }: {
   visible: boolean;
   onBack: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("status");
   const anim = useMountAnim(visible);
 
-  const { rt, setPaused, newRun, clearLog } = useFakeRuntime(visible);
-  const { vals, dirty, saved, set, save, reset } = useFakeCfg(visible && tab === "settings");
+  const { rt, start, stop, newRun, clearLog } = useAtkGenRuntime(visible);
+  const { vals, dirty, saved, set, save, reset } = useAtkGenCfg(visible && tab === "settings");
 
-  // Reset to status tab when closed, so it feels fresh on re-open
   useEffect(() => {
     if (!visible) setTab("status");
   }, [visible]);
@@ -587,7 +719,6 @@ export function FakeSenderView({ visible, onBack }: {
       className={`cfg-view${anim ? " in" : ""}`}
       style={{ display: visible ? "flex" : "none" }}
     >
-      {/* ── Header ── */}
       <div className="cfg-header">
         <button className="back-btn" onClick={onBack} aria-label="Back">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -595,29 +726,26 @@ export function FakeSenderView({ visible, onBack }: {
               strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
         </button>
-        <span className="cfg-icon">⚔️</span>
+        <span className="cfg-icon">🗡️</span>
         <div className="cfg-header-text">
-          <span className="cfg-title">Fake Sender</span>
+          <span className="cfg-title">Attack Generator</span>
           <span className="cfg-subtitle">
             {isLive
               ? <><span className="live-pip live-pip--sm" style={{ display: "inline-block", marginRight: 4 }} />LIVE — screen=place</>
-              : "Smart fake automation"
+              : "Flexible attack command generator"
             }
           </span>
         </div>
-        {/* Status dot only relevant in settings tab */}
         {tab === "settings" && (
           <span className="cfg-status-dot"
             data-dirty={String(dirty)} data-saved={String(saved)} />
         )}
-        {/* Paused indicator in status tab */}
-        {tab === "status" && rt.paused && (
-          <span className="fake-badge fake-badge--warn" style={{ fontSize: 10, padding: "2px 6px" }}>PAUSED</span>
+        {tab === "status" && !rt.active && (
+          <span className="fake-badge" style={{ fontSize: 10, padding: "2px 6px" }}>IDLE</span>
         )}
-        <TriggerVisibilityToggle moduleId="fakes" />
+        <TriggerVisibilityToggle moduleId="attack_generator" />
       </div>
 
-      {/* ── Tab bar ── */}
       <div style={{
         display: "flex",
         borderBottom: "1px solid var(--n150)",
@@ -643,26 +771,26 @@ export function FakeSenderView({ visible, onBack }: {
         </TabButton>
       </div>
 
-      {/* ── Tab content ── */}
       {tab === "status" && (
-        <StatusTab rt={rt} setPaused={setPaused} newRun={newRun} clearLog={clearLog} />
+        <StatusTab rt={rt} start={start} stop={stop} newRun={newRun} clearLog={clearLog} />
       )}
       {tab === "settings" && (
-        <SettingsTab vals={vals} set={set} />
+        <SettingsTab vals={vals} set={set} isLive={isLive} />
       )}
 
-      {/* ── Footer — context-sensitive ── */}
       <div className="cfg-footer">
         {tab === "status" ? (
           <>
             <button className="btn btn-ghost" onClick={onBack}>← Back</button>
-            <button
-              className={`btn ${rt.paused ? "btn-save btn-save--dirty" : "btn-ghost"}`}
-              onClick={() => setPaused(!rt.paused)}
-              style={{ flex: 2 }}
-            >
-              {rt.paused ? "▶ Resume" : "⏸ Pause"}
-            </button>
+            {!rt.active ? (
+              <button className="btn btn-save btn-save--dirty" onClick={start} style={{ flex: 2 }}>
+                ▶ Start
+              </button>
+            ) : (
+              <button className="btn btn-ghost" onClick={stop} disabled={rt.paused} style={{ flex: 2 }}>
+                ⏹ Stop
+              </button>
+            )}
           </>
         ) : (
           <>

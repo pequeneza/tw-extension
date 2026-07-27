@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { TriggerVisibilityToggle } from "./TriggerVisibilityToggle";
 
 /* ─── Types ───────────────────────────────────────────────────────────────── */
 interface TwUtilsCfg {
@@ -6,7 +7,6 @@ interface TwUtilsCfg {
   incomingFilter: boolean;
   quickbarCollapse: boolean;
   bulkCancel: boolean;
-  showDrawer: boolean;
   bcDelayMin: number;
   bcDelayMax: number;
 }
@@ -35,7 +35,6 @@ const DEFAULTS: TwUtilsCfg = {
   incomingFilter:  true,
   quickbarCollapse: true,
   bulkCancel:      true,
-  showDrawer:      true,
   bcDelayMin:      100,
   bcDelayMax:      200,
 };
@@ -68,11 +67,10 @@ function storageSet(data: Record<string, unknown>) {
 
 /* ─── TwUtilsView ─────────────────────────────────────────────────────────── */
 export function TwUtilsView({
-  visible, onBack, onShowDrawerChange,
+  visible, onBack,
 }: {
   visible: boolean;
   onBack: () => void;
-  onShowDrawerChange: (v: boolean) => void;
 }) {
   const [cfg, setCfg] = useState<TwUtilsCfg>(DEFAULTS);
   const [template, setTemplate] = useState<AttackTemplate>({});
@@ -140,10 +138,7 @@ export function TwUtilsView({
         document.querySelectorAll(".tw-bc-btn, .tw-bc-counter").forEach(el => el.remove());
       }
     }
-    if (key === "showDrawer") {
-      onShowDrawerChange(next.showDrawer);
-    }
-  }, [cfg, onShowDrawerChange]);
+  }, [cfg]);
 
   const setNumField = useCallback(async (key: keyof TwUtilsCfg, value: number) => {
     const next = { ...cfg, [key]: value };
@@ -167,24 +162,10 @@ export function TwUtilsView({
           <span className="cfg-title">TW Tweaks</span>
           <span className="cfg-subtitle">Activate / deactivate features</span>
         </div>
+        <TriggerVisibilityToggle moduleId="tw_utils" />
       </div>
 
       <div className="cfg-body">
-        <div className="cfg-section cfg-section-checks">
-          <div className="section-label">Overlay</div>
-          <label className="field-check">
-            <span className="field-check-text">
-              <span className="field-label">Show ⚙️ drawer button</span>
-              <span className="field-help">Hide this trigger from the overlay stack to reduce clutter.</span>
-            </span>
-            <span className="toggle" onClick={(e) => e.stopPropagation()}>
-              <input type="checkbox" checked={cfg.showDrawer}
-                onChange={() => toggle("showDrawer")} />
-              <span className="toggle-thumb" />
-            </span>
-          </label>
-        </div>
-
         <div className="cfg-section cfg-section-checks">
           <div className="section-label">Features</div>
           {FEATURES.map(({ key, label, help }) => (

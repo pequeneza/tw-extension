@@ -3,6 +3,7 @@
  * Communicates via CustomEvents (isolated ↔ main world bridge).
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { TriggerVisibilityToggle } from "./TriggerVisibilityToggle";
 
 /* ─── Types ─────────────────────────────────────────────────────────────── */
 interface BalancerSettings {
@@ -1194,6 +1195,7 @@ export function BalancerView({ visible, onBack }: { visible:boolean; onBack:()=>
           </span>
         </div>
         {running && <span className="live-pip" style={{ marginLeft:"auto", marginRight:4 }}/>}
+        <TriggerVisibilityToggle moduleId="wh_balancer" />
       </div>
       <div className="cfg-section" style={{ paddingBottom:0, flexShrink:0 }}>
         <div style={{ display:"flex", gap:3, padding:"8px 14px 0" }}>

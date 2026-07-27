@@ -23,6 +23,27 @@
         return Math.max(0, Math.round(baseMs + (Math.random() * 2 - 1) * spreadMs));
     }
 
+    // ─── Header icons (inline SVG, self-contained — no external CDN) ───────────────
+    // Using `stroke="currentColor"`/`fill="currentColor"` means each icon inherits the
+    // colour of its own <a>, which is set inline from the active theme's textColor — so
+    // these automatically match whichever of the 10 themes the user has picked, unlike the
+    // old icons8.com PNGs which were always tinted the same regardless of theme.
+    //
+    // Declared up here (not just before createMainInterface, where they're used) because
+    // waitForJquery's poll can call buildUI()/createMainInterface() SYNCHRONOUSLY on its very
+    // first check if jQuery is already loaded on the page (the common case) — i.e. before the
+    // script has finished its own top-to-bottom pass. `var` only hoists the name, not the
+    // assigned value, so declaring these below that point meant they briefly read as `undefined`
+    // and got concatenated into the header HTML as the literal string "undefined".
+    var ICON_CLOSE =
+        '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+    var ICON_MINIMIZE =
+        '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 12h14"/></svg>';
+    var ICON_THEME = // "adjustments" glyph — opens the theme/appearance settings panel
+        '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="6" x2="20" y2="6" stroke-linecap="round"/><circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="12" x2="20" y2="12" stroke-linecap="round"/><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="18" x2="20" y2="18" stroke-linecap="round"/><circle cx="7" cy="18" r="2" fill="currentColor" stroke="none"/></svg>';
+    var ICON_DOCK = // map-pin glyph — toggles docked (pinned into page flow) vs floating
+        '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 21s7-7.5 7-12a7 7 0 10-14 0c0 4.5 7 12 7 12z"/><circle cx="12" cy="9" r="2.4"/></svg>';
+
     // ─── Page detection via URLSearchParams (order-independent) ────────────────
     const _p        = new URLSearchParams(location.search);
     const isMassPage = _p.get('screen') === 'place' && _p.get('mode') === 'call' && !_p.get('try');
@@ -33,6 +54,7 @@
     // ─── Storage keys (world-scoped) ────────────────────────────────────────────
     const W              = game_data.world;
     const BATCH_KEY      = W + '_mapoios_batch_v1';
+    const STOP_KEY       = W + '_mapoios_stop_v1';
     const TEMPLATES_KEY  = W + '_mapoios_templates_v1';
     const SETTINGS_KEY   = W + 'support_sender_settings2';
     const THEME_KEY      = 'supportSenderTheme';
@@ -53,11 +75,32 @@
 
     // ─── Batch helpers ───────────────────────────────────────────────────────────
     function getBatch()   { try { return JSON.parse(localStorage.getItem(BATCH_KEY) || 'null'); } catch { return null; } }
+    function isStopRequested() { return localStorage.getItem(STOP_KEY) === '1'; }
     // Every persist stamps lastActivity — this is how runBatchHandler tells an actively
     // progressing batch (a few seconds between stamps) from an abandoned one (tab closed,
     // crash, browser restart) that happens to still have running:true sitting in storage.
-    function setBatch(b)  { if (b) b.lastActivity = Date.now(); localStorage.setItem(BATCH_KEY, JSON.stringify(b)); }
-    function clearBatch() { localStorage.removeItem(BATCH_KEY); removeEmergencyStopBanner(); }
+    //
+    // setBatch is called from many nested async callbacks (autocomplete polls, page-advance
+    // polls, submit timeouts...). Stopping a batch used to mean flipping running:false — but
+    // whichever of those callbacks was already in flight at that moment was holding its OWN
+    // stale copy of the batch object (still running:true), and its next setBatch() call wrote
+    // that stale copy straight back over the stop, silently resurrecting the batch (reproduced
+    // live: it kept sending for another cycle after being "stopped"). STOP_KEY is a separate
+    // flag nothing can accidentally overwrite this way — every persist checks it and refuses to
+    // write running:true once a stop has been requested, no matter how stale the caller's copy
+    // of the batch object is.
+    function setBatch(b) {
+        if (b) {
+            b.lastActivity = Date.now();
+            if (b.running && isStopRequested()) b.running = false;
+        }
+        localStorage.setItem(BATCH_KEY, JSON.stringify(b));
+    }
+    function clearBatch() {
+        localStorage.setItem(STOP_KEY, '1'); // veto first, so no in-flight write can resurrect it
+        localStorage.removeItem(BATCH_KEY);
+        removeEmergencyStopBanner();
+    }
 
     // Abandoned-batch cutoff: normal cycle time between persists is well under 5s (autocomplete
     // poll maxes at 4s, fill/submit delays are ~1.5-2.4s). 90s of silence means whatever last
@@ -76,7 +119,7 @@
             el.addEventListener('click', function () { clearBatch(); });
             document.body.appendChild(el);
         }
-        el.textContent = '⛔ Lote xBot em execução (alvo ' + (batch.index + 1) + '/' + batch.targets.length + ') — clica para PARAR';
+        el.textContent = '⛔ xBot em execução (alvo ' + (batch.index + 1) + '/' + batch.targets.length + ') — clica para PARAR';
     }
     function removeEmergencyStopBanner() {
         var el = document.getElementById('mapoios_estop');
@@ -152,6 +195,11 @@
         var batch = getBatch();
         if (!batch || !batch.running) return;
 
+        // Belt-and-braces alongside the STOP_KEY veto in setBatch: a fresh page load is the one
+        // place we're guaranteed nothing else is mid-flight, so also just refuse outright to
+        // schedule anything if a stop is on record, regardless of what running says.
+        if (isStopRequested()) { batch.running = false; setBatch(batch); return; }
+
         // Refuse to silently resume a batch nobody has touched in a while — this is what
         // used to make the script start sending the moment this screen was opened for an
         // unrelated reason, with a leftover batch from a session that was never cleanly
@@ -165,11 +213,15 @@
 
         showEmergencyStopBanner(batch);
 
-        if (batch.state === 'filling') {
+        if (batch.state === 'filling' && !batch.needNextPage) {
             // Target was selected; fill troops and send
             setTimeout(function () { autoFillAndSend(batch); }, jitter(2000, 400));
         } else {
-            // Need to select the next target via autocomplete
+            // Need to (re)select the target — either starting fresh, or resuming a target whose
+            // previous partial send (not enough troops on that page) reset target selection and
+            // pagination on reload. Either way autoFillAndSend picks the right page back up via
+            // batch.pageAttempts once the target is selected again.
+            batch.needNextPage = false;
             setTimeout(function () { navigateToTarget(batch.targets[batch.index], batch.group, batch); }, jitter(800, 200));
         }
     })();
@@ -275,12 +327,82 @@
     function _urlNavigate(coord, group, batch) {
         if (batch) { batch.state = 'filling'; setBatch(batch); }
         var myVid = game_data.village.id;
+        // Forward sitter mode (?t=<id>) the same way kumin_gluer.user.js does — without this,
+        // a sitter-managed batch run would drop back into the sitter's own account context on
+        // this navigation instead of staying on the managed account.
+        var sitterId = _p.get('t');
+        var page     = batch && batch.page;
+        // Forwarded the same way as page/group below — the "Distância" column header toggles
+        // this between nearest-first (dir=1) and furthest-first (dir=0), and it needs to be
+        // resent on every navigation or it silently reverts, same as the page/group bugs before.
+        var dir      = (batch && batch.dir) || '1';
         location.href = '/game.php?village=' + myVid +
-            '&screen=place&order=distance&dir=1' +
+            '&screen=place&order=distance&dir=' + encodeURIComponent(dir) +
             '&target=' + encodeURIComponent(coord) +
             '&mode=call' +
-            (group ? '&group=' + encodeURIComponent(group) : '');
+            (group ? '&group=' + encodeURIComponent(group) : '') +
+            (page ? '&page=' + encodeURIComponent(page) : '') +
+            (sitterId ? '&t=' + encodeURIComponent(sitterId) : '');
     }
+
+    // Forcing the group via the URL's &group= param does NOT reliably scope which villages TW
+    // actually fills from — confirmed live: the group-menu link can show the intended group
+    // highlighted while #village_troup_list is still populated from an unrelated, unfiltered
+    // village set (and things like the page-size form's plain POST silently reset it back to
+    // "todos" too). The selected group renders as <strong class="group-menu-item" data-group-id=
+    // "X">, everything else as a clickable <a class="group-menu-item" data-group-id="Y">. Clicking
+    // the real element is what actually drives TribalWars' own client-side filtering, so that's
+    // asserted immediately before every fill instead of trusting the URL.
+    function ensureGroupSelected(groupId, cb) {
+        if (!groupId) { cb(); return; }
+        if (document.querySelector('strong.group-menu-item[data-group-id="' + groupId + '"]')) { cb(); return; }
+        var link = document.querySelector('a.group-menu-item[data-group-id="' + groupId + '"]');
+        if (!link) { cb(); return; } // group not present on this page — proceed as-is
+        link.click();
+        var waited = 0, maxWait = 4000, pollMs = 150;
+        var poll = setInterval(function () {
+            waited += pollMs;
+            if (document.querySelector('strong.group-menu-item[data-group-id="' + groupId + '"]') || waited >= maxWait) {
+                clearInterval(poll);
+                cb();
+            }
+        }, pollMs);
+    }
+
+    // TribalWars' own village-list pagination widget: current page is a <strong class=
+    // "paged-nav-item">, other pages are <a class="paged-nav-item"> siblings immediately
+    // following it. Clicks to the next one and waits for the table body to actually change
+    // (AJAX-driven, no page reload). cb(false) when there's no further page.
+    function goToNextPage(cb) {
+        var current = document.querySelector('strong.paged-nav-item');
+        var next = current ? current.nextElementSibling : null;
+        if (!next || next.tagName !== 'A' || !next.classList.contains('paged-nav-item')) { cb(false); return; }
+        var tbody = document.querySelector('#village_troup_list tbody');
+        var before = tbody ? tbody.innerHTML.slice(0, 200) : '';
+        next.click();
+        var waited = 0, maxWait = 4000, pollMs = 150;
+        var poll = setInterval(function () {
+            waited += pollMs;
+            var nowTbody = document.querySelector('#village_troup_list tbody');
+            var now = nowTbody ? nowTbody.innerHTML.slice(0, 200) : '';
+            if (now !== before || waited >= maxWait) {
+                clearInterval(poll);
+                cb(now !== before);
+            }
+        }, pollMs);
+    }
+
+    // Re-selecting a target (and re-asserting the group) resets pagination back to page 1, so
+    // resuming a target that's N pages deep means clicking forward N times first.
+    function advancePages(n, cb) {
+        if (n <= 0) { cb(true); return; }
+        goToNextPage(function (ok) {
+            if (!ok) { cb(false); return; }
+            advancePages(n - 1, cb);
+        });
+    }
+
+    var MAX_PAGE_ATTEMPTS = 50; // defensive cap against a misbehaving pagination widget
 
     function autoFillAndSend(batch) {
         var tpl = batch.template;
@@ -289,6 +411,42 @@
             return;
         }
 
+        ensureGroupSelected(batch.group, function () {
+            // "remaining" tracks what's still owed to THIS target across possibly multiple
+            // pages/sends — only (re)initialized when starting a fresh target, never when just
+            // resuming one that's still short after a prior partial send.
+            if (!batch.remaining) {
+                batch.remaining = {};
+                Object.keys(tpl).forEach(function (unit) {
+                    batch.remaining[unit] = Math.round((parseFloat(tpl[unit]) || 0) * 1000); // k → actual count
+                });
+                // Every target uses the same template, so a page that had none of the needed
+                // units for a PREVIOUS target will have none for this one either — no point
+                // re-scanning pages already proven empty this run. batch.pageFloor is the
+                // deepest page any target has had to reach so far (persists for the whole
+                // batch, unlike pageAttempts which is per-target); start each new target there
+                // instead of back at page 1.
+                batch.pageAttempts = batch.pageFloor || 0;
+            }
+            // Re-selecting the target (and re-asserting the group above) resets pagination back
+            // to page 1, so get back to wherever this target's fill had reached first.
+            advancePages(batch.pageAttempts || 0, function (reachedPage) {
+                if (!reachedPage) {
+                    finalizeTargetIncomplete(batch, 'página anterior já não existe');
+                    return;
+                }
+                fillCurrentPageAndSend(batch);
+            });
+        });
+    }
+
+    // Fills whatever's still owed to the current target (batch.remaining) from the CURRENTLY
+    // rendered page of #village_troup_list, then either submits (fully or partially satisfied)
+    // or — if this page had nothing usable at all — tries the next page of the same group before
+    // giving up on the target.
+    function fillCurrentPageAndSend(batch) {
+        var remaining = batch.remaining;
+
         // Select all villages
         var selectAll = document.getElementById('place_call_select_all');
         if (selectAll && !selectAll.checked) selectAll.click();
@@ -296,40 +454,48 @@
         // Zero all visible unit inputs
         document.querySelectorAll('#village_troup_list input[type=number]').forEach(function (i) { i.value = 0; });
 
-        // Apply template to the destination as a whole: each template value is the TOTAL
-        // troop count wanted at the target (k → actual count), not a per-village amount.
-        // Rows are in the page's distance-to-target order, so we consume the nearest
-        // villages' availability first until the requested total is met.
-        var remaining = {};
-        Object.keys(tpl).forEach(function (unit) {
-            remaining[unit] = Math.round((parseFloat(tpl[unit]) || 0) * 1000); // k → actual count
-        });
+        // Rows are in the page's distance-to-target order (nearest-first or furthest-first,
+        // whichever the user had active via the "Distância" column and batch.dir preserves —
+        // see _urlNavigate), so that direction's villages are consumed first, top to bottom,
+        // until whatever's still owed for this target is met.
+        var takenThisPage = {};
+        Object.keys(remaining).forEach(function (u) { takenThisPage[u] = 0; });
         document.querySelectorAll('#village_troup_list tbody tr').forEach(function (row) {
-            Object.keys(tpl).forEach(function (unit) {
-                if (!remaining[unit]) return;
+            Object.keys(remaining).forEach(function (unit) {
+                var stillOwed = remaining[unit] - takenThisPage[unit];
+                if (stillOwed <= 0) return;
                 var input = row.querySelector('.call-unit-box-' + unit);
                 if (!input) return;
                 var availEl = row.querySelector("[data-unit='" + unit + "']");
                 // Strip non-digit chars: TW PT uses '.' as thousands sep ("1.000" → 1000)
                 var avail = availEl ? (parseInt(availEl.textContent.replace(/\D/g, ''), 10) || 0) : 0;
-                var take = Math.min(remaining[unit], avail);
+                var take = Math.min(stillOwed, avail);
                 input.value = take;
-                remaining[unit] -= take;
+                takenThisPage[unit] += take;
             });
         });
 
-        // Collect actual filled amounts (capped by availability) across all village rows
-        var sentTotals = {};
-        document.querySelectorAll('#village_troup_list tbody tr').forEach(function (row) {
-            Object.keys(tpl).forEach(function (unit) {
-                var input = row.querySelector('.call-unit-box-' + unit);
-                if (input) sentTotals[unit] = (sentTotals[unit] || 0) + (parseInt(input.value, 10) || 0);
+        var totalTakenThisPage = Object.keys(takenThisPage).reduce(function (s, u) { return s + takenThisPage[u]; }, 0);
+
+        if (totalTakenThisPage === 0) {
+            // Nothing usable on this page — try the next page of the same group before treating
+            // the target as unfulfillable. This is what lets a group spread across several pages
+            // (page size) still fully support a target instead of silently under-filling it.
+            if ((batch.pageAttempts || 0) >= MAX_PAGE_ATTEMPTS) {
+                finalizeTargetIncomplete(batch, 'limite de páginas atingido');
+                return;
+            }
+            goToNextPage(function (hasNext) {
+                if (!hasNext) { finalizeTargetIncomplete(batch, 'sem tropas disponíveis em nenhuma página'); return; }
+                batch.pageAttempts = (batch.pageAttempts || 0) + 1;
+                // Confirmed this page is empty this run — raise the floor so the NEXT target
+                // starts here too instead of re-scanning known-empty pages from page 1.
+                batch.pageFloor = Math.max(batch.pageFloor || 0, batch.pageAttempts);
+                setBatch(batch);
+                setTimeout(function () { fillCurrentPageAndSend(batch); }, jitter(600, 150));
             });
-        });
-        var sentStr = Object.keys(sentTotals)
-            .filter(function (u) { return sentTotals[u] > 0; })
-            .map(function (u) { return u + ':' + sentTotals[u].toLocaleString(); })
-            .join(' | ');
+            return;
+        }
 
         // Find and click the send/submit button
         setTimeout(function () {
@@ -337,26 +503,22 @@
             var fb = getBatch();
             if (!fb || !fb.running || fb.state !== 'filling') return;
 
-            var totalSentThisTarget = Object.keys(sentTotals).reduce(function (sum, u) { return sum + sentTotals[u]; }, 0);
-            if (totalSentThisTarget === 0) {
-                // Nothing was actually available to send (e.g. the unit ran out across all
-                // villages). Submitting would create an empty order, so skip it instead of
-                // falsely logging this target as sent.
-                logBatch('[' + (fb.index + 1) + '/' + fb.targets.length + '] ' + (fb.targets[fb.index] || '') + ' → SEM TROPAS DISPONÍVEIS, ignorado', fb);
-                fb.index++;
-                if (fb.index >= fb.targets.length) {
-                    fb.running  = false;
-                    fb.finished = true;
-                    setBatch(fb);
-                    updateBatchUI(fb);
-                } else {
-                    fb.state = 'selecting';
-                    setBatch(fb);
-                    updateBatchUI(fb);
-                    navigateToTarget(fb.targets[fb.index], fb.group, fb);
-                }
-                return;
-            }
+            var newRemaining = {};
+            var stillNeeded = false;
+            Object.keys(remaining).forEach(function (u) {
+                newRemaining[u] = Math.max(0, remaining[u] - (takenThisPage[u] || 0));
+                if (newRemaining[u] > 0) stillNeeded = true;
+            });
+
+            var sentStr = Object.keys(takenThisPage)
+                .filter(function (u) { return takenThisPage[u] > 0; })
+                .map(function (u) { return u + ':' + takenThisPage[u].toLocaleString(); })
+                .join(' | ');
+
+            if (!fb.totalSent) fb.totalSent = {};
+            Object.keys(takenThisPage).forEach(function (u) {
+                fb.totalSent[u] = (fb.totalSent[u] || 0) + takenThisPage[u];
+            });
 
             var submitBtn = (
                 document.getElementById('place_call_form_submit') ||
@@ -366,14 +528,25 @@
                 Array.from(document.querySelectorAll('input[type=submit], button[type=submit]'))
                     .find(function (b) { return b.offsetParent !== null; })
             );
-            if (submitBtn) {
-                // Advance index BEFORE clicking — submit causes a page reload
-                logBatch('[' + (fb.index + 1) + '/' + fb.targets.length + '] ' + (fb.targets[fb.index] || '') + (sentStr ? ' → ' + sentStr : ''), fb);
-                // Accumulate grand total
-                if (!fb.totalSent) fb.totalSent = {};
-                Object.keys(sentTotals).forEach(function (u) {
-                    fb.totalSent[u] = (fb.totalSent[u] || 0) + sentTotals[u];
-                });
+            if (!submitBtn) {
+                showBatchNotice('Batch: tropas preenchidas — clica Enviar manualmente (' + (fb.index + 1) + '/' + fb.targets.length + ')');
+                return;
+            }
+
+            if (stillNeeded) {
+                // Partial send from this page — persist progress and come back for more on the
+                // next reload (runBatchHandler sees needNextPage and resumes this same target)
+                // instead of moving on to the next one.
+                logBatch('[' + (fb.index + 1) + '/' + fb.targets.length + '] ' + (fb.targets[fb.index] || '') + ' → ' + sentStr + ' (parcial, página ' + ((fb.pageAttempts || 0) + 1) + ', continua)', fb);
+                fb.remaining = newRemaining;
+                fb.pageAttempts = batch.pageAttempts || 0;
+                fb.needNextPage = true;
+                fb.state = 'filling';
+            } else {
+                logBatch('[' + (fb.index + 1) + '/' + fb.targets.length + '] ' + (fb.targets[fb.index] || '') + ' → ' + sentStr + ' (completo)', fb);
+                fb.remaining = null;
+                fb.pageAttempts = 0;
+                fb.needNextPage = false;
                 fb.index++;
                 if (fb.index >= fb.targets.length) {
                     fb.running  = false;
@@ -381,12 +554,39 @@
                 } else {
                     fb.state = 'selecting';
                 }
-                setBatch(fb);
-                submitBtn.click();
-            } else {
-                showBatchNotice('Batch: tropas preenchidas — clica Enviar manualmente (' + (fb.index + 1) + '/' + fb.targets.length + ')');
             }
+            setBatch(fb);
+            updateBatchUI(fb);
+            submitBtn.click();
         }, jitter(1500, 300));
+    }
+
+    // Gives up on fully satisfying the current target (no more pages / villages to pull from)
+    // and logs exactly what's still short before moving on to the next target.
+    function finalizeTargetIncomplete(batch, reason) {
+        var fb = getBatch();
+        if (!fb || !fb.running) return;
+        var shortfall = Object.keys(fb.remaining || batch.remaining || {})
+            .map(function (u) { return { u: u, v: (fb.remaining || batch.remaining)[u] }; })
+            .filter(function (e) { return e.v > 0; })
+            .map(function (e) { return e.u + ':' + e.v.toLocaleString(); })
+            .join(' | ');
+        logBatch('[' + (fb.index + 1) + '/' + fb.targets.length + '] ' + (fb.targets[fb.index] || '') + ' → INCOMPLETO (faltam ' + (shortfall || '—') + '; ' + reason + ')', fb);
+        fb.remaining = null;
+        fb.pageAttempts = 0;
+        fb.needNextPage = false;
+        fb.index++;
+        if (fb.index >= fb.targets.length) {
+            fb.running = false;
+            fb.finished = true;
+            setBatch(fb);
+            updateBatchUI(fb);
+        } else {
+            fb.state = 'selecting';
+            setBatch(fb);
+            updateBatchUI(fb);
+            navigateToTarget(fb.targets[fb.index], fb.group, fb);
+        }
     }
 
     function showBatchNotice(msg) {
@@ -445,6 +645,15 @@
             '.mapoios-wrap.mapoios-docked{position:static;top:auto;left:auto;width:100%;min-width:0;box-shadow:none;margin:8px 0;}',
             '.mapoios-header{padding:8px 10px;position:relative;border-radius:5px 5px 0 0;cursor:move;text-align:center;}',
             '.mapoios-header h2{margin:2px 0;font-size:15px;}',
+            // Single flex row for all header icon-buttons, replacing four individually
+            // hand-tuned `right:Npx` offsets — adding/removing an icon no longer requires
+            // re-measuring every sibling's position.
+            '.mapoios-header-actions{position:absolute;top:6px;right:8px;display:flex;align-items:center;gap:3px;}',
+            '.mapoios-icon-btn{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:4px;text-decoration:none;cursor:pointer;}',
+            '.mapoios-icon-btn:hover{background:rgba(255,255,255,.18);}',
+            // Outline uses currentColor so it matches each button's own (theme-driven) icon
+            // colour instead of needing a separate theme-aware rule here.
+            '.mapoios-icon-btn:focus-visible{outline:1px solid currentColor;outline-offset:1px;}',
             '.mapoios-body{}',
             '.mapoios-tabs{display:flex;padding:4px 6px 0;gap:2px;}',
             '.mapoios-tab-btn{cursor:pointer;padding:5px 10px;border:none;border-radius:3px 3px 0 0;font-size:11px;opacity:.75;}',
@@ -457,6 +666,12 @@
             '.scriptInput{padding:2px 4px;border-radius:3px;font-size:11px;width:55px;}',
             '.fm_unit{text-align:center;padding:2px;}',
             '.hideMobile{}',
+            // Shared labelled-control pattern used by Modelos/Envio em Lote (small caption
+            // above its input), so those two tabs read as one consistent form language instead
+            // of ad-hoc inline "Label: <input>" pairs with no visual hierarchy.
+            '.mapoios-field-row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin:6px 0;}',
+            '.mapoios-field{display:flex;flex-direction:column;gap:2px;}',
+            '.mapoios-field>span{font-size:10px;text-transform:uppercase;letter-spacing:.03em;opacity:.7;}',
             /* chip input */
             '.chip-input-wrap{display:flex;flex-wrap:wrap;align-items:center;gap:4px;padding:4px;border-radius:4px;min-height:30px;cursor:text;}',
             '.chip{display:inline-flex;align-items:center;gap:2px;padding:2px 6px;border-radius:10px;font-size:11px;}',
@@ -568,10 +783,12 @@
             // Header
             '<div class="mapoios-header" style="background:' + backgroundHeader + '">' +
             '<h2 style="color:' + textColor + '">Support Sender</h2>' +
-            '<div style="position:absolute;top:10px;right:10px"><a id="btn_close_panel" href="#"><img src="https://img.icons8.com/emoji/24/000000/cross-mark-button-emoji.png"/></a></div>' +
-            '<div style="position:absolute;top:8px;right:35px" id="div_minimize"><a href="#"><img src="https://img.icons8.com/plasticine/28/000000/minimize-window.png"/></a></div>' +
-            '<div style="position:absolute;top:10px;right:60px"><a id="btn_toggle_theme" href="#"><img src="https://img.icons8.com/material-sharp/24/fa314a/change-theme.png"/></a></div>' +
-            '<div style="position:absolute;top:10px;right:85px" title="Fixar / Flutuar"><a id="btn_toggle_dock" href="#" style="font-size:16px;text-decoration:none;line-height:1">📌</a></div>' +
+            '<div class="mapoios-header-actions">' +
+            '<a id="btn_toggle_dock" href="#" class="mapoios-icon-btn" style="color:' + textColor + '" title="Fixar / Flutuar" aria-label="Alternar entre painel fixo e flutuante">' + ICON_DOCK + '</a>' +
+            '<a id="btn_toggle_theme" href="#" class="mapoios-icon-btn" style="color:' + textColor + '" title="Tema" aria-label="Abrir definições de tema e tamanho">' + ICON_THEME + '</a>' +
+            '<a id="div_minimize" href="#" class="mapoios-icon-btn" style="color:' + textColor + '" title="Minimizar / Expandir" aria-label="Minimizar ou expandir o painel">' + ICON_MINIMIZE + '</a>' +
+            '<a id="btn_close_panel" href="#" class="mapoios-icon-btn" style="color:' + textColor + '" title="Fechar" aria-label="Fechar o painel">' + ICON_CLOSE + '</a>' +
+            '</div>' +
             '</div>' +
             '<div id="theme_settings" style="background:' + backgroundMainTable + '"></div>' +
             '<div id="mapoios-body">' +
@@ -596,14 +813,14 @@
             '<tr><td style="color:' + textColor + '">Reserva</td>' + inputRowCells('Reserve', 'reserveTroops', 'number') +
             '<td><input id="packets_reserve" value="0" type="text" class="scriptInput" disabled style="width:48px"> <span class="hideMobile" style="color:' + textColor + '">k</span></td></tr>' +
             '<tr id="tr_pop_toggle_row"><td colspan="' + (dispUnits.length + 2) + '" style="text-align:center;padding:2px">' +
-            '<button id="btn_toggle_pop" style="font-size:10px;padding:2px 8px;background:' + backgroundContainer + ';color:' + textColor + ';border:1px solid ' + borderColor + ';border-radius:3px;cursor:pointer">⚙ Pesos de Pop</button>' +
+            '<button id="btn_toggle_pop" title="Mostra/oculta o peso de população de cada unidade, usado para calcular o total de Pop" style="font-size:10px;padding:2px 8px;background:' + backgroundContainer + ';color:' + textColor + ';border:1px solid ' + borderColor + ';border-radius:3px;cursor:pointer">⚙ Pesos de Pop</button>' +
             '</td></tr>' +
             '<tr id="tr_pop_weights" style="display:none;background:' + backgroundInnerTable + '">' +
             '<td style="color:' + textColor + ';font-size:10px">Pop/unid</td>' +
             dispUnits.map(function (u) {
                 return '<td align="center"><input id="pop_w_' + u + '" type="number" step="any" min="0" value="0" class="scriptInput" style="width:40px;background:' + backgroundInput + ';color:' + textColor + ';border:1px solid ' + borderColor + '"></td>';
             }).join('') +
-            '<td><button id="btn_save_pop" style="font-size:10px;padding:2px 6px;background:' + backgroundContainer + ';color:' + textColor + ';border:1px solid ' + borderColor + ';border-radius:3px;cursor:pointer">✓</button></td>' +
+            '<td><button id="btn_save_pop" title="Guardar pesos de Pop" aria-label="Guardar pesos de Pop" style="font-size:10px;padding:2px 6px;background:' + backgroundContainer + ';color:' + textColor + ';border:1px solid ' + borderColor + ';border-radius:3px;cursor:pointer">✓</button></td>' +
             '</tr>' +
             '<tr>' +
             '<td colspan="1"><center><span style="color:' + textColor + '">Sigilia:</span><input type="number" id="flag_boost" class="scriptInput" min="0" max="100" value="0" style="width:40px;text-align:center"></center></td>' +
@@ -614,60 +831,63 @@
             '</div></td>' +
             '</tr>' +
             '<tr><td colspan="' + rowsButtons + '" align="center">' +
-            '<button class="btn evt-confirm-btn btn-confirm-yes" id="btn_fill_inputs">Preencher</button> ' +
-            '<button class="btn evt-confirm-btn btn-confirm-yes" id="btn_calculate">Calcular</button>' +
+            '<button class="btn evt-confirm-btn btn-confirm-yes" id="btn_fill_inputs" title="Distribui as tropas da linha Enviar pelas aldeias selecionadas">Preencher</button> ' +
+            '<button class="btn evt-confirm-btn btn-confirm-yes" id="btn_calculate" title="Recalcula os totais de tropas disponíveis e o total de Pop">Calcular</button>' +
             '</td></tr>' +
             '</table></div>' +
 
             // ── Tab 2: Templates ───────────────────────────────────────────────
             '<div id="tab_templates" class="mapoios-panel" style="background:' + backgroundMainTable + ';color:' + textColor + ';padding:8px">' +
-            '<p style="margin:0 0 6px;font-size:11px">Guarda a linha de <b>envio</b> como modelo com nome.</p>' +
-            '<div style="display:flex;gap:4px;align-items:center;margin-bottom:6px">' +
-            '<input type="text" id="tmpl_name" class="scriptInput" placeholder="Nome do modelo" style="width:110px;flex:none;background:' + backgroundInput + ';color:' + textColor + ';border:1px solid ' + borderColor + '">' +
-            '<button class="btn evt-confirm-btn btn-confirm-yes" id="btn_save_tmpl">Guardar</button>' +
+            '<p style="margin:0 0 8px;font-size:11px;opacity:.85">Guarda a linha <b>Enviar</b> da aba Tropas como modelo com nome, para reutilizar no Envio em Lote.</p>' +
+            '<div class="mapoios-field-row">' +
+            '<label class="mapoios-field"><span style="color:' + textColor + '">Nome do modelo</span><input type="text" id="tmpl_name" class="scriptInput" placeholder="ex: apoio-padrão" style="width:130px;background:' + backgroundInput + ';color:' + textColor + ';border:1px solid ' + borderColor + '"></label>' +
+            '<button class="btn evt-confirm-btn btn-confirm-yes" id="btn_save_tmpl" title="Guarda a linha Enviar atual com este nome">Guardar</button>' +
             '</div>' +
-            '<div style="display:flex;gap:4px;align-items:center;margin-bottom:6px">' +
-            '<select id="tmpl_select" class="scriptInput" style="width:130px;flex:none;background:' + backgroundInput + ';color:' + textColor + ';border:1px solid ' + borderColor + '"><option value="">— selecionar —</option></select>' +
-            '<button class="btn evt-confirm-btn btn-confirm-yes" id="btn_load_tmpl">Carregar</button>' +
-            '<button id="btn_del_tmpl" style="background:#833;color:#fff;border:none;border-radius:3px;padding:3px 8px;cursor:pointer;font-size:11px">Eliminar</button>' +
+            '<div class="mapoios-field-row">' +
+            '<label class="mapoios-field"><span style="color:' + textColor + '">Modelos guardados</span><select id="tmpl_select" class="scriptInput" style="width:140px;background:' + backgroundInput + ';color:' + textColor + ';border:1px solid ' + borderColor + '"><option value="">— selecionar —</option></select></label>' +
+            '<button class="btn evt-confirm-btn btn-confirm-yes" id="btn_load_tmpl" title="Aplica este modelo à linha Enviar">Carregar</button>' +
+            '<button id="btn_del_tmpl" style="background:#833;color:#fff;border:none;border-radius:3px;padding:3px 8px;cursor:pointer;font-size:11px" title="Elimina este modelo permanentemente">Eliminar</button>' +
             '</div>' +
             '<div id="tmpl_preview" class="tmpl-preview" style="background:' + backgroundContainer + ';border:1px solid ' + borderColor + '"></div>' +
             '</div>' +
 
             // ── Tab 3: Batch Send ──────────────────────────────────────────────
             '<div id="tab_batch" class="mapoios-panel" style="background:' + backgroundMainTable + ';color:' + textColor + ';padding:8px">' +
-            '<p style="margin:0 0 4px;font-size:11px">Insere coordenadas alvo (escreve → Enter). O script preenche e envia cada uma.</p>' +
+            '<p style="margin:0 0 6px;font-size:11px;opacity:.85">Adiciona coordenadas alvo (escreve "123|456" → Enter). O xBot navega até cada uma, preenche as tropas do modelo escolhido e envia.</p>' +
             // Chip coord input
             '<div id="batch_chips" class="chip-input-wrap" style="background:' + backgroundInput + ';border:1px solid ' + borderColor + ';border-radius:4px"></div>' +
-            // Group + template + delay row
-            '<div style="display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap">' +
-            '<span style="font-size:11px">ID do Grupo:</span>' +
-            '<input type="text" id="batch_group" class="scriptInput" placeholder="72789" style="width:70px;background:' + backgroundInput + ';color:' + textColor + ';border:1px solid ' + borderColor + '">' +
-            '<span style="font-size:11px">Modelo:</span>' +
-            '<select id="batch_tmpl" class="scriptInput" style="width:110px;background:' + backgroundInput + ';color:' + textColor + ';border:1px solid ' + borderColor + '"><option value="__send_row__">— usar linha de envio —</option></select>' +
-            '<span style="font-size:11px">Pausa (s):</span>' +
-            '<input type="number" id="batch_delay" class="scriptInput" value="3" min="1" max="30" style="width:50px;background:' + backgroundInput + ';color:' + textColor + ';border:1px solid ' + borderColor + '">' +
+            // Group + template + delay row — group is a live dropdown of the page's own TW
+            // groups (populated in initBatchTab via populateGroupSelect), not a free-typed ID.
+            '<div class="mapoios-field-row">' +
+            '<label class="mapoios-field"><span style="color:' + textColor + '">Grupo</span><select id="batch_group" class="scriptInput" title="Filtra as aldeias de apoio por grupo — muda o filtro na página imediatamente" style="width:130px;background:' + backgroundInput + ';color:' + textColor + ';border:1px solid ' + borderColor + '"><option value="">— Todos —</option></select></label>' +
+            '<label class="mapoios-field"><span style="color:' + textColor + '">Modelo</span><select id="batch_tmpl" class="scriptInput" style="width:130px;background:' + backgroundInput + ';color:' + textColor + ';border:1px solid ' + borderColor + '"><option value="__send_row__">— usar linha de envio —</option></select></label>' +
+            '<label class="mapoios-field"><span style="color:' + textColor + '">Pausa (s)</span><input type="number" id="batch_delay" class="scriptInput" value="3" min="1" max="30" style="width:55px;background:' + backgroundInput + ';color:' + textColor + ';border:1px solid ' + borderColor + '"></label>' +
             '</div>' +
             // Shows the resolved troop amounts this batch will actually send — templates are
             // frozen at save time, so editing the Tropas tab afterwards does NOT change them.
             '<div id="batch_tmpl_preview" class="tmpl-preview" style="background:' + backgroundContainer + ';border:1px solid ' + borderColor + '"></div>' +
             // Buttons
-            '<div style="display:flex;gap:6px;align-items:center;margin-top:6px">' +
-            '<button class="btn evt-confirm-btn btn-confirm-yes" id="btn_start_batch">&#9654; Iniciar</button>' +
-            '<button id="btn_stop_batch" style="display:none;background:#833;color:#fff;border:none;border-radius:3px;padding:4px 10px;cursor:pointer;font-size:11px">&#9632; Parar</button>' +
+            '<div class="mapoios-field-row" style="align-items:center;margin-top:6px">' +
+            '<button class="btn evt-confirm-btn btn-confirm-yes" id="btn_start_batch" title="Inicia o envio automático para todos os alvos listados acima">&#9654; Iniciar</button>' +
+            '<button id="btn_stop_batch" style="display:none;background:#833;color:#fff;border:none;border-radius:3px;padding:4px 10px;cursor:pointer;font-size:11px" title="Para o lote em execução">&#9632; Parar</button>' +
             '<span id="batch_progress" class="batch-progress" style="background:' + backgroundContainer + ';color:' + textColor + '"></span>' +
             '</div>' +
-            '<div id="batch_log" class="batch-log" style="background:' + backgroundContainer + ';border:1px solid ' + borderColor + '"></div>' +
             '</div>' +
 
             '</div>' + // mapoios-body
+            // Lives OUTSIDE mapoios-body deliberately — batch progress/errors need to stay
+            // readable even while the panel is minimized, not just when the Envio em Lote tab
+            // happens to be open. Starts hidden; logBatch()/the log-restore code reveal it the
+            // moment there's actually something to show.
+            '<div id="batch_log" class="batch-log" style="display:none;margin:4px 6px;background:' + backgroundContainer + ';border:1px solid ' + borderColor + ';color:' + textColor + '"></div>' +
             '<div class="mapoios-footer" style="background:' + backgroundHeader + ';color:' + textColor + '">by Costache Madalin — melhorado por xBot &amp; xStriker | v2</div>' +
             '</div>';
 
         $('#div_container').remove();
         insertPanel(html, getUIState().docked);
 
-        $('#div_minimize').on('click', function () {
+        $('#div_minimize').on('click', function (e) {
+            e.preventDefault();
             if ($('#mapoios-body').is(':visible')) applyMinimized();
             else applyExpanded();
         });
@@ -872,6 +1092,8 @@
                     var xBtn = document.createElement('button');
                     xBtn.className = 'chip-x';
                     xBtn.textContent = '×';
+                    xBtn.title = 'Remover ' + chip;
+                    xBtn.setAttribute('aria-label', 'Remover alvo ' + chip);
                     xBtn.style.color = backgroundContainer;
                     xBtn.type = 'button';
                     xBtn.addEventListener('click', function (e) {
@@ -1025,14 +1247,68 @@
     }
 
     // ─── Batch tab ────────────────────────────────────────────────────────────────
+    // TribalWars renders its own "Grupos" sidebar widget as one <a class="group-menu-item"
+    // data-group-id="X"> per selectable group, and the CURRENTLY active one as a
+    // <strong class="group-menu-item" data-group-id="X"> (no href) instead. Either tag carries
+    // the real numeric group id we need, and its (decorated) text is the group's display name.
+    function getPageGroups() {
+        var out = [];
+        document.querySelectorAll('.group-menu-item[data-group-id]').forEach(function (el) {
+            var id = el.getAttribute('data-group-id');
+            if (!id) return;
+            var label = el.textContent.replace(/[\[\]›‹]/g, '').trim();
+            out.push({ id: id, label: label || ('#' + id) });
+        });
+        return out;
+    }
+
+    // Populates #batch_group from the groups actually present on THIS page — done once per
+    // panel build, same as the template dropdowns (refreshTemplateDropdowns).
+    function populateGroupSelect() {
+        var sel = document.getElementById('batch_group');
+        if (!sel) return;
+        sel.innerHTML = '';
+        // TribalWars' own "todos" entry (data-group-id="0") already comes through
+        // getPageGroups() like every other group, so no synthetic placeholder is added here —
+        // a hand-added empty-value option would be the one choice ensureGroupSelected silently
+        // ignores (empty groupId means "don't force anything" elsewhere in this file), breaking
+        // "switch immediately when the dropdown changes" for that one entry specifically.
+        getPageGroups().forEach(function (g) {
+            var opt = document.createElement('option');
+            opt.value = g.id;
+            opt.textContent = g.label;
+            sel.appendChild(opt);
+        });
+        if (!sel.options.length) {
+            var fallback = document.createElement('option');
+            fallback.value = '';
+            fallback.textContent = '— Todos —';
+            sel.appendChild(fallback);
+        }
+    }
+
     function initBatchTab() {
-        // Pre-fill group from URL or saved value
-        var urlGroup    = _p.get('group') || '';
-        var savedGroup  = localStorage.getItem(GROUP_KEY) || '';
-        var groupVal    = urlGroup || savedGroup;
-        $('#batch_group').val(groupVal);
-        $('#batch_group').on('input', function () {
-            localStorage.setItem(GROUP_KEY, $(this).val().trim());
+        populateGroupSelect();
+
+        // Pre-fill group from URL or saved value — but only if that id is actually one of the
+        // groups available on this page. A saved/URL group id that no longer exists (deleted,
+        // renamed, or simply a different page than last time) falls back to whatever's first in
+        // the list (normally TribalWars' own "todos") instead of leaving the dropdown blank.
+        var selEl      = document.getElementById('batch_group');
+        var available  = selEl ? Array.from(selEl.options).map(function (o) { return o.value; }) : [];
+        var urlGroup   = _p.get('group') || '';
+        var savedGroup = localStorage.getItem(GROUP_KEY) || '';
+        var wantGroup  = urlGroup || savedGroup;
+        var groupVal   = (wantGroup && available.indexOf(wantGroup) !== -1) ? wantGroup : (available[0] || '');
+        if (selEl) selEl.value = groupVal;
+
+        $('#batch_group').on('change', function () {
+            var groupId = $(this).val();
+            localStorage.setItem(GROUP_KEY, groupId);
+            // Switches TribalWars' own live group filter right away — without this the
+            // dropdown would only be a remembered preference that takes effect the next time
+            // a batch runs, instead of an immediate, visible change on the page.
+            ensureGroupSelected(groupId, function () {});
         });
 
         renderBatchTemplatePreview();
@@ -1065,6 +1341,7 @@
             if (existingBatch.log && existingBatch.log.length) {
                 var logEl = document.getElementById('batch_log');
                 if (logEl) {
+                    logEl.style.display = 'block';
                     logEl.innerHTML = existingBatch.log.map(function (l) { return '<div>' + l + '</div>'; }).join('');
                     logEl.scrollTop = logEl.scrollHeight;
                 }
@@ -1088,7 +1365,18 @@
             }
 
             var delayS = Math.max(1, parseInt($('#batch_delay').val(), 10) || 3);
-            var batch = { running: true, targets: targets, index: 0, template: tpl, group: group, state: 'selecting', delay: delayS * 1000 };
+            // Captured once here (not re-read from the URL on every navigation) so it survives
+            // the reloads a batch run goes through — same reasoning as `group` below. Without
+            // this, _urlNavigate's fallback silently drops back to page 0 on every target whose
+            // autocomplete times out, even if the user had deliberately paged into this group's
+            // village list first.
+            var page  = _p.get('page') || '';
+            // Same idea: capture whichever direction ("Distância" column, nearest vs furthest
+            // first) was active when the user clicked Iniciar, so villages get consumed in that
+            // order for the whole run instead of silently reverting to nearest-first.
+            var dir   = _p.get('dir') || '';
+            localStorage.removeItem(STOP_KEY); // clear any veto left over from a previous run
+            var batch = { running: true, targets: targets, index: 0, template: tpl, group: group, page: page, dir: dir, pageFloor: 0, state: 'selecting', delay: delayS * 1000 };
             setBatch(batch);
             logBatch('A iniciar lote: ' + targets.length + ' alvos. Primeiro: ' + targets[0], batch);
             updateBatchUI(batch);
@@ -1139,6 +1427,7 @@
         }
         var el = document.getElementById('batch_log');
         if (!el) return;
+        el.style.display = 'block';
         el.innerHTML += '<div>' + line + '</div>';
         el.scrollTop = el.scrollHeight;
     }

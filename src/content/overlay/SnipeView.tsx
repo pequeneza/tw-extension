@@ -13,6 +13,7 @@ import React, {
   useCallback, useEffect, useMemo, useRef, useState,
 } from "react";
 import { computeScheduledByVillage, subtractScheduled } from "./queue-utils";
+import { TriggerVisibilityToggle } from "./TriggerVisibilityToggle";
 
 /* ─── Constants ───────────────────────────────────────────────────────────── */
 const STORAGE_KEY_PLAN     = "tw_gap_snipe_plan_v12";
@@ -1258,7 +1259,7 @@ function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor, onQueue, 
             style={{ width: 110, fontFamily: "monospace" }}
             onChange={(e) => { setTargetStr(e.target.value); setComputed(false); }}
           />
-          <span style={{ fontSize: 11, color: "#6b7280" }}>village your teammate is nobling</span>
+          <span style={{ fontSize: 11, color: "var(--n400)" }}>village your teammate is nobling</span>
         </div>
       </div>
 
@@ -1266,13 +1267,13 @@ function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor, onQueue, 
       <div className="cfg-section">
         <div className="section-label">
           Attack timings
-          <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 400, marginLeft: 8 }}>
+          <span style={{ fontSize: 11, color: "var(--n400)", fontWeight: 400, marginLeft: 8 }}>
             arrival time of each attack at the target
           </span>
         </div>
         {rows.map((row, idx) => (
           <div key={row.id} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
-            <span style={{ fontSize: 11, color: "#6b7280", minWidth: 18 }}>{idx + 1}.</span>
+            <span style={{ fontSize: 11, color: "var(--n400)", minWidth: 18 }}>{idx + 1}.</span>
             <input
               className="input"
               type="datetime-local"
@@ -1281,7 +1282,7 @@ function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor, onQueue, 
               style={{ fontFamily: "monospace", fontSize: 12 }}
               onChange={(e) => setDt(row.id, e.target.value)}
             />
-            <span style={{ fontSize: 11, color: "#6b7280" }}>+ms:</span>
+            <span style={{ fontSize: 11, color: "var(--n400)" }}>+ms:</span>
             <input
               className="input"
               type="number"
@@ -1292,7 +1293,7 @@ function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor, onQueue, 
             />
             <button
               className="btn btn-ghost"
-              style={{ fontSize: 11, padding: "1px 6px", color: "#ef4444" }}
+              style={{ fontSize: 11, padding: "1px 6px", color: "var(--r500)" }}
               onClick={() => delRow(row.id)}
               disabled={rows.length <= 1}
             >✕</button>
@@ -1307,7 +1308,7 @@ function ManualTab({ troops, loadingTroops, onLoadTroops, speedFactor, onQueue, 
           >📋 Paste timings</button>
           <button
             className="btn btn-ghost"
-            style={{ color: "#ef4444" }}
+            style={{ color: "var(--r500)" }}
             onClick={() => {
               setRows([{ id: makeId(), dt: toDatetimeLocalMs(Date.now() + 3_600_000), ms: 0 }]);
               setComputed(false); setComputeError(null); setPasteError(null);
@@ -1608,6 +1609,7 @@ export function SnipeView({ visible, onBack }: {
              target ? `target ${target.x}|${target.y}` : "gap snipe planner"}
           </span>
         </div>
+        <TriggerVisibilityToggle moduleId="tw_snipe_scheduler" />
       </div>
 
       <div className="cfg-body snipe-body">

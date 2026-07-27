@@ -26,6 +26,24 @@
     return Math.max(0, Math.round(baseMs + (Math.random() * 2 - 1) * spreadMs));
   }
 
+  // Performs one quickedit rename with human-like pacing: open the inline
+  // editor, pause, type the new value, pause again, then save. Each pause is
+  // jittered so the two-step pacing totals roughly 2-3s per row instead of
+  // firing all three DOM actions in the same synchronous tick.
+  // buildValue(currentVal) -> newVal; onDone(success) called once finished.
+  function performRename($row, buildValue, onDone) {
+    $row.find('.rename-icon').click();
+    setTimeout(function () {
+      var $input = $row.find('input[type=text]');
+      if (!$input.length) { if (onDone) onDone(false); return; }
+      $input.val(buildValue($input.val()));
+      setTimeout(function () {
+        $row.find('input[type=button]').click();
+        if (onDone) onDone(true);
+      }, jitter(1300, 300));
+    }, jitter(1200, 300));
+  }
+
   // ── User preferences ────────────────────────────────────────────────────────
   var tamanho_letra     = 10;
 
@@ -76,6 +94,30 @@
     return location.pathname + '?village=' + vid +
            '&screen=overview_villages&mode=incomings' +
            typeParam + subtypeParam + '&group=0&page=' + page + tParam;
+  }
+
+  // Finds the incomings page's real "Etiqueta de comando" filter field
+  // (filters[target_comment]) and its "Guardar" submit button.
+  function getEtiquetaFilterForm() {
+    var $input = window.$('input[name="filters[target_comment]"]');
+    if (!$input.length) return null;
+    var $form = $input.closest('form');
+    if (!$form.length) return null;
+    var $submit = $form.find('input[type=submit][value="Guardar"]');
+    if (!$submit.length) $submit = $form.find('input[type=submit]').first();
+    if (!$submit.length) return null;
+    return { $input: $input, $submit: $submit };
+  }
+
+  // Fills + submits the real "Etiqueta de comando" filter with the given value
+  // (native TW form, persists across page/pagination reloads until cleared).
+  // Returns false if the filter form isn't present on this page.
+  function setEtiquetaCommentFilter(value) {
+    var f = getEtiquetaFilterForm();
+    if (!f) return false;
+    f.$input.val(value);
+    f.$submit[0].click();
+    return true;
   }
 
   // ── PALETTE — [bg, priorityBg]  (priorityBg ≈ 12% darker, used for high-priority badges) ──
@@ -297,13 +339,12 @@
 
     TAGS.forEach(function (tag, num) {
       window.$('#opt' + nr + '_' + num).off('click').on('click', function () {
-        $row.find('.rename-icon').click();
-        var $input = $row.find('input[type=text]');
-        if (!$input.length) return;
-        var base = $input.val().split(' ')[0];
-        $input.val(tag[0].startsWith(' |') ? $input.val() + tag[0] : base + ' ' + tag[0]);
-        $row.find('input[type=button]').click();
-        injectChip(nr, row, num);
+        performRename($row, function (val) {
+          var base = val.split(' ')[0];
+          return tag[0].startsWith(' |') ? val + tag[0] : base + ' ' + tag[0];
+        }, function (success) {
+          if (success) injectChip(nr, row, num);
+        });
       });
     });
   }
@@ -367,15 +408,15 @@
     var $lbl  = $row.find('td:eq(0) .quickedit-label');
     var name  = $lbl.length ? window.$.trim($lbl.text()) : window.$.trim($row.find('td:eq(0)').text());
     if (singleTagIndex(name) === -1 && dualTagIndices(name) === null) {
-      $row.find('.rename-icon').click();
-      var $inp = $row.find('input[type=text]');
-      if ($inp.length) {
-        $inp.val($inp.val().split(' ')[0] + ' ' + TAGS[9][0]);
-        $row.find('input[type=button]').click();
-        injectChip(nr, row, 9);
-      }
+      performRename($row, function (val) {
+        return val.split(' ')[0] + ' ' + TAGS[9][0];
+      }, function (success) {
+        if (success) injectChip(nr, row, 9);
+        setTimeout(drainAutoFakeQueue, jitter(250, 60));
+      });
+    } else {
+      setTimeout(drainAutoFakeQueue, jitter(250, 60));
     }
-    setTimeout(drainAutoFakeQueue, jitter(250, 60));
   }
 
   function queueAutoFake(nr, row) {
@@ -395,7 +436,6 @@
     if (!$btn.length || _etiquetaScheduled) return;
     _etiquetaScheduled = true;
 
-    var $form    = $btn.closest('form');
     var delayMs  = minDelayMs + Math.random() * randomExtraMs;
     var deadline = Date.now() + delayMs;
 
@@ -432,9 +472,12 @@
       _etiquetaDeadline  = null;
       _etiquetaScheduled = false;
 
-      // Start paged run: navigate to group=0&page=0; labeling happens on reload
-      setRunState({ active: true, page: 0 });
-      location.href = buildIncomingsUrl(0);
+      // Land on the default (page=-1) view first, then switch the real
+      // "Etiqueta de comando" filter to "Ataque" from there. This narrows the
+      // paged run below to only the still-unlabeled backlog instead of every
+      // incomings page, regardless of whichever page we happened to be on.
+      setRunState({ active: true, phase: 'filter', page: 0 });
+      location.href = buildIncomingsUrl(-1);
     }, delayMs);
   }
 
@@ -456,15 +499,12 @@
       var nr   = queue[i][0];
       var row  = queue[i][1];
       var $row = window.$(row);
-      $row.find('.rename-icon').click();
-      var $input = $row.find('input[type=text]');
-      if ($input.length) {
-        var base = $input.val().split(' ')[0];
-        $input.val(base + ' ' + TAGS[9][0]);
-        $row.find('input[type=button]').click();
-        injectButtonsLegacy(nr, row);
-      }
-      setTimeout(function () { processNext(i + 1); }, jitter(250, 60));
+      performRename($row, function (val) {
+        return val.split(' ')[0] + ' ' + TAGS[9][0];
+      }, function (success) {
+        if (success) injectButtonsLegacy(nr, row);
+        setTimeout(function () { processNext(i + 1); }, jitter(250, 60));
+      });
     }
 
     processNext(0);
@@ -537,8 +577,38 @@
   var _pagedApplied = false;
 
   function finishRun() {
+    // Clear the temporary "Ataque" filter so the account's saved incomings view
+    // isn't left restricted, then land explicitly back on page 0.
+    setRunState({ active: true, phase: 'clearing' });
+    if (!setEtiquetaCommentFilter('')) {
+      setRunState(null);
+      location.href = buildIncomingsUrl(0);
+    }
+    // else: the filter-clear submission reloads the page; next load sees phase 'clearing'.
+  }
+
+  // Phase 'filter' — switch the real incomings filter to "Ataque" (from the
+  // page=-1 landing spot), then hand off to the normal paged labeling run.
+  function applyFilterPhase() {
+    if (_pagedApplied) return;
+    _pagedApplied = true;
+
+    if (!setEtiquetaCommentFilter('Ataque')) {
+      // Filter form not found (unlikely) — fall back to the old unfiltered walk.
+      setRunState({ active: true, phase: 'label', page: 0 });
+      location.href = buildIncomingsUrl(0);
+      return;
+    }
+    setRunState({ active: true, phase: 'label', page: 0 });
+    // setEtiquetaCommentFilter's submit reloads the page; next load sees phase 'label'.
+  }
+
+  // Phase 'clearing' — filter was just cleared; do the final explicit nav to page 0.
+  function applyClearingPhase() {
+    if (_pagedApplied) return;
+    _pagedApplied = true;
     setRunState(null);
-    location.href = buildIncomingsUrl(-1);
+    location.href = buildIncomingsUrl(0);
   }
 
   function applyLabelAndAdvance(state) {
@@ -552,7 +622,7 @@
 
     // Ensure we're on group=0
     if (curGroup !== 0) {
-      setRunState({ active: true, page: state.page, navigatedTo: state.page });
+      setRunState({ active: true, phase: 'label', page: state.page, navigatedTo: state.page });
       location.href = buildIncomingsUrl(state.page);
       return;
     }
@@ -566,7 +636,7 @@
 
     // Not yet on the right page — navigate there after the configured delay
     if (curPage !== state.page) {
-      setRunState({ active: true, page: state.page, navigatedTo: state.page });
+      setRunState({ active: true, phase: 'label', page: state.page, navigatedTo: state.page });
       setTimeout(function () { location.href = buildIncomingsUrl(state.page); }, pageDelayMs);
       return;
     }
@@ -598,7 +668,7 @@
     }
 
     // Advance page; clear navigatedTo so the TW reload isn't mistaken for a redirect
-    setRunState({ active: true, page: state.page + 1 });
+    setRunState({ active: true, phase: 'label', page: state.page + 1 });
     $btn[0].click();
     // TW reloads to this same page → next tick sees page mismatch → navigates forward with navigatedTo set
   }
@@ -611,7 +681,13 @@
 
       var _runState = getRunState();
       if (_runState && _runState.active) {
-        applyLabelAndAdvance(_runState);
+        if (_runState.phase === 'filter') {
+          applyFilterPhase();
+        } else if (_runState.phase === 'clearing') {
+          applyClearingPhase();
+        } else {
+          applyLabelAndAdvance(_runState);
+        }
       } else {
         scheduleAutoEtiqueta();
       }
@@ -665,29 +741,15 @@
       });
 
       try {
-        var total      = $rows.length;
-        var untagged   = 0;
-        var nobles     = 0;
-        var tagCounts  = {};
         // originsMap[origCoords] = { name, targets: { destCoords: destName } }
         var originsMap = {};
 
         $rows.each(function (_, row) {
-          var noble = isNoble(row);
-          if (noble) nobles++;
+          if ((!originBadgeEnabled && !autoFakeEnabled) || origimColIdx === -1) return;
 
           var $r    = window.$(row);
           var $lbl  = $r.find('td:eq(0) .quickedit-label');
           var rname = $lbl.length ? window.$.trim($lbl.text()) : window.$.trim($r.find('td:eq(0)').text());
-          var ridx  = singleTagIndex(rname);
-          if (ridx === -1 && dualTagIndices(rname) === null) {
-            untagged++;
-          } else if (ridx !== -1) {
-            var tagKey = TAGS[ridx][0];
-            tagCounts[tagKey] = (tagCounts[tagKey] || 0) + 1;
-          }
-
-          if ((!originBadgeEnabled && !autoFakeEnabled) || origimColIdx === -1) return;
 
           // Origin village (who is attacking)
           var $origTd   = $r.find('td:eq(' + origimColIdx + ')');
@@ -785,13 +847,12 @@
           }
         }
 
-        sessionStorage.setItem('mlr_stats_v1', JSON.stringify({
-          total:            total,
-          untagged:         untagged,
-          nobles:           nobles,
-          tagCounts:        tagCounts,
-          etiquetaDeadline: _etiquetaDeadline
-        }));
+        // Live overview totals (total/untagged/nobles/tagCounts) are no longer
+        // written from here — the overlay panel now fetches an account-wide
+        // count across every incomings page on demand (Refresh button) instead
+        // of a continuous per-second snapshot of whatever page happens to be
+        // open. Only the auto-label countdown still needs a live tick.
+        sessionStorage.setItem('mlr_etiqueta_deadline_v1', JSON.stringify(_etiquetaDeadline));
       } catch (e) {}
 
     }

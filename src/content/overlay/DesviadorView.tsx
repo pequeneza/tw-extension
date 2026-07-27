@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { TriggerVisibilityToggle } from "./TriggerVisibilityToggle";
 
 const CANCEL_SEC_KEY    = "twDesviador_cancelSec";
 const ALERT_SEC_KEY     = "twDesviador_alertSec";
@@ -271,6 +272,7 @@ export function DesviadorView({
         >
           {desvState.active ? "■ Parar" : "▶ Desviar"}
         </button>
+        <TriggerVisibilityToggle moduleId="desviador" />
       </div>
 
       {/* ── Config panel ── */}

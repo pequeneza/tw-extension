@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TW Planeador
 // @namespace    tw_planeador
-// @version      1.1.0
+// @version      1.1.1
 // @description  Planeador de ataques coordenados: busca velocidades do servidor, calcula Hora de Saída e gera links de ataque pré-preenchidos.
 // @match        https://*.tribalwars.com.pt/game.php*
 // ==/UserScript==
@@ -120,7 +120,7 @@
     function buildAttackUrl(villageId, tx, ty, troops, targetVillageId) {
         const server = getServerId();
         const t = new URLSearchParams(window.location.search).get('t');
-        const p = new URLSearchParams({ village: villageId, screen: 'place', x: tx, y: ty, from: 'simulator' });
+        const p = new URLSearchParams({ village: villageId, screen: 'place', x: tx, y: ty });
         if (t) p.set('t', t);
         for (const [unit, count] of Object.entries(troops)) {
             if (count > 0) p.set(`att_${unit}`, count);

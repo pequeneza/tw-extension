@@ -8,6 +8,7 @@
  *                        xbot:telegram:test
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { TriggerVisibilityToggle } from "./TriggerVisibilityToggle";
 
 /* ─── useMountAnim ───────────────────────────────────────────────────────── */
 function useMountAnim(trigger: boolean) {
@@ -442,6 +443,7 @@ export function TelegramView({
         {state.active && detected && (
           <span className="live-pip" style={{ marginLeft: "auto", marginRight: 4 }} />
         )}
+        <TriggerVisibilityToggle moduleId="telegram_notifier" />
       </div>
 
       {/* Tab bar */}

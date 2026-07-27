@@ -66,6 +66,18 @@ async function checkLicense(key: string): Promise<LicenseCache> {
   }
 }
 
+// Lets a main-world userscript open a tab via window.open() unfocused + pinned.
+// chrome.tabs is only reachable from here, so the userscript asks us to "arm"
+// its window first. chrome.runtime.sendMessage is asynchronous — we must wait
+// for the background's ack and signal the page back via xbot:tabs:armed before
+// it's safe to call window.open(); otherwise the tab can be created before the
+// background has actually armed, and the pin/unfocus silently never fires.
+document.addEventListener("xbot:tabs:armNextTab", () => {
+  chrome.runtime.sendMessage({ type: "ARM_NEXT_TAB" }, () => {
+    document.dispatchEvent(new CustomEvent("xbot:tabs:armed"));
+  });
+});
+
 chrome.storage.sync.get(buildStorageKeys(), async (result) => {
   const botEnabled = (result[BOT_ENABLED_KEY] as boolean) === true;
   if (!botEnabled) return;

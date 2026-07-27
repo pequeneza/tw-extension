@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         xBot Auto Sender
-// @version      2.0.0
+// @version      2.1.0
 // @description  Precision attack scheduler: Worker-based timer shim, performance.now busy-wait, queue watcher, place-page filler, confirm auto-click.
 // @match        *://*.tribalwars.com.pt/game.php*
 // @match        *://*.tribalwars.com.br/game.php*
@@ -618,8 +618,9 @@
 
     // Consume immediately so other tabs cannot steal it
     localStorage.removeItem(LS_ACTIVE);
-    // Persist the xbot_sender flag so the confirm page (which won't have xbot_sender=1 in URL)
-    // can also suppress competing scripts (mano_de_deus, Kumin, etc.).
+    // Marks this tab as owned by AutoSender so mano_de_deus.user.js suppresses itself.
+    // sessionStorage persists across the same-tab place→confirm navigation, so the
+    // confirm page sees it too without needing anything carried in the URL.
     try { sessionStorage.setItem('xbot_sender_tab', '1'); } catch(e) {}
 
     var gd = window.game_data;
@@ -1085,7 +1086,7 @@
         emitNeeded = true;
 
         var sitterPfx = e.sitterT ? 't=' + e.sitterT + '&' : _sitterPrefix();
-        var url = location.origin + '/game.php?' + sitterPfx + 'village=' + e.srcVillageId + '&screen=place&xbot_sender=1';
+        var url = location.origin + '/game.php?' + sitterPfx + 'village=' + e.srcVillageId + '&screen=place';
         if (e.tgtVillageId) url += '&target=' + e.tgtVillageId;
         window.open(url, '_blank');
         break; // one at a time
@@ -1121,10 +1122,6 @@
       try {
         var _btn = document.getElementById('troop_confirm_submit');
         if (_btn) _btn.removeAttribute('id');
-        // Also keep history.replaceState for any URL-checking logic in Kumin
-        if (location.search.indexOf('xbot_sender=1') === -1) {
-          history.replaceState(null, '', location.href + '&xbot_sender=1');
-        }
       } catch(e) {}
     }
   })();

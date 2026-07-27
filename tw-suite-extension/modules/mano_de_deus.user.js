@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Mão de deus (Teste-striker) - Hybrid Scheduler + Alerts (10s + Notification)
-// @version      2.4.1
+// @version      2.4.2
 // @description  Schedules confirm click using server time with a coarse+fine hybrid timer. Robust duration parsing, safe datetime parsing, status display, and attention at T-10s (banner + title/favicon flash + desktop notification + beep with Chrome unlock). DOM frozen during fine phase for precision.
 // @match        *://*.tribalwars.com.pt/game.php*screen=place*try=confirm*
 // @match        *://*.tribalwars.com.br/game.php*screen=place*try=confirm*
@@ -9,8 +9,7 @@
 
 (function () {
   'use strict';
-  if (new URLSearchParams(window.location.search).get('xbot_sender') === '1' ||
-      sessionStorage.getItem('xbot_sender_tab') === '1') return;
+  if (sessionStorage.getItem('xbot_sender_tab') === '1') return;
 
   // ---------------- storage keys ----------------
   const LS_FINE_OFFSET   = 'CS.offsetFineMs';        // user calibration (+/- ms)

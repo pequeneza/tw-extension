@@ -10,6 +10,7 @@ export interface ModuleConfig {
 }
 
 export type ModuleId =
+  | "attack_generator"
   | "auto_mint"
   | "auto_sender"
   | "desviador"
@@ -40,6 +41,14 @@ export const LICENSE_STORAGE_KEY = "xbot_license";
 export const LICENSE_CACHE_KEY = "xbot_license_cache";
 
 export const MODULE_CONFIGS: ModuleConfig[] = [
+  {
+    id: "attack_generator",
+    label: "Attack Generator",
+    description: "Generates fake/custom/preset attack commands, sent sequentially or queued into the Autosender for precision landing times.",
+    matchPattern: /screen=place/,
+    scriptFile: "attack_generator.user.js",
+    icon: "🗡️",
+  },
   {
     id: "auto_sender",
     label: "Auto Sender",

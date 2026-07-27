@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TW Utils
 // @namespace    tw_utils
-// @version      1.2.0
+// @version      1.3.0
 // @description  Utilitários variados para o TribalWars PT.
 // @match        https://*.tribalwars.com.pt/game.php*
 // ==/UserScript==
@@ -1611,6 +1611,168 @@
     }
 
     /* ═══════════════════════════════════════════════════════════════════════
+       CENTER MAP BAR
+       Adds an x/y/Centro cell to the village-switcher bar (#menu_row2) on
+       every page.
+       • screen=map: the native "Centralizar mapa" widget's own input/button
+         nodes are relocated (not cloned) into that cell, so the game's
+         inline handlers (xProcess, TWMap.focusSubmit) keep working untouched
+         and centering happens in place.
+       • any other screen: no TWMap instance exists to center, so a
+         standalone x/y widget is built and "Centro" opens screen=map at
+         those coordinates in a new tab.
+    ═══════════════════════════════════════════════════════════════════════ */
+
+    /* Lets the X field accept a pasted/typed "464|646" coord pair — the part
+       after "|" is moved into the Y field automatically. */
+    function bindCoordPairSplit(xInput, yInput) {
+        xInput.addEventListener('input', () => {
+            const pipeIdx = xInput.value.indexOf('|');
+            if (pipeIdx === -1) return;
+
+            const x = xInput.value.slice(0, pipeIdx).replace(/\D/g, '');
+            const y = xInput.value.slice(pipeIdx + 1).replace(/\D/g, '');
+
+            xInput.value = x;
+            yInput.value = y;
+
+            // Re-fire keyup so TW's own xProcess handler (screen=map) picks up the change.
+            xInput.dispatchEvent(new Event('keyup', { bubbles: true }));
+            yInput.dispatchEvent(new Event('keyup', { bubbles: true }));
+            yInput.focus();
+        });
+    }
+
+    const CENTERMAP_PREFILL_KEY = 'tw_centermap_prefill_v1';
+    const CENTERMAP_PREFILL_TTL = 30 * 1000; // 30s — only relevant to the tab that was just opened
+
+    function centerMapCellShell() {
+        const cell = document.createElement('td');
+        cell.id = 'tw-centermap-cell';
+        cell.className = 'box-item';
+        cell.style.whiteSpace = 'nowrap';
+        cell.style.padding = '0 6px';
+        cell.title = 'Centralizar mapa';
+        return cell;
+    }
+
+    function relocateNativeCenterMapWidget(menuRow) {
+        const xInput = document.getElementById('mapx');
+        const yInput = document.getElementById('mapy');
+        if (!xInput || !yInput) return false;
+
+        const srcTable = xInput.closest('table');
+        const submitBtn = srcTable ? srcTable.querySelector('input[type="submit"]') : null;
+        if (!submitBtn) return false;
+
+        // If this tab was opened from the standalone widget (another screen),
+        // the requested coords ride along via sessionStorage — prefill the fields.
+        // (window.open to the same origin clones sessionStorage into the new tab.)
+        try {
+            const raw = sessionStorage.getItem(CENTERMAP_PREFILL_KEY);
+            if (raw) {
+                sessionStorage.removeItem(CENTERMAP_PREFILL_KEY);
+                const { x, y, ts } = JSON.parse(raw);
+                if (x && y && Date.now() - ts < CENTERMAP_PREFILL_TTL) {
+                    xInput.value = x;
+                    yInput.value = y;
+                }
+            }
+        } catch (_) {}
+
+        const cell = centerMapCellShell();
+
+        xInput.style.width = '30px';
+        yInput.style.width = '30px';
+        submitBtn.classList.remove('float_right');
+        submitBtn.style.marginLeft = '4px';
+        submitBtn.style.verticalAlign = 'middle';
+
+        bindCoordPairSplit(xInput, yInput);
+
+        cell.appendChild(document.createTextNode('x:\u00A0'));
+        cell.appendChild(xInput);
+        cell.appendChild(document.createTextNode('\u00A0y:\u00A0'));
+        cell.appendChild(yInput);
+        cell.appendChild(submitBtn);
+
+        menuRow.appendChild(cell);
+        srcTable.remove();
+        return true;
+    }
+
+    function buildStandaloneCenterMapWidget(menuRow) {
+        const cell = centerMapCellShell();
+
+        const vx = (typeof game_data !== 'undefined' && game_data.village) ? game_data.village.x : '';
+        const vy = (typeof game_data !== 'undefined' && game_data.village) ? game_data.village.y : '';
+        const vid = (typeof game_data !== 'undefined' && game_data.village) ? game_data.village.id : '';
+
+        const xInput = document.createElement('input');
+        xInput.type = 'text';
+        xInput.id = 'tw-centermap-x';
+        xInput.className = 'centercoord';
+        xInput.style.width = '30px';
+        xInput.value = vx;
+
+        const yInput = document.createElement('input');
+        yInput.type = 'text';
+        yInput.id = 'tw-centermap-y';
+        yInput.className = 'centercoord';
+        yInput.style.width = '30px';
+        yInput.value = vy;
+
+        const btn = document.createElement('input');
+        btn.type = 'submit';
+        btn.className = 'btn';
+        btn.value = 'Centro';
+        btn.style.marginLeft = '4px';
+        btn.style.verticalAlign = 'middle';
+
+        function openMapTab() {
+            const x = xInput.value.trim();
+            const y = yInput.value.trim();
+            if (!/^\d+$/.test(x) || !/^\d+$/.test(y)) return;
+            try {
+                sessionStorage.setItem(CENTERMAP_PREFILL_KEY, JSON.stringify({ x, y, ts: Date.now() }));
+            } catch (_) {}
+            const url = `${location.origin}/game.php?village=${vid}&screen=map#${x};${y}`;
+            window.open(url, '_blank');
+        }
+        btn.addEventListener('click', (e) => { e.preventDefault(); openMapTab(); });
+
+        bindCoordPairSplit(xInput, yInput);
+
+        cell.appendChild(document.createTextNode('x:\u00A0'));
+        cell.appendChild(xInput);
+        cell.appendChild(document.createTextNode('\u00A0y:\u00A0'));
+        cell.appendChild(yInput);
+        cell.appendChild(btn);
+
+        menuRow.appendChild(cell);
+        return true;
+    }
+
+    function initCenterMapBar() {
+        const onMap = getCurrentScreen() === 'map';
+
+        function inject() {
+            if (document.getElementById('tw-centermap-cell')) return true;
+
+            const menuRow = document.getElementById('menu_row2');
+            if (!menuRow) return false;
+
+            return onMap ? relocateNativeCenterMapWidget(menuRow) : buildStandaloneCenterMapWidget(menuRow);
+        }
+
+        if (!inject()) {
+            const obs = new MutationObserver(() => { if (inject()) obs.disconnect(); });
+            obs.observe(document.body, { childList: true, subtree: true });
+            setTimeout(() => obs.disconnect(), 15000);
+        }
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════════
        BOOT
     ═══════════════════════════════════════════════════════════════════════ */
 
@@ -1622,6 +1784,7 @@
         if (cfg.bulkCancel !== false) initBulkCancel();
         if (cfg.unitMax !== false) initUnitMax();
         if (cfg.mapDrawSelect !== false) initMapDrawSelect();
+        if (cfg.centerMapBar !== false) initCenterMapBar();
     }
 
     if (typeof $ !== 'undefined' && typeof TribalWars !== 'undefined') {

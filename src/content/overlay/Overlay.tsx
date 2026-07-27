@@ -9,6 +9,7 @@ import {
   MODULE_CONFIG_SCHEMAS, FieldDef, ModuleConfigSchema,
 } from "../../types/config-schemas";
 import { FakeSenderView }  from "./FakeSenderView";
+import { AttackGeneratorView } from "./AttackGeneratorView";
 import { SnipeView }      from "./SnipeView";
 import { BalancerView }   from "./BalancerView";
 import { DesviadorView }  from "./DesviadorView";
@@ -152,6 +153,7 @@ type CfgValues = Record<string, string | number | boolean>;
 type View = { type: "list" } |
             { type: "config"; id: ModuleId } |
             { type: "fakes" } |
+            { type: "attackgen" } |
             { type: "snipe" } |
             { type: "balancer" } |
             { type: "desviador" } |
@@ -752,10 +754,14 @@ function Panel({
                 onCfg={() => {
                   if (mod.id === "fakes") {
                     setViewP({ type: "fakes" });
+                  } else if (mod.id === "attack_generator") {
+                    setViewP({ type: "attackgen" });
                   } else if (mod.id === "tw_snipe_scheduler") {
                     setViewP({ type: "snipe" });
                   } else if (mod.id === "wh_balancer") {
                     setViewP({ type: "balancer" });
+                  } else if (mod.id === "desviador") {
+                    setViewP({ type: "desviador" });
                   } else if (mod.id === "kumin_gluer") {
                     setViewP({ type: "gluer" });
                   } else if (mod.id === "resource_buyer") {
@@ -794,7 +800,7 @@ function Panel({
 
       {/* Config view — one per possible cfgId, shown/hidden */}
       {MODULE_CONFIGS.filter((m) =>
-        Boolean(MODULE_CONFIG_SCHEMAS[m.id]) && m.id !== "fakes" && m.id !== "mass_label_renamer"
+        Boolean(MODULE_CONFIG_SCHEMAS[m.id]) && m.id !== "fakes" && m.id !== "attack_generator" && m.id !== "mass_label_renamer"
       ).map((m) => (
         <ConfigView key={m.id} id={m.id}
           visible={view.type === "config" && view.id === m.id}
@@ -805,6 +811,12 @@ function Panel({
       {/* Fake Sender — dedicated panel with Status + Settings tabs */}
       <FakeSenderView
         visible={view.type === "fakes"}
+        onBack={() => setViewP({ type: "list" })}
+      />
+
+      {/* Attack Generator — dedicated panel with Status + Settings tabs */}
+      <AttackGeneratorView
+        visible={view.type === "attackgen"}
         onBack={() => setViewP({ type: "list" })}
       />
 
@@ -1058,6 +1070,7 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
   const [view, setView] = useState<View>(() => {
     const v = sessionStorage.getItem("xbot_panel_view");
     if (v === "fakes")     return { type: "fakes" };
+    if (v === "attackgen") return { type: "attackgen" };
     if (v === "snipe")     return { type: "snipe" };
     if (v === "balancer")  return { type: "balancer" };
     if (v === "desviador") return { type: "desviador" };
@@ -1238,6 +1251,12 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
           <button className="trigger trigger--fakes"
             onClick={() => { setViewP({ type: "fakes" }); setOpen(true); }}
             title="Fake Sender" aria-label="Fake Sender">⚔️</button>
+        )}
+
+        {isOn("attack_generator") && triggerVisible("attack_generator") && (
+          <button className="trigger trigger--attackgen"
+            onClick={() => { setViewP({ type: "attackgen" }); setOpen(true); }}
+            title="Attack Generator" aria-label="Attack Generator">🗡️</button>
         )}
       </div>
       {/* Backdrop only shown when open */}

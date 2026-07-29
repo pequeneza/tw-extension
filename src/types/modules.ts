@@ -11,6 +11,7 @@ export interface ModuleConfig {
 
 export type ModuleId =
   | "attack_generator"
+  | "attack_intel"
   | "auto_mint"
   | "auto_sender"
   | "desviador"
@@ -48,6 +49,14 @@ export const MODULE_CONFIGS: ModuleConfig[] = [
     matchPattern: /screen=place/,
     scriptFile: "attack_generator.user.js",
     icon: "🗡️",
+  },
+  {
+    id: "attack_intel",
+    label: "Attack Intel",
+    description: "Tracks incoming-attack size classifications (small/medium/large/unknown) from the incomings overview and shares them via a local database, so if another player confirms a large wave from a source village, other unresolved attacks from that village get an advisory hint.",
+    matchPattern: /screen=overview_villages.*mode=incomings/,
+    scriptFile: "attack_intel.user.js",
+    icon: "🛰️",
   },
   {
     id: "auto_sender",

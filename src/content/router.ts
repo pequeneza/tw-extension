@@ -18,6 +18,12 @@ import { MODULE_CONFIG_SCHEMAS } from "../types/config-schemas";
 
 const BOT_ENABLED_KEY = "xbot_enabled";
 const SESSION_CFG_KEY = "__xbot_cfg__";
+// Read by main-world modules (e.g. attack_intel.user.js) that need to prove
+// license validity to an external service of their own (server-attack-intel)
+// — mirrors the SESSION_CFG_KEY bridge below. Only ever written after the
+// license check a few lines down has already passed, so anything reading
+// this key is reading an already-validated key, not an unverified one.
+const SESSION_LICENSE_KEY = "__xbot_license_key__";
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 interface LicenseCache {
@@ -87,6 +93,13 @@ chrome.storage.sync.get(buildStorageKeys(), async (result) => {
 
   const license = await checkLicense(licenseKey);
   if (!license.valid) return;
+
+  try {
+    sessionStorage.setItem(SESSION_LICENSE_KEY, licenseKey);
+  } catch (_) {
+    // sessionStorage blocked — modules needing this fall back to their own
+    // manually-configured key, same as a bare Tampermonkey install would.
+  }
 
   const settings = (result[STORAGE_KEY] as ModuleSettings) ?? {};
 

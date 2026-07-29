@@ -16,4 +16,10 @@ if (!ADMIN_PASS) {
 const db  = new Database(join(__dirname, 'licenses.db'));
 const app = createApp(db, ADMIN_USER, ADMIN_PASS);
 
-app.listen(PORT, () => console.log(`xBot license server → http://localhost:${PORT}`));
+// 127.0.0.1 only — Caddy (same box, /etc/caddy/Caddyfile → reverse_proxy
+// localhost:3741) is the only thing that needs to reach this. Binding to
+// all interfaces here meant the app was directly reachable from the
+// internet on port 3741, bypassing Caddy's TLS termination entirely —
+// including sending Basic Auth credentials for /admin/* in cleartext to
+// anyone who hit it that way.
+app.listen(PORT, '127.0.0.1', () => console.log(`xBot license server → http://localhost:${PORT}`));

@@ -35,6 +35,21 @@ export function createApp(db, adminUser, adminPass) {
   // Migrate existing DB — add expires_at if missing
   try { db.exec(`ALTER TABLE licenses ADD COLUMN expires_at TEXT DEFAULT NULL`); } catch {}
 
+  // Sightings of a per-install ID (router.ts's INSTALL_ID_KEY, chrome.storage.sync,
+  // random per Chrome account — see that file's comment for why sync rather than
+  // local) alongside a key, recorded only on a successful /validate. Logging only,
+  // for now: nothing here changes whether a check passes or fails, this just gives
+  // the admin panel visibility into how many distinct installs are using one key.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS license_installs (
+      key        TEXT NOT NULL,
+      install_id TEXT NOT NULL,
+      first_seen TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen  TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (key, install_id)
+    )
+  `);
+
   // ── Queries ───────────────────────────────────────────────────────────────────
   const q = {
     list:        db.prepare('SELECT * FROM licenses ORDER BY created_at DESC'),
@@ -52,6 +67,23 @@ export function createApp(db, adminUser, adminPass) {
                      SUM(CASE WHEN active = 1 AND expires_at IS NOT NULL AND expires_at <= date('now') THEN 1 ELSE 0 END) AS expired
                    FROM licenses
                  `),
+
+    recordInstall:  db.prepare(`
+                      INSERT INTO license_installs (key, install_id) VALUES (?, ?)
+                      ON CONFLICT(key, install_id) DO UPDATE SET last_seen = datetime('now')
+                    `),
+    installCounts:  db.prepare(`
+                      SELECT key, COUNT(*) AS n
+                      FROM license_installs
+                      WHERE last_seen > datetime('now', '-30 days')
+                      GROUP BY key
+                    `),
+    listInstalls:   db.prepare(`
+                      SELECT install_id, first_seen, last_seen
+                      FROM license_installs
+                      WHERE key = ?
+                      ORDER BY last_seen DESC
+                    `),
   };
 
   function generateKey() {
@@ -88,12 +120,18 @@ export function createApp(db, adminUser, adminPass) {
 
   app.post('/validate', (req, res) => {
     res.set('Access-Control-Allow-Origin', '*');
-    const { key } = req.body ?? {};
+    const { key, installId } = req.body ?? {};
     if (!key || typeof key !== 'string') return res.json({ valid: false, expires_at: null });
-    const row = q.get.get(key.trim().toUpperCase());
+    const normalizedKey = key.trim().toUpperCase();
+    const row = q.get.get(normalizedKey);
     if (!row || row.active !== 1) return res.json({ valid: false, expires_at: null });
     if (row.expires_at && row.expires_at <= new Date().toISOString().slice(0, 10)) {
       return res.json({ valid: false, expires_at: row.expires_at });
+    }
+    // Logging only — a missing/malformed installId never affects the result
+    // above, this only feeds the admin panel's distinct-installs-per-key view.
+    if (installId && typeof installId === 'string' && installId.length <= 128) {
+      try { q.recordInstall.run(normalizedKey, installId.trim()); } catch {}
     }
     res.json({ valid: true, expires_at: row.expires_at ?? null });
   });
@@ -104,7 +142,17 @@ export function createApp(db, adminUser, adminPass) {
   });
 
   app.get('/admin/keys', requireAuth, (_req, res) => {
-    res.json(q.list.all());
+    // install_count_30d is additive — existing consumers of this response
+    // that don't know about the field simply ignore it.
+    const counts = Object.fromEntries(q.installCounts.all().map((r) => [r.key, r.n]));
+    res.json(q.list.all().map((row) => ({ ...row, install_count_30d: counts[row.key] ?? 0 })));
+  });
+
+  // Per-install detail for one key — who (which install ID) has actually
+  // been validating it and when, for reviewing a key flagged by an unusually
+  // high install_count_30d above. No auto-action taken on this data.
+  app.get('/admin/keys/:key/installs', requireAuth, (req, res) => {
+    res.json(q.listInstalls.all(req.params.key.trim().toUpperCase()));
   });
 
   app.post('/admin/keys', requireAuth, (req, res) => {

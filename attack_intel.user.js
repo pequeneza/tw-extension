@@ -500,13 +500,14 @@
        same job. Lets `keepTracking` show last-known advisories the instant
        the page loads, without waiting on a real sync. ───────────────────────*/
 
-    // Bumped to v2: entries cached under v1 could have been computed before
-    // the server started excluding an account's own reports from confirming
-    // evidence (see /advisory's reporterId filtering) — those old cached
-    // confirmedNearby values are wrong now and must never be read back as
-    // if they were fresh. Renaming the key is simpler and safer than trying
-    // to selectively invalidate v1 entries.
-    const ADVISORY_CACHE_KEY = 'attack_intel_advisory_cache_v2';
+    // v1 -> v2: excluded own reports from confirming evidence (reporterId
+    // filtering) — old cached confirmedNearby values were computed without
+    // that filter and would be wrong if read back as fresh.
+    // v2 -> v3: added hasOtherReports — entries cached under v2 don't have
+    // this field at all (reads as undefined/falsy), which would wrongly
+    // clear the waiting dot even for villages that DO have other-account
+    // data, just because that field didn't exist yet when they were cached.
+    const ADVISORY_CACHE_KEY = 'attack_intel_advisory_cache_v3';
     const ADVISORY_CACHE_STALE_MS = 24 * 3600_000;
 
     function loadAdvisoryCache() {
@@ -583,14 +584,24 @@
     // a computed "likely X" guess. attack_large.webp = a large was confirmed,
     // attack_medium.webp = a medium was confirmed; both can show together.
     // The player decides what that means for this specific row, not the tool.
-    function addSizeMarkers(entry, confirmedNearby) {
+    //
+    // hasOtherReports distinguishes "still waiting, but another account has
+    // reported something about this village" (keep the dot — a real match is
+    // still possible) from "no account other than this one has ever reported
+    // anything about this village" (clear it — there's nothing that could
+    // ever confirm it, so a waiting dot only implies detection is imminent
+    // when it structurally can't be).
+    function addSizeMarkers(entry, confirmedNearby, hasOtherReports) {
         const row = entry.td0 && entry.td0.closest('tr');
         const cell = row && row.querySelector(':scope > td.' + ADV_COL_CLASS);
         if (!cell) return;
 
         const hasLarge = !!(confirmedNearby && confirmedNearby.large);
         const hasMedium = !!(confirmedNearby && confirmedNearby.medium);
-        if (!hasLarge && !hasMedium) return; // nothing confirmed nearby — leave the waiting dot as-is
+        if (!hasLarge && !hasMedium) {
+            if (!hasOtherReports) clearCell(cell); // nothing else out there — don't imply this is still being tracked
+            return; // otherwise: nothing confirmed nearby yet — leave the waiting dot as-is
+        }
 
         clearCell(cell); // replace the waiting dot, not stack on top of it
         if (hasLarge) {
@@ -649,9 +660,10 @@
                 large: !!(data.confirmedNearby && data.confirmedNearby.large),
                 medium: !!(data.confirmedNearby && data.confirmedNearby.medium),
             };
-            cache[srcVillageId] = { confirmedNearby, checkedMs: Date.now() };
+            const hasOtherReports = !!data.hasOtherReports;
+            cache[srcVillageId] = { confirmedNearby, hasOtherReports, checkedMs: Date.now() };
             cacheDirty = true;
-            entries.forEach(e => addSizeMarkers(e, confirmedNearby));
+            entries.forEach(e => addSizeMarkers(e, confirmedNearby, hasOtherReports));
         }
 
         if (cacheDirty) saveAdvisoryCache(cache);
@@ -671,10 +683,10 @@
             const cached = cache[entry.srcVillageId];
             if (!cached || (now - cached.checkedMs) > ADVISORY_CACHE_STALE_MS) continue; // nothing usable — leave blank until a real sync runs
             if (cached.confirmedNearby && (cached.confirmedNearby.large || cached.confirmedNearby.medium)) {
-                addSizeMarkers(entry, cached.confirmedNearby);
-            } else {
-                addWaitingMarker(entry); // checked before, even if inconclusive — still worth showing as tracked
-            }
+                addSizeMarkers(entry, cached.confirmedNearby, cached.hasOtherReports);
+            } else if (cached.hasOtherReports) {
+                addWaitingMarker(entry); // checked before, inconclusive, but another account has data — still worth tracking
+            } // else: no other account has ever reported this village — leave blank, nothing to wait on
         }
     }
 

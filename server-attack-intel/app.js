@@ -297,9 +297,17 @@ export function createApp(db, { validateLicense = defaultValidateLicense } = {})
       return unknownArrivals.some((u) => arrivals.some((a) => Math.abs(u - a) <= span));
     }
 
+    // Tells the client whether there is ANY data at all — any size, not just
+    // a matching large/medium — from an account other than the one asking.
+    // When this is false, there is no cross-player evidence to ever resolve
+    // this village from, so the client should not show a "waiting, being
+    // tracked" signal that implies detection could still be imminent.
+    const hasOtherReports = evidenceRows.length > 0;
+
     res.json({
       srcVillageId: String(srcVillageId),
       knownSizes,
+      hasOtherReports,
       confirmedNearby: {
         medium: confirmedNearbyFor('medium'),
         large: confirmedNearbyFor('large'),

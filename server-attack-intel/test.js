@@ -149,6 +149,7 @@ describe('GET /advisory', () => {
     assert.deepEqual(body, {
       srcVillageId: 'does-not-exist',
       knownSizes: { small: 0, medium: 0, large: 0, unknown: 0 },
+      hasOtherReports: false,
       confirmedNearby: { medium: false, large: false },
     });
   });
@@ -277,6 +278,52 @@ describe('GET /advisory', () => {
 
     const { body } = await get('/advisory?world=pt111&srcVillageId=adv-noid&windowHours=12');
     assert.deepEqual(body.confirmedNearby, { medium: false, large: true });
+  });
+
+  // hasOtherReports tells the client whether a "waiting" signal is even
+  // meaningful — if the only data for this village is the requesting
+  // account's own, there is nothing else that could ever confirm it.
+  describe('hasOtherReports', () => {
+    test('is false when the only report is the requesting account\'s own', async () => {
+      await report({
+        cmdId: 'adv-honly-1', srcVillageId: 'adv-honly', size: 'unknown', inRange: false,
+        arrivalMs: T, reporterId: 'account-a',
+      });
+
+      const { body } = await get('/advisory?world=pt111&srcVillageId=adv-honly&reporterId=account-a');
+      assert.equal(body.hasOtherReports, false);
+    });
+
+    test('is true as soon as any other account has reported anything, even without a size match', async () => {
+      await report({
+        cmdId: 'adv-hother-1', srcVillageId: 'adv-hother', size: 'small', inRange: true,
+        arrivalMs: T - 100 * HOUR, reporterId: 'account-b',
+      });
+      await report({
+        cmdId: 'adv-hother-2', srcVillageId: 'adv-hother', size: 'unknown', inRange: false,
+        arrivalMs: T, reporterId: 'account-a',
+      });
+
+      const { body } = await get('/advisory?world=pt111&srcVillageId=adv-hother&reporterId=account-a');
+      assert.equal(body.hasOtherReports, true);
+      // still no confirmedNearby — a "small" report is not medium/large evidence
+      assert.deepEqual(body.confirmedNearby, { medium: false, large: false });
+    });
+
+    test('is true whenever confirmedNearby is true', async () => {
+      const { body } = await get('/advisory?world=pt111&srcVillageId=adv-other&reporterId=account-a');
+      assert.equal(body.hasOtherReports, true);
+    });
+
+    test('is false for a village with no reports at all', async () => {
+      const { body } = await get('/advisory?world=pt111&srcVillageId=does-not-exist-either&reporterId=account-a');
+      assert.equal(body.hasOtherReports, false);
+    });
+
+    test('without reporterId, reflects whether ANY report exists (backward compatible)', async () => {
+      const { body } = await get('/advisory?world=pt111&srcVillageId=adv-honly');
+      assert.equal(body.hasOtherReports, true); // the account-a row from the first test above still counts
+    });
   });
 });
 

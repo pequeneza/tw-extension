@@ -300,6 +300,366 @@
     }
 
     /* ═══════════════════════════════════════════════════════════════════════
+       MAP RECRUIT NOBLE
+       Adds a second native a.mp button — same TWMap.context technique as the
+       Village Switcher above — that recruits ONE noble into the clicked
+       village. If it already has enough wood/clay/iron (stock + incoming)
+       for one noble, opens that village's Nobre page in a pinned, unfocused
+       background tab which clicks TribalWars' own vanilla "Treinar" button
+       exactly once and then closes itself once the request is queued. If
+       resources are short, this just reports the shortfall (auto-sending
+       from other villages is a separate feature).
+       This deliberately does NOT touch the "Noble Sender + Trainer" module's
+       own auto-train flag/localStorage — that mechanism is designed to keep
+       recruiting indefinitely (its own "Flag stays active" comment), which
+       recruited more than the single noble this button promises. Instead we
+       interact only with TW's native a.btn-recruit link, once, per click.
+    ═══════════════════════════════════════════════════════════════════════ */
+
+    const NOBLE_COST = { wood: 40000, clay: 50000, iron: 50000 };
+    const NOBLE_POP_COST = 100;
+    const MAP_RECRUIT_HANDOFF_KEY = 'xbot_map_recruit_pending';
+    const mapRecruitInProgress = new Set();
+
+    // Sum-of-two-uniforms jitter: clusters around baseMs and tapers off
+    // toward the edges, closer to how human reaction/click timing is
+    // actually distributed than a flat range (where the extremes are as
+    // likely as the middle).
+    function recruitJitter(baseMs, spreadMs) {
+        const tri = (Math.random() + Math.random() - 1); // -1..1, triangular
+        return Math.max(0, Math.round(baseMs + tri * spreadMs));
+    }
+
+    function recruitNum(str) {
+        if (!str) return 0;
+        return parseInt(String(str).replace(/[^0-9]/g, ''), 10) || 0;
+    }
+
+    function recruitFmt(n) {
+        return (n || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+    }
+
+    function showRecruitToast(msg, type) {
+        let toast = document.getElementById('tw-recruit-noble-toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'tw-recruit-noble-toast';
+            toast.style.cssText = [
+                'position:fixed', 'right:16px', 'bottom:16px', 'z-index:99999',
+                'max-width:320px', 'padding:8px 12px', 'border-radius:4px',
+                'font:12px/1.4 Verdana,Arial,sans-serif', 'color:#fff',
+                'box-shadow:0 2px 6px rgba(0,0,0,0.4)', 'transition:opacity .3s',
+            ].join(';');
+            document.body.appendChild(toast);
+        }
+        toast.style.background = type === 'err' ? '#a30000'
+            : type === 'ok' ? '#217a21'
+            : type === 'warn' ? '#8a5a00'
+            : '#333';
+        toast.textContent = msg;
+        toast.style.opacity = '1';
+        clearTimeout(toast._hideTimer);
+        toast._hideTimer = setTimeout(() => { toast.style.opacity = '0'; }, 6000);
+    }
+
+    // Finds the clicked village's current stock via the same
+    // overview_villages&mode=prod page the "Noble Sender + Trainer" sidebar
+    // uses to list every own village.
+    async function fetchVillageStock(villageId) {
+        let url = 'game.php?screen=overview_villages&mode=prod&page=-1';
+        if (game_data.player.sitter > 0) url = `game.php?t=${game_data.player.id}&screen=overview_villages&mode=prod&page=-1`;
+
+        const html = await (await fetch(url, { credentials: 'include' })).text();
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        let found = null;
+
+        doc.querySelectorAll('#production_table tr, table.vis tr').forEach(row => {
+            const link = row.querySelector('.quickedit-vn a, a[href*="info_village"]');
+            if (!link) return;
+            const id = link.href.match(/village=(\d+)/)?.[1];
+            if (!id || String(id) !== String(villageId)) return;
+
+            const res = row.querySelectorAll('.res');
+            // Farm (population) cell has no stable class/link of its own —
+            // anchor off the merchant cell's link (a[href*="market"]), which
+            // sits immediately before it in every known table layout, same
+            // way the merchant count itself is already found below.
+            const merchLink = row.querySelector('a[href*="market"]');
+            const farmText = merchLink ? merchLink.closest('td')?.nextElementSibling?.textContent : '';
+            const farmMatch = farmText ? farmText.match(/(\d+)\s*\/\s*(\d+)/) : null;
+            found = {
+                wood: recruitNum(res[0]?.textContent),
+                clay: recruitNum(res[1]?.textContent),
+                iron: recruitNum(res[2]?.textContent),
+                popUsed: farmMatch ? +farmMatch[1] : 0,
+                popMax: farmMatch ? +farmMatch[2] : 0,
+            };
+        });
+
+        return found;
+    }
+
+    async function fetchVillageIncoming(villageId) {
+        let url = `game.php?village=${villageId}&screen=market&mode=call`;
+        if (game_data.player.sitter > 0) url += `&t=${game_data.player.id}`;
+
+        try {
+            const html = await (await fetch(url, { credentials: 'include' })).text();
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+
+            const resSum = doc.querySelector('table#res_sum');
+            if (resSum) {
+                return {
+                    wood: recruitNum(resSum.querySelector('#total_wood')?.textContent),
+                    clay: recruitNum(resSum.querySelector('#total_stone')?.textContent),
+                    iron: recruitNum(resSum.querySelector('#total_iron')?.textContent),
+                };
+            }
+
+            const table = doc.querySelector('#market_merchant_call');
+            if (!table) return { wood: 0, clay: 0, iron: 0 };
+
+            let wood = 0, clay = 0, iron = 0;
+            table.querySelectorAll('tbody tr').forEach(row => {
+                const cells = row.querySelectorAll('td');
+                if (cells.length < 6) return;
+                wood += recruitNum(cells[3]?.textContent);
+                clay += recruitNum(cells[4]?.textContent);
+                iron += recruitNum(cells[5]?.textContent);
+            });
+            return { wood, clay, iron };
+        } catch {
+            return { wood: 0, clay: 0, iron: 0 };
+        }
+    }
+
+    async function recruitNobleFromMap(targetId) {
+        if (mapRecruitInProgress.has(targetId)) return;
+        mapRecruitInProgress.add(targetId);
+
+        try {
+            showRecruitToast('A verificar recursos…', 'info');
+
+            const [stock, incoming] = await Promise.all([
+                fetchVillageStock(targetId),
+                fetchVillageIncoming(targetId),
+            ]);
+
+            if (!stock) {
+                showRecruitToast('❌ Não foi possível carregar dados desta aldeia.', 'err');
+                return;
+            }
+
+            const remainingW = Math.max(0, NOBLE_COST.wood - stock.wood - incoming.wood);
+            const remainingC = Math.max(0, NOBLE_COST.clay - stock.clay - incoming.clay);
+            const remainingI = Math.max(0, NOBLE_COST.iron - stock.iron - incoming.iron);
+
+            if (remainingW > 0 || remainingC > 0 || remainingI > 0) {
+                showRecruitToast(
+                    `⚠ Recursos insuficientes — faltam ${recruitFmt(remainingW)} madeira / ${recruitFmt(remainingC)} argila / ${recruitFmt(remainingI)} ferro.`,
+                    'warn'
+                );
+                return;
+            }
+
+            const popFree = stock.popMax - stock.popUsed;
+            if (popFree < NOBLE_POP_COST) {
+                showRecruitToast(
+                    `⚠ População insuficiente — faltam ${recruitFmt(NOBLE_POP_COST - popFree)} de espaço na fazenda (${recruitFmt(stock.popUsed)}/${recruitFmt(stock.popMax)}).`,
+                    'warn'
+                );
+                return;
+            }
+
+            showRecruitToast('✅ Recursos suficientes — a treinar nobre…', 'ok');
+            setTimeout(() => openSnobTabAndRecruit(targetId), recruitJitter(700, 350));
+        } catch (e) {
+            showRecruitToast('❌ Erro ao recrutar: ' + e.message, 'err');
+        } finally {
+            mapRecruitInProgress.delete(targetId);
+        }
+    }
+
+    // Opens the target village's Nobre page pinned + unfocused (via the
+    // background service worker, through router.ts's xbot:tabs:armNextTab
+    // bridge — chrome.tabs isn't reachable from this main-world script) and
+    // hands off which village to recruit in via sessionStorage. window.open()
+    // clones the opener's sessionStorage into the new tab synchronously, so
+    // this is set right before opening rather than passed as a URL param
+    // (keeps it out of any request TW's server sees). initMapRecruitCompletion()
+    // reads and consumes it on the new tab's first load.
+    function openSnobTabAndRecruit(targetId) {
+        try {
+            sessionStorage.setItem(MAP_RECRUIT_HANDOFF_KEY, JSON.stringify({ villageId: String(targetId), ts: Date.now() }));
+        } catch (_) {}
+
+        const sitterFrag = game_data.player.sitter > 0 ? `t=${game_data.player.id}&` : '';
+        const url = `/game.php?village=${targetId}&${sitterFrag}screen=snob`;
+
+        let launched = false;
+        function launch() {
+            if (launched) return;
+            launched = true;
+            document.removeEventListener('xbot:tabs:armed', launch);
+            window.open(url, '_blank');
+        }
+        document.addEventListener('xbot:tabs:armed', launch);
+        document.dispatchEvent(new CustomEvent('xbot:tabs:armNextTab'));
+        setTimeout(launch, 200);
+    }
+
+    // Runs on screen=snob. If this page load was opened by openSnobTabAndRecruit()
+    // above (sessionStorage handoff present and matching this village), polls
+    // for TribalWars' own native recruit link (a.btn-recruit / a.btn.btn-recruit
+    // — the same vanilla element noble_sender_trainer.user.js's sidebar
+    // targets, so this interacts only with stock TW markup) and clicks it
+    // exactly once, then closes the tab. If the button never appears (e.g.
+    // resources weren't actually enough, or farm/population capacity blocks
+    // training), the tab is left open rather than silently closed, so the
+    // situation is visible for manual inspection.
+    const MAP_RECRUIT_AWAITING_CLOSE_KEY = 'xbot_map_recruit_awaiting_close';
+
+    function initMapRecruitCompletion() {
+        if (getCurrentScreen() !== 'snob') return;
+
+        const curVillageId = (typeof game_data !== 'undefined' && game_data.village) ? String(game_data.village.id) : null;
+        if (!curVillageId) return;
+
+        // Case 1: we already clicked the recruit link on a PREVIOUS load of
+        // this same tab. TW's recruit link (a.btn-recruit) is a plain
+        // <a href="...&action=train..."> with no onclick/AJAX handler — it's
+        // a real navigation, which tears down this whole JS context (and any
+        // in-memory setTimeout) the instant it's clicked. So "close after
+        // queued" can't rely on a timer started before the click; instead we
+        // mark intent in sessionStorage (survives the reload) right before
+        // clicking, then check for it here on the page that comes back.
+        let awaitingClose = null;
+        try {
+            const raw = sessionStorage.getItem(MAP_RECRUIT_AWAITING_CLOSE_KEY);
+            if (raw) awaitingClose = JSON.parse(raw);
+        } catch (_) {}
+        if (awaitingClose && awaitingClose.villageId === curVillageId) {
+            try { sessionStorage.removeItem(MAP_RECRUIT_AWAITING_CLOSE_KEY); } catch (_) {}
+            setTimeout(() => { try { window.close(); } catch (_) {} }, recruitJitter(600, 200));
+            return;
+        }
+
+        // Case 2: fresh handoff from the map click — find and click the button.
+        let handoff = null;
+        try {
+            const raw = sessionStorage.getItem(MAP_RECRUIT_HANDOFF_KEY);
+            if (raw) handoff = JSON.parse(raw);
+        } catch (_) {}
+        if (!handoff) return;
+        try { sessionStorage.removeItem(MAP_RECRUIT_HANDOFF_KEY); } catch (_) {}
+        if (curVillageId !== handoff.villageId) return;
+
+        const MAX_ATTEMPTS = 20; // ~20 * 500ms polling ≈ 10s
+        let attempts = 0;
+
+        function tryClick() {
+            attempts++;
+            const btn = document.querySelector('a.btn-recruit, a.btn.btn-recruit');
+            if (btn) {
+                setTimeout(() => {
+                    try {
+                        sessionStorage.setItem(MAP_RECRUIT_AWAITING_CLOSE_KEY, JSON.stringify({ villageId: curVillageId, ts: Date.now() }));
+                    } catch (_) {}
+                    btn.click();
+                    // Fallback in case this particular click DOESN'T navigate
+                    // (defensive only — observed behavior is a real navigation,
+                    // handled by the awaiting-close branch above instead).
+                    setTimeout(() => { try { window.close(); } catch (_) {} }, recruitJitter(1200, 400));
+                }, recruitJitter(700, 350));
+                return;
+            }
+            if (attempts >= MAX_ATTEMPTS) {
+                console.warn('[xBot] Recrutar nobre (mapa): botão de treino não apareceu — recursos podem não estar realmente disponíveis, ou a aldeia atingiu o limite de população. Aba mantida aberta.');
+                return;
+            }
+            setTimeout(tryClick, 500);
+        }
+        tryClick();
+    }
+
+    // Crown+plus icon, base64-embedded: main-world userscripts have no
+    // chrome.runtime.getURL access, so a bundled asset can't be referenced
+    // here without a cross-world bridge. (Source file: src/icons/recruit_noble.png)
+    const RECRUIT_ICON_B64 = "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";
+    const RECRUIT_ICON_URL = `data:image/png;base64,${RECRUIT_ICON_B64}`;
+
+    function initMapRecruitButton() {
+        if (getCurrentScreen() !== 'map') return;
+        if (typeof TWMap === 'undefined' || !TWMap?.context || !TWMap?.urls?.ctx) return;
+        if (document.getElementById('mp_recruit_noble')) return;
+
+        const container = document.getElementById('map-ctx-buttons');
+        if (!container) return;
+
+        container.insertAdjacentHTML('beforeend',
+            `<a class="mp" id="mp_recruit_noble" title="Recrutar nobre nesta aldeia" href="/game.php?screen=map"` +
+            ` style="opacity:0;display:none;"></a>` +
+            // Native .mp icons have no CSS box at all — their button "frame" is
+            // baked into TW's own sprite artwork. We draw our own frame here
+            // (same parchment/brown palette as .tw-incf-btn elsewhere in this
+            // file) so the custom icon reads as a button like the rest.
+            `<style>#mp_recruit_noble:hover{background-color:#f0dca0 !important;border-color:#4a2000 !important;}</style>`
+        );
+
+        TWMap.context._ownOrder.push('mp_recruit_noble');
+        // Same left column as mp_res/mp_att (x=-44) and same row as mp_switch
+        // (y=-80) — matches the native icons' 32px column spacing instead of
+        // an arbitrary offset.
+        TWMap.context._circlePos.push([-44, -80]);
+
+        const sitterFrag = game_data.player.sitter !== '0'
+            ? `t=${game_data.player.id}&`
+            : '';
+
+        Object.defineProperty(TWMap.urls.ctx, 'mp_recruit_noble', {
+            get() {
+                return `/game.php?village=__village__&${sitterFrag}screen=snob`;
+            },
+        });
+
+        const btn = document.getElementById('mp_recruit_noble');
+
+        // TW's own map click handler rewrites this element's whole `style`
+        // attribute on every village click (to reposition it), wiping any
+        // custom background-image/color/border we set — it replaces them
+        // with its own shared sprite + transparent background. Reassert our
+        // icon/frame styling every time TW touches the attribute, without
+        // touching left/top/opacity/display (TW must keep controlling those).
+        function applyRecruitIconStyle() {
+            if (btn.style.backgroundImage.indexOf('base64') !== -1) return;
+            btn.style.setProperty('background-image', `url(${RECRUIT_ICON_URL})`, 'important');
+            btn.style.setProperty('background-size', '20px 20px', 'important');
+            btn.style.setProperty('background-position', 'center', 'important');
+            btn.style.setProperty('background-repeat', 'no-repeat', 'important');
+            btn.style.setProperty('box-sizing', 'border-box', 'important');
+            btn.style.setProperty('background-color', '#e9d0a9', 'important');
+            btn.style.setProperty('border', '1px solid #603000', 'important');
+            btn.style.setProperty('border-radius', '3px', 'important');
+            btn.style.setProperty('box-shadow', '1px 1px 2px rgba(0,0,0,0.30)', 'important');
+        }
+        applyRecruitIconStyle();
+        new MutationObserver(applyRecruitIconStyle)
+            .observe(btn, { attributes: true, attributeFilter: ['style'] });
+
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const href = btn.getAttribute('href') || '';
+            const m = href.match(/village=(\d+)/);
+            if (!m) {
+                showRecruitToast('❌ Não foi possível identificar a aldeia clicada.', 'err');
+                return;
+            }
+            recruitNobleFromMap(m[1]);
+        });
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════════
        INCOMING FILTER
        Adds a support-icon toggle button to incoming tables (#show_incoming_units,
        #commands_incomings). Clicking hides all support rows; clicking again
@@ -1779,6 +2139,8 @@
     function boot() {
         injectStyle();
         if (cfg.villageSwitcher !== false) initVillageSwitcher();
+        if (cfg.mapRecruitNoble !== false) initMapRecruitButton();
+        if (cfg.mapRecruitNoble !== false) initMapRecruitCompletion();
         if (cfg.incomingFilter !== false) initIncomingFilter();
         if (cfg.quickbarCollapse !== false) initQuickbarCollapse();
         if (cfg.bulkCancel !== false) initBulkCancel();

@@ -35,8 +35,34 @@ self.addEventListener("fetch", (_event) => {
   // intentional no-op pass-through
 });
 
+// ─── WebRTC IP leak prevention ─────────────────────────────────────────────────
+// Players running multiple accounts typically use a separate proxy/VPN per Chrome
+// profile so each account appears to come from a different IP. WebRTC's ICE
+// candidate gathering (STUN) can reveal the real underlying IP regardless of that
+// proxy, because plain HTTP/SOCKS proxies generally don't tunnel the UDP traffic
+// WebRTC uses — so a page can fingerprint the real shared IP even while every
+// normal HTTP request correctly goes out through the assigned proxy. This forces
+// WebRTC to only ever use the proxied route (or disable itself) for the whole
+// profile, closing that gap regardless of whether the configured proxy happens to
+// handle UDP correctly. Re-applied on every browser startup, not just install,
+// since it's a Chrome preference, not extension storage.
+function applyWebRtcIpLeakProtection(): void {
+  chrome.privacy.network.webRTCIPHandlingPolicy.set(
+    { value: "disable_non_proxied_udp" },
+    () => {
+      if (chrome.runtime.lastError) {
+        console.warn("[xBot] Could not set WebRTC IP handling policy:", chrome.runtime.lastError.message);
+      }
+    },
+  );
+}
+
+chrome.runtime.onStartup.addListener(applyWebRtcIpLeakProtection);
+
 // ─── Install / update ─────────────────────────────────────────────────────────
 chrome.runtime.onInstalled.addListener(({ reason }) => {
+  applyWebRtcIpLeakProtection();
+
   if (reason === "install") {
     const defaults: ModuleSettings = {};
     for (const mod of MODULE_CONFIGS) defaults[mod.id] = false;

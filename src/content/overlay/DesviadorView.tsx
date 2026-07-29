@@ -81,11 +81,13 @@ function TagInput({
   tags,
   placeholder,
   variant,
+  disabled,
   onChange,
 }: {
   tags: string[];
   placeholder: string;
   variant: "black" | "white";
+  disabled?: boolean;
   onChange: (tags: string[]) => void;
 }) {
   const [draft, setDraft] = useState("");
@@ -97,12 +99,15 @@ function TagInput({
   };
 
   return (
-    <div className={`desv-tag-input desv-tag-input--${variant}`}>
+    <div
+      className={`desv-tag-input desv-tag-input--${variant}${disabled ? " desv-tag-input--disabled" : ""}`}
+    >
       {tags.map(tag => (
         <span key={tag} className="desv-tag-chip">
           {tag}
           <button
             className="desv-tag-chip-x"
+            disabled={disabled}
             onClick={() => onChange(tags.filter(x => x !== tag))}
           >×</button>
         </span>
@@ -111,6 +116,7 @@ function TagInput({
         className="desv-tag-draft"
         value={draft}
         placeholder={tags.length === 0 ? placeholder : ""}
+        disabled={disabled}
         onChange={e => setDraft(e.target.value)}
         onKeyDown={e => {
           if (e.key === "Enter" || e.key === ",") { e.preventDefault(); commit(); }
@@ -149,6 +155,8 @@ export function DesviadorView({
   const [alertSec, setAlertSec] = useState(() =>
     parseInt(localStorage.getItem(ALERT_SEC_KEY) || "60", 10)
   );
+  const [cancelSecDraft, setCancelSecDraft] = useState(() => String(cancelSec));
+  const [alertSecDraft, setAlertSecDraft] = useState(() => String(alertSec));
   const [history, setHistory] = useState<HistoryEntry[]>(() => {
     try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); } catch { return []; }
   });
@@ -193,17 +201,21 @@ export function DesviadorView({
     setHistory([]);
   }, []);
 
-  const handleCancelSec = (raw: string) => {
-    const v = parseInt(raw, 10);
-    if (!Number.isFinite(v) || v < 60) return;
+  // Draft state lets the user type freely (e.g. clearing "300" to type "90");
+  // clamping only on commit avoids the input snapping back mid-keystroke.
+  const commitCancelSec = (raw: string) => {
+    const parsed = parseInt(raw, 10);
+    const v = Math.min(600, Math.max(60, Number.isFinite(parsed) ? parsed : 60));
     setCancelSec(v);
+    setCancelSecDraft(String(v));
     localStorage.setItem(CANCEL_SEC_KEY, String(v));
   };
 
-  const handleAlertSec = (raw: string) => {
-    const v = parseInt(raw, 10);
-    if (!Number.isFinite(v) || v < 5) return;
+  const commitAlertSec = (raw: string) => {
+    const parsed = parseInt(raw, 10);
+    const v = Math.min(300, Math.max(5, Number.isFinite(parsed) ? parsed : 5));
     setAlertSec(v);
+    setAlertSecDraft(String(v));
     localStorage.setItem(ALERT_SEC_KEY, String(v));
   };
 
@@ -283,10 +295,12 @@ export function DesviadorView({
             <input
               className="input desv-num-input"
               type="number"
-              value={cancelSec}
+              value={cancelSecDraft}
               min={60}
               max={600}
-              onChange={e => handleCancelSec(e.target.value)}
+              onChange={e => setCancelSecDraft(e.target.value)}
+              onBlur={e => commitCancelSec(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
             />
             <span className="desv-row-unit">seg</span>
           </div>
@@ -296,10 +310,12 @@ export function DesviadorView({
             <input
               className="input desv-num-input"
               type="number"
-              value={alertSec}
+              value={alertSecDraft}
               min={5}
               max={300}
-              onChange={e => handleAlertSec(e.target.value)}
+              onChange={e => setAlertSecDraft(e.target.value)}
+              onBlur={e => commitAlertSec(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
             />
             <span className="desv-row-unit">seg antes</span>
             <span
@@ -331,7 +347,6 @@ export function DesviadorView({
               checked={desvState.allCommands}
               onChange={e => sendCmd({ type: "setAllCommands", value: e.target.checked })}
             />
-            <span className="desv-row-unit">ignorar filtro de tags</span>
           </div>
 
           {/* Blacklist */}
@@ -341,13 +356,14 @@ export function DesviadorView({
                 Agir sobre
               </span>
               <span className="desv-tag-section-hint">
-                etiquetas que ativam o desvio
+                Etiquetas que ativam o desvio
               </span>
             </div>
             <TagInput
               tags={blacklistTags}
               placeholder="ex: [Desviar]"
               variant="black"
+              disabled={desvState.allCommands}
               onChange={handleBlacklistChange}
             />
           </div>
@@ -359,7 +375,7 @@ export function DesviadorView({
                 Ignorar
               </span>
               <span className="desv-tag-section-hint">
-                etiquetas que bloqueiam o desvio
+                Etiquetas que bloqueiam o desvio
               </span>
             </div>
             <TagInput

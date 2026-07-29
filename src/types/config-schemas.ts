@@ -808,6 +808,146 @@ export const MODULE_CONFIG_SCHEMAS: ModuleConfigSchemas = {
     ],
   },
 
+  // NOTE: auto_sender.user.js and AutoSenderView.tsx read/write these settings directly
+  // via localStorage (xbot_autosender_settings), not through window.__twSuiteCfg — the
+  // view's own Config tab is what actually edits them. This entry exists only so hasCfg
+  // is derived the same way as every other module (ModuleCard's cfg-btn); the generic
+  // ConfigView it enables is unreachable in practice since onCfg routes "auto_sender" to
+  // the dedicated AutoSenderView instead (same situation as desviador above).
+  auto_sender: {
+    storageKey: "xbot_autosender_settings",
+    fields: [
+      {
+        key: "lookahead",
+        label: "Lookahead (s)",
+        type: "number",
+        default: 40,
+        min: 20,
+        max: 120,
+        step: 1,
+        help: "Seconds before launch that the place tab is opened.",
+      },
+      {
+        key: "autoTimingOffset",
+        label: "Auto timing offset (ping)",
+        type: "checkbox",
+        default: false,
+        help: "Measure round-trip ping and use it as the send offset instead of a fixed value.",
+      },
+      {
+        key: "timingOffset",
+        label: "Fixed offset (ms)",
+        type: "number",
+        default: 0,
+        min: -500,
+        max: 500,
+        step: 1,
+        help: "Positive = click later (network compensation). Used when auto timing offset is off.",
+      },
+      {
+        key: "autoSendNobles",
+        label: "Auto Send Nobles",
+        type: "checkbox",
+        default: true,
+        help: "Expand the noble train on the confirm page automatically.",
+      },
+      {
+        key: "autoClose",
+        label: "Auto-close tab after send",
+        type: "checkbox",
+        default: true,
+      },
+    ],
+  },
+
+  // NOTE: telegram_notifier.user.js and TelegramView.tsx read/write these settings
+  // directly via localStorage (tm_telegram_settings), not through window.__twSuiteCfg —
+  // the view's own Definições tab is what actually edits them. This entry exists only so
+  // hasCfg is derived the same way as every other module (ModuleCard's cfg-btn); the
+  // generic ConfigView it enables is unreachable in practice since onCfg routes
+  // "telegram_notifier" to the dedicated TelegramView instead (same situation as
+  // desviador/auto_sender above).
+  telegram_notifier: {
+    storageKey: "tm_telegram_settings",
+    fields: [
+      {
+        key: "active",
+        label: "Notifications active",
+        type: "checkbox",
+        default: false,
+      },
+      {
+        key: "botToken",
+        label: "Bot Token",
+        type: "text",
+        default: "",
+        help: "Telegram bot token from @BotFather.",
+      },
+      {
+        key: "chatId",
+        label: "Chat ID",
+        type: "text",
+        default: "",
+        help: "Target chat/channel ID, from @userinfobot.",
+      },
+      {
+        key: "notifyOnCaptcha",
+        label: "Notify on captcha",
+        type: "checkbox",
+        default: true,
+      },
+      {
+        key: "notifyOnSend",
+        label: "Notify on Autosender send",
+        type: "checkbox",
+        default: true,
+      },
+      {
+        key: "cooldownMs",
+        label: "Cooldown (ms)",
+        type: "number",
+        default: 300000,
+        min: 60000,
+        step: 60000,
+        help: "Minimum time between alerts of the same type.",
+      },
+    ],
+  },
+
+  // NOTE: attack_intel.user.js and AttackIntelView.tsx read/write these settings
+  // directly via localStorage (attack_intel_settings_v1), not through window.__twSuiteCfg.
+  // This entry exists only so hasCfg is derived the same way as every other module;
+  // the generic ConfigView it enables is unreachable since onCfg routes "attack_intel"
+  // to the dedicated AttackIntelView (same situation as telegram_notifier above).
+  attack_intel: {
+    storageKey: "attack_intel_settings_v1",
+    fields: [
+      {
+        key: "enabled",
+        label: "Tracking enabled",
+        type: "checkbox",
+        default: true,
+      },
+      {
+        key: "serverUrl",
+        label: "Server URL",
+        type: "text",
+        default: "http://localhost:3742",
+        help: "Address of the local attack-intel database.",
+      },
+      {
+        key: "windowHours",
+        label: "Advisory window (hours)",
+        type: "number",
+        default: 12,
+        min: 1,
+        max: 48,
+        step: 1,
+        help: "Hours around a confirmed large attack's arrival to flag other unresolved attacks from the same village.",
+      },
+    ],
+  },
+
   mass_label_renamer: {
     storageKey: "tw_suite_cfg_mass_label_renamer",
     fields: [

@@ -1680,6 +1680,8 @@ select.input {
 
 .desv-tag-input { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 28px; padding: 3px 6px; background: var(--n50); border: 1px solid var(--n200); border-radius: 6px; cursor: text; }
 .desv-tag-input:focus-within { border-color: var(--b400); }
+.desv-tag-input--disabled { opacity: 0.45; cursor: not-allowed; filter: grayscale(0.6); }
+.desv-tag-input--disabled .desv-tag-chip-x { cursor: not-allowed; }
 .desv-tag-input--black .desv-tag-chip { background: var(--b-bg); border-color: var(--b-br); color: var(--b500); }
 .desv-tag-input--white .desv-tag-chip { background: var(--r-bg); border-color: var(--r-br); color: var(--r500); }
 .desv-tag-chip { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; padding: 1px 6px; border-radius: 10px; border: 1px solid transparent; font-weight: 500; }

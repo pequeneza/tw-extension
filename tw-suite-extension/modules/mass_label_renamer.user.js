@@ -26,10 +26,9 @@
     return Math.max(0, Math.round(baseMs + (Math.random() * 2 - 1) * spreadMs));
   }
 
-  // Performs one quickedit rename with human-like pacing: open the inline
-  // editor, pause, type the new value, pause again, then save. Each pause is
-  // jittered so the two-step pacing totals roughly 2-3s per row instead of
-  // firing all three DOM actions in the same synchronous tick.
+  // Performs one quickedit rename with minimal pacing: open the inline
+  // editor, type the new value, then save. Each pause is jittered to keep
+  // the timing from being mechanically identical run-to-run.
   // buildValue(currentVal) -> newVal; onDone(success) called once finished.
   function performRename($row, buildValue, onDone) {
     $row.find('.rename-icon').click();
@@ -40,8 +39,8 @@
       setTimeout(function () {
         $row.find('input[type=button]').click();
         if (onDone) onDone(true);
-      }, jitter(1300, 300));
-    }, jitter(1200, 300));
+      }, jitter(100, 50));
+    }, jitter(200, 100));
   }
 
   // ── User preferences ────────────────────────────────────────────────────────
@@ -299,20 +298,32 @@
     $row.find('.rename-buttons').remove();
     $row.find('.mlr-chip').remove();
 
+    // Match button span styling for layout consistency
+    var chipSpanStyle = isIncomingsPage
+      ? 'margin-left:auto;white-space:nowrap;flex-shrink:0;'
+      : 'margin-left:4px;white-space:nowrap;flex-shrink:0;';
+
     var chipHtml = '<span class="mlr-chip"' +
-      ' style="background:' + bg + ';color:#444;margin-left:4px;padding:2px 6px;' +
+      ' style="' + chipSpanStyle + 'background:' + bg + ';color:#444;padding:2px 6px;' +
       'border-radius:3px;font-size:10px;font-weight:bold;cursor:default;' +
-      'display:inline-flex;align-items:center;gap:4px;">' +
+      'display:inline-flex;align-items:center;gap:4px;opacity:0;' +
+      'transition:opacity 150ms ease-in;">' +
       tag[1] +
       '<button class="mlr-edit-btn" type="button" title="Re-etiquetar"' +
       ' style="background:rgba(0,0,0,0.25);border:none;color:inherit;cursor:pointer;' +
       'font-size:9px;padding:1px 3px;border-radius:2px;line-height:1;">&#9998;</button>' +
       '</span>';
 
-    $row.find('.quickedit-content').append(chipHtml);
+    var $chip = window.$(chipHtml);
+    $row.find('.quickedit').after($chip);
+
+    // Trigger fade-in via reflow
+    window.requestAnimationFrame(function () {
+      $chip.css('opacity', '1');
+    });
 
     // Clicking the pencil restores full button strip
-    $row.find('.mlr-chip .mlr-edit-btn').off('click').on('click', function (e) {
+    $chip.find('.mlr-edit-btn').off('click').on('click', function (e) {
       e.stopPropagation();
       $row.find('.mlr-chip').remove();
       injectButtonsLegacy(nr, row);

@@ -3,7 +3,7 @@
   "name": "xBot",
   "version": "1.0.0",
   "description": "TribalWars PT automation suite — 10 modules, in-game overlay. Opt-in per module.",
-  "permissions": ["storage", "scripting", "activeTab", "tabs", "notifications", "declarativeNetRequest"],
+  "permissions": ["storage", "scripting", "activeTab", "tabs", "notifications", "declarativeNetRequest", "privacy"],
   "host_permissions": [
     "https://*.tribalwars.com.pt/*",
     "https://license.vivaomadeira.com/*"

@@ -72,7 +72,7 @@
   let atRefreshTimer   = null;
   let atTrainProgress  = false;
 
-  function atRandRefresh() { return AT_REFRESH_ON_MISSING + Math.random() * AT_REFRESH_JITTER; }
+  function atRandRefresh() { return jitter(AT_REFRESH_ON_MISSING + AT_REFRESH_JITTER / 2, AT_REFRESH_JITTER / 2); }
 
   let settings = { requestedNobles: 1, ignoreBelowPoints: 1500 };
   let playerVillages = [];
@@ -126,6 +126,17 @@
     #shk-noble-dashboard .shk-min-btn { float:right; cursor:pointer; text-decoration:none; }
     #shk-incoming-line { margin: 4px 0 2px; font-size: 11px; }
   `);
+
+  // Adds random jitter to fixed UI-automation delays so repeated runs (and
+  // automated detection) don't see identical timing every time. Uses the sum
+  // of two uniform draws (triangular distribution) instead of one flat draw,
+  // so values cluster around baseMs and taper off toward the edges — closer
+  // to how human reaction times are actually distributed than a flat range
+  // where the extremes are exactly as likely as the middle.
+  function jitter(baseMs, spreadMs) {
+    const tri = (Math.random() + Math.random() - 1); // -1..1, triangular
+    return Math.max(0, Math.round(baseMs + tri * spreadMs));
+  }
 
   function $(s) { return document.querySelector(s); }
   function num(str) {
@@ -476,7 +487,7 @@
         log(`Envio falhou de ${src.name} – pulando...`, "warn");
       }
 
-      await new Promise(r => setTimeout(r, 1200 + Math.random() * 900));
+      await new Promise(r => setTimeout(r, jitter(1650, 450)));
     }
 
     if (remainingW > 0 || remainingC > 0 || remainingI > 0) {
@@ -572,7 +583,7 @@
           if (recruitBtn) {
             atDisarmRefresh();
             log('✅ Botão de recrutar disponível — a treinar nobre…', 'ok');
-            recruitBtn.click();
+            setTimeout(() => recruitBtn.click(), jitter(700, 350));
             /* Flag stays active — TW will reload and we check again */
             return;
           }
@@ -591,8 +602,8 @@
             lsSet(atKey(AUTO_TRAIN_KEY), false);
             return;
           }
-          const jitter   = 5000 + Math.random() * 10_000;
-          const waitMs   = untilMs + jitter;
+          const waitJitterMs = jitter(10_000, 5_000);
+          const waitMs   = untilMs + waitJitterMs;
           const readySec = Math.round(untilMs / 1000);
           log(`⏳ Recursos prontos em ${readySec}s — a aguardar…`, 'warn');
           atDisarmRefresh();
@@ -609,7 +620,7 @@
         if (recruitBtn) {
           atDisarmRefresh();
           log('✅ Botão de recrutar disponível — a treinar nobre…', 'ok');
-          recruitBtn.click();
+          setTimeout(() => recruitBtn.click(), jitter(700, 350));
           /* Flag stays active — TW will reload and we check again */
         } else {
           log('⚠ Tempo passou mas botão ainda não visível — a recarregar…', 'warn');
@@ -618,7 +629,7 @@
       } finally {
         atTrainProgress = false;
       }
-    }, 500);
+    }, jitter(500, 150));
   }
 
   function atStopInterval() {
@@ -626,9 +637,11 @@
     atRefreshTimer = null;
   }
 
-  /* Run once on page load if the auto-train flag is set for THIS village */
+  /* Run once on page load if the auto-train flag is set for THIS village.
+     manual=true so an already-available recruit button gets clicked right
+     away instead of first going through the wait-estimate branch. */
   if (lsGet(atKey(AUTO_TRAIN_KEY), false)) {
-    setTimeout(autoTrainIfReady, 1200);
+    setTimeout(() => autoTrainIfReady(true), 1200);
   }
 
   // ==================== SIDEBAR INSERTION ====================

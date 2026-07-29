@@ -772,6 +772,8 @@ function Panel({
                     setViewP({ type: "twutils" });
                   } else if (mod.id === "mass_label_renamer") {
                     setViewP({ type: "label" });
+                  } else if (mod.id === "telegram_notifier") {
+                    setViewP({ type: "telegram" });
                   } else {
                     setViewP({ type: "config", id: mod.id });
                   }

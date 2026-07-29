@@ -4,6 +4,7 @@ import { TriggerVisibilityToggle } from "./TriggerVisibilityToggle";
 /* ─── Types ───────────────────────────────────────────────────────────────── */
 interface TwUtilsCfg {
   villageSwitcher: boolean;
+  mapRecruitNoble: boolean;
   incomingFilter: boolean;
   quickbarCollapse: boolean;
   bulkCancel: boolean;
@@ -32,6 +33,7 @@ type AttackTemplate = Record<string, number>;
 
 const DEFAULTS: TwUtilsCfg = {
   villageSwitcher: true,
+  mapRecruitNoble: true,
   incomingFilter:  true,
   quickbarCollapse: true,
   bulkCancel:      true,
@@ -39,11 +41,14 @@ const DEFAULTS: TwUtilsCfg = {
   bcDelayMax:      200,
 };
 
-const FEATURES: Array<{ key: keyof TwUtilsCfg; label: string; help: string }> = [
-  { key: "villageSwitcher",  label: "Village Switcher",   help: "Botão no mapa para trocar para aldeia própria selecionada." },
-  { key: "incomingFilter",   label: "Incoming Filter",    help: "Ocultar/mostrar apoios nas tabelas de incomings." },
-  { key: "quickbarCollapse", label: "Quickbar Collapse",  help: "Minimizar/expandir quickbar com botão –/+." },
-  { key: "bulkCancel",       label: "Bulk Cancel",        help: "Botão fixo em screen=place para cancelar todos os comandos." },
+type FeatureKey = "villageSwitcher" | "mapRecruitNoble" | "incomingFilter" | "quickbarCollapse" | "bulkCancel";
+
+const FEATURES: Array<{ key: FeatureKey; label: string; help: string }> = [
+  { key: "villageSwitcher",  label: "Village Switcher",   help: " Botão no mapa para trocar para aldeia própria selecionada." },
+  { key: "mapRecruitNoble",  label: "Recruit Noble (Map)", help: " Botão no mapa para recrutar um nobre na aldeia clicada. Completa o treino automaticamente se o módulo Noble Sender + Trainer estiver ativo." },
+  { key: "incomingFilter",   label: "Incoming Filter",    help: " Ocultar/mostrar apoios nas tabelas de incomings." },
+  { key: "quickbarCollapse", label: "Quickbar Collapse",  help: " Minimizar/expandir quickbar com botão –/+." },
+  { key: "bulkCancel",       label: "Bulk Cancel",        help: " Botão fixo em screen=place para cancelar todos os comandos." },
 ];
 
 /* ─── Helpers ─────────────────────────────────────────────────────────────── */
@@ -125,7 +130,7 @@ export function TwUtilsView({
     document.dispatchEvent(new CustomEvent("xbot:mapsel:clear"));
   }, []);
 
-  const toggle = useCallback(async (key: keyof TwUtilsCfg) => {
+  const toggle = useCallback(async (key: FeatureKey) => {
     const next = { ...cfg, [key]: !cfg[key] };
     setCfg(next);
     await storageSet({ [STORAGE_KEY]: next });

@@ -1341,8 +1341,12 @@
           var _sentCandB = _sentCandA + 1000;
           function _tryCand(cand) {
             var cm = Math.max(2000, Math.round((_midGap - cand) / 2 / 1000) * 1000);
-            var ws = Math.floor((cand + cm) / 1000) + ((cand + cm) % 1000 > 200 ? 1 : 0);
-            return { cancelMs: cm, cancelAt: ws * 1000 + 200, ret: cand + 2 * cm };
+            // Click 200ms into the target second (safety margin from the .000/.999 edges)
+            // rather than exactly at cand+cm, which could sit right on a second boundary.
+            // Must stay in the SAME target second as cand+cm — advancing to the next second
+            // (the old bug) doubles into a 2s-late return.
+            var targetSec = Math.floor((cand + cm) / 1000);
+            return { cancelMs: cm, cancelAt: targetSec * 1000 + 200, ret: cand + 2 * cm };
           }
           var _rA = _tryCand(_sentCandA);
           var _rB = _tryCand(_sentCandB);

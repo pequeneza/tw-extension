@@ -230,6 +230,77 @@ describe('Key expiration', () => {
   });
 });
 
+// ── Install tracking ──────────────────────────────────────────────────────────
+// Logging only — none of this affects whether /validate itself succeeds or
+// fails; it's purely visibility for the admin panel into how many distinct
+// installs are using one key.
+describe('Install tracking', () => {
+  test('a valid check with an installId is reflected in install_count_30d', async () => {
+    const key = await createKey('install-a');
+    await post('/validate', { key, installId: 'install-aaa' });
+
+    const { body } = await get('/admin/keys', { Authorization: AUTH });
+    const row = body.find((k) => k.key === key);
+    assert.equal(row.install_count_30d, 1);
+  });
+
+  test('different installIds for the same key each count', async () => {
+    const key = await createKey('install-b');
+    await post('/validate', { key, installId: 'install-bbb-1' });
+    await post('/validate', { key, installId: 'install-bbb-2' });
+    await post('/validate', { key, installId: 'install-bbb-3' });
+
+    const { body } = await get('/admin/keys', { Authorization: AUTH });
+    assert.equal(body.find((k) => k.key === key).install_count_30d, 3);
+  });
+
+  test('the same installId re-validating repeatedly only counts once', async () => {
+    const key = await createKey('install-c');
+    await post('/validate', { key, installId: 'install-ccc' });
+    await post('/validate', { key, installId: 'install-ccc' });
+    await post('/validate', { key, installId: 'install-ccc' });
+
+    const { body } = await get('/admin/keys', { Authorization: AUTH });
+    assert.equal(body.find((k) => k.key === key).install_count_30d, 1);
+  });
+
+  test('a failed validation (revoked key) does not record an install', async () => {
+    const key = await createKey('install-d');
+    await patch(`/admin/keys/${key}`, { active: false }, { Authorization: AUTH });
+    await post('/validate', { key, installId: 'install-ddd' });
+
+    const { body } = await get('/admin/keys', { Authorization: AUTH });
+    assert.equal(body.find((k) => k.key === key).install_count_30d, 0);
+  });
+
+  test('missing installId is harmless — validate still succeeds, nothing recorded', async () => {
+    const key = await createKey('install-e');
+    const { body: validateBody } = await post('/validate', { key });
+    assert.equal(validateBody.valid, true);
+
+    const { body } = await get('/admin/keys', { Authorization: AUTH });
+    assert.equal(body.find((k) => k.key === key).install_count_30d, 0);
+  });
+
+  test('GET /admin/keys/:key/installs lists each distinct install with timestamps', async () => {
+    const key = await createKey('install-f');
+    await post('/validate', { key, installId: 'install-fff-1' });
+    await post('/validate', { key, installId: 'install-fff-2' });
+
+    const { status, body } = await get(`/admin/keys/${key}/installs`, { Authorization: AUTH });
+    assert.equal(status, 200);
+    assert.equal(body.length, 2);
+    assert.ok(body.every((r) => r.install_id && r.first_seen && r.last_seen));
+    assert.deepEqual(new Set(body.map((r) => r.install_id)), new Set(['install-fff-1', 'install-fff-2']));
+  });
+
+  test('GET /admin/keys/:key/installs requires auth', async () => {
+    const key = await createKey('install-g');
+    const { status } = await get(`/admin/keys/${key}/installs`);
+    assert.equal(status, 401);
+  });
+});
+
 // ── Stats ─────────────────────────────────────────────────────────────────────
 describe('GET /admin/stats', () => {
   test('returns active and revoked counts', async () => {

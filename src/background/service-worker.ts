@@ -19,7 +19,7 @@ const VALIDATION_URL = "https://license.vivaomadeira.com/validate";
 type BgMessage =
   | { type: "GET_ACTIVE_TAB_URL" }
   | { type: "RELOAD_ACTIVE_TAB" }
-  | { type: "VALIDATE_LICENSE"; key: string }
+  | { type: "VALIDATE_LICENSE"; key: string; installId?: string }
   | { type: "ARM_NEXT_TAB" };
 
 type BgResponse =
@@ -146,7 +146,7 @@ chrome.runtime.onMessage.addListener(
         fetch(VALIDATION_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ key: message.key }),
+          body: JSON.stringify({ key: message.key, installId: message.installId }),
         })
           .then((r) => r.json())
           .then((data: { valid: boolean; expires_at?: string | null }) =>

@@ -20,10 +20,32 @@ const BOT_ENABLED_KEY = "xbot_enabled";
 const SESSION_CFG_KEY = "__xbot_cfg__";
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+// Random UUID, generated once, sent alongside every license check so the
+// license server can tell how many distinct installs are using one key —
+// logging only for now, nothing here changes whether a check passes or
+// fails. Deliberately chrome.storage.sync (not .local): syncing means the
+// same Chrome account's own multiple devices naturally share one ID, so
+// legitimate multi-device use doesn't inflate the count — only a key handed
+// to a genuinely different person (different Chrome account, no sync) shows
+// up as a second install. Same non-identity-tied-random-ID pattern already
+// used elsewhere in this codebase (e.g. attack_intel's reporter_id).
+const INSTALL_ID_KEY = "xbot_install_id";
+
 interface LicenseCache {
   valid: boolean;
   expiresAt: string | null;
   ts: number;
+}
+
+async function getOrCreateInstallId(): Promise<string> {
+  const existing = await new Promise<string | undefined>((res) =>
+    chrome.storage.sync.get(INSTALL_ID_KEY, (r) => res(r[INSTALL_ID_KEY] as string | undefined))
+  );
+  if (existing) return existing;
+
+  const id = crypto.randomUUID();
+  chrome.storage.sync.set({ [INSTALL_ID_KEY]: id });
+  return id;
 }
 
 function buildStorageKeys(): string[] {
@@ -53,8 +75,9 @@ async function checkLicense(key: string): Promise<LicenseCache> {
   }
 
   try {
+    const installId = await getOrCreateInstallId();
     const { valid, expiresAt } = await new Promise<{ valid: boolean; expiresAt: string | null }>((res, rej) =>
-      chrome.runtime.sendMessage({ type: "VALIDATE_LICENSE", key }, (r) =>
+      chrome.runtime.sendMessage({ type: "VALIDATE_LICENSE", key, installId }, (r) =>
         chrome.runtime.lastError ? rej(chrome.runtime.lastError) : res(r)
       )
     );

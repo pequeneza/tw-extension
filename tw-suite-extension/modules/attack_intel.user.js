@@ -500,7 +500,13 @@
        same job. Lets `keepTracking` show last-known advisories the instant
        the page loads, without waiting on a real sync. ───────────────────────*/
 
-    const ADVISORY_CACHE_KEY = 'attack_intel_advisory_cache_v1';
+    // Bumped to v2: entries cached under v1 could have been computed before
+    // the server started excluding an account's own reports from confirming
+    // evidence (see /advisory's reporterId filtering) — those old cached
+    // confirmedNearby values are wrong now and must never be read back as
+    // if they were fresh. Renaming the key is simpler and safer than trying
+    // to selectively invalidate v1 entries.
+    const ADVISORY_CACHE_KEY = 'attack_intel_advisory_cache_v2';
     const ADVISORY_CACHE_STALE_MS = 24 * 3600_000;
 
     function loadAdvisoryCache() {

@@ -15,6 +15,7 @@
 
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { minify } from "terser";
 import { resolve } from "node:path";
 import {
   copyFileSync,
@@ -88,11 +89,13 @@ const ICON_SIZES = [16, 48, 128] as const;
 const ICON_GOLD: [number, number, number] = [200, 144, 42];
 
 // ─── Asset plugin (runs after popup build) ────────────────────────────────────
-function extensionAssetsPlugin() {
+function extensionAssetsPlugin(mode: string) {
+  const production = mode !== "development";
+
   return {
     name: "tw-extension-assets",
     enforce: "post" as const,
-    closeBundle() {
+    async closeBundle() {
       mkdirSync("dist/modules",    { recursive: true });
       mkdirSync("dist/popup",      { recursive: true });
       mkdirSync("dist/icons",      { recursive: true });
@@ -116,8 +119,23 @@ function extensionAssetsPlugin() {
         else if (!existsSync(destPng)) writeFileSync(destPng, solidPng(...ICON_GOLD));
       }
 
-      if (existsSync(BRIDGE_SRC))
-        copyFileSync(BRIDGE_SRC, "dist/modules/tw-suite-config-bridge.js");
+      if (existsSync(BRIDGE_SRC)) {
+        if (production) {
+          try {
+            const bridgeMin = await minify(readFileSync(BRIDGE_SRC, "utf8"), {
+              compress: { defaults: true },
+              mangle: true,
+              format: { comments: false },
+            });
+            writeFileSync("dist/modules/tw-suite-config-bridge.js", bridgeMin.code ?? readFileSync(BRIDGE_SRC, "utf8"), "utf8");
+          } catch (err) {
+            console.warn("[tw-ext] Minify failed for tw-suite-config-bridge.js, shipping unminified:", err);
+            copyFileSync(BRIDGE_SRC, "dist/modules/tw-suite-config-bridge.js");
+          }
+        } else {
+          copyFileSync(BRIDGE_SRC, "dist/modules/tw-suite-config-bridge.js");
+        }
+      }
 
       const bridge = existsSync(BRIDGE_SRC) ? readFileSync(BRIDGE_SRC, "utf8") : "";
       const asMsgs = existsSync(AS_MSGS_SRC)
@@ -133,7 +151,31 @@ function extensionAssetsPlugin() {
         const combined = bridge
           ? `${bridge}\n\n${extras}/* ─── ${dstFile} ─── */\n\n${original}`
           : extras + original;
-        writeFileSync(join("dist/modules", dstFile), combined, "utf8");
+
+        // This is the bridge-prepended copy consumed only via <script src>
+        // injection by router.ts — the pristine, human-readable source at
+        // tw-suite-extension/modules/*.user.js (what's documented for a
+        // direct Tampermonkey install) is never touched by this step, so
+        // there's no need to preserve the ==UserScript== header here or
+        // worry about anyone importing this specific file directly.
+        // Conservative settings only (no `unsafe` compress passes) — this
+        // is meant to be a size/readability reduction, not a risk to the
+        // carefully-tuned timing logic some of these modules depend on
+        // (see auto_sender.user.js's "DO NOT MODIFY" timing contract).
+        let finalContent = combined;
+        if (production) {
+          try {
+            const result = await minify(combined, {
+              compress: { defaults: true },
+              mangle: true,
+              format: { comments: false },
+            });
+            if (result.code) finalContent = result.code;
+          } catch (err) {
+            console.warn(`[tw-ext] Minify failed for ${dstFile}, shipping unminified:`, err);
+          }
+        }
+        writeFileSync(join("dist/modules", dstFile), finalContent, "utf8");
       }
 
       // Copy custom module icons
@@ -160,13 +202,18 @@ function extensionAssetsPlugin() {
 }
 
 // ─── Vite config (popup only) ─────────────────────────────────────────────────
-export default defineConfig({
-  plugins: [react(), extensionAssetsPlugin()],
+// Shipping a source map alongside the minified bundle defeats minification's
+// only real benefit (readability reduction) — DevTools resolves straight
+// back to near-original source via the map. `npm run dev` (--mode
+// development) still gets one for local debugging; `npm run build` (default
+// production mode) doesn't.
+export default defineConfig(({ mode }) => ({
+  plugins: [react(), extensionAssetsPlugin(mode)],
 
   build: {
     outDir:      "dist",
     emptyOutDir: true,
-    sourcemap:   true,
+    sourcemap:   mode === "development",
     target:      "es2022",
 
     rollupOptions: {
@@ -181,4 +228,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

@@ -617,6 +617,7 @@
                 world: String(pageWindow.game_data.world),
                 srcVillageId: String(srcVillageId),
                 windowHours: String(settings.windowHours),
+                reporterId: String(reporterId),
             });
             let res;
             try {

@@ -212,6 +212,72 @@ describe('GET /advisory', () => {
     assert.deepEqual(body.confirmedNearby, { medium: false, large: false });
     assert.deepEqual(body.knownSizes, { small: 0, medium: 0, large: 0, unknown: 1 });
   });
+
+  // This is a cross-player signal ("another player confirmed this") — an
+  // account's own earlier classification of an attack from a village must
+  // never echo back as confirmation for its own other unknown attacks from
+  // that same village.
+  test('does not confirm using the requesting account\'s own report', async () => {
+    await report({
+      cmdId: 'adv-self-1', srcVillageId: 'adv-self', size: 'large', inRange: true,
+      arrivalMs: T, reporterId: 'account-a',
+    });
+    await report({
+      cmdId: 'adv-self-2', srcVillageId: 'adv-self', size: 'unknown', inRange: false,
+      arrivalMs: T + HOUR, reporterId: 'account-a',
+    });
+
+    const { body } = await get('/advisory?world=pt111&srcVillageId=adv-self&windowHours=12&reporterId=account-a');
+    assert.deepEqual(body.confirmedNearby, { medium: false, large: false });
+    // knownSizes still reflects raw totals regardless of who reported them
+    assert.deepEqual(body.knownSizes, { small: 0, medium: 0, large: 1, unknown: 1 });
+  });
+
+  test('still confirms using a different account\'s report', async () => {
+    await report({
+      cmdId: 'adv-other-1', srcVillageId: 'adv-other', size: 'large', inRange: true,
+      arrivalMs: T, reporterId: 'account-b',
+    });
+    await report({
+      cmdId: 'adv-other-2', srcVillageId: 'adv-other', size: 'unknown', inRange: false,
+      arrivalMs: T + HOUR, reporterId: 'account-a',
+    });
+
+    const { body } = await get('/advisory?world=pt111&srcVillageId=adv-other&windowHours=12&reporterId=account-a');
+    assert.deepEqual(body.confirmedNearby, { medium: false, large: true });
+  });
+
+  test('a mix of own and another account\'s report still confirms (own report alone is excluded, not the whole village)', async () => {
+    await report({
+      cmdId: 'adv-mix-1', srcVillageId: 'adv-mix', size: 'large', inRange: true,
+      arrivalMs: T, reporterId: 'account-a',
+    });
+    await report({
+      cmdId: 'adv-mix-2', srcVillageId: 'adv-mix', size: 'large', inRange: true,
+      arrivalMs: T + HOUR, reporterId: 'account-b',
+    });
+    await report({
+      cmdId: 'adv-mix-3', srcVillageId: 'adv-mix', size: 'unknown', inRange: false,
+      arrivalMs: T + 2 * HOUR, reporterId: 'account-a',
+    });
+
+    const { body } = await get('/advisory?world=pt111&srcVillageId=adv-mix&windowHours=12&reporterId=account-a');
+    assert.deepEqual(body.confirmedNearby, { medium: false, large: true });
+  });
+
+  test('omitting reporterId keeps prior behavior — confirms using any report, including what would be "own"', async () => {
+    await report({
+      cmdId: 'adv-noid-1', srcVillageId: 'adv-noid', size: 'large', inRange: true,
+      arrivalMs: T, reporterId: 'account-a',
+    });
+    await report({
+      cmdId: 'adv-noid-2', srcVillageId: 'adv-noid', size: 'unknown', inRange: false,
+      arrivalMs: T + HOUR, reporterId: 'account-a',
+    });
+
+    const { body } = await get('/advisory?world=pt111&srcVillageId=adv-noid&windowHours=12');
+    assert.deepEqual(body.confirmedNearby, { medium: false, large: true });
+  });
 });
 
 // ── GET /stats ────────────────────────────────────────────────────────────────

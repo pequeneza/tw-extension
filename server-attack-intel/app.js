@@ -106,7 +106,7 @@ export function createApp(db, { validateLicense = defaultValidateLicense } = {})
     `),
 
     byVillage: db.prepare(`
-      SELECT size, in_range, arrival_ms
+      SELECT size, in_range, arrival_ms, reporter_id
       FROM attacks
       WHERE world = ? AND src_village_id = ?
     `),
@@ -262,7 +262,7 @@ export function createApp(db, { validateLicense = defaultValidateLicense } = {})
   });
 
   app.get('/advisory', requireLicense, (req, res) => {
-    const { world, srcVillageId } = req.query;
+    const { world, srcVillageId, reporterId } = req.query;
     if (!world || !srcVillageId) {
       return res.status(400).json({ error: 'world and srcVillageId are required' });
     }
@@ -276,13 +276,21 @@ export function createApp(db, { validateLicense = defaultValidateLicense } = {})
     // that size exists whose arrival falls within windowHours of at least
     // one currently-unknown row from the same village. The client shows
     // this as-is; the player decides what it means for any specific attack.
+    //
+    // Evidence rows reported by the same account asking for the advisory are
+    // excluded — this is a cross-player signal ("another player confirmed
+    // this"), so an account's own earlier classification of an attack from
+    // this village must never echo back as if it were outside confirmation.
+    const evidenceRows = reporterId
+      ? rows.filter((r) => r.reporter_id !== String(reporterId))
+      : rows;
     const unknownArrivals = rows
       .filter((r) => r.size === 'unknown' && r.arrival_ms != null)
       .map((r) => r.arrival_ms);
     const span = windowMs(req.query.windowHours);
 
     function confirmedNearbyFor(size) {
-      const arrivals = rows
+      const arrivals = evidenceRows
         .filter((r) => r.size === size && r.in_range === 1 && r.arrival_ms != null)
         .map((r) => r.arrival_ms);
       if (arrivals.length === 0 || unknownArrivals.length === 0) return false;

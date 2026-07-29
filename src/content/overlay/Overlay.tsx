@@ -19,6 +19,7 @@ import { LabelView }         from "./LabelView";
 import { AutoSenderView }   from "./AutoSenderView";
 import { TwUtilsView }     from "./TwUtilsView";
 import { TelegramView }   from "./TelegramView";
+import { AttackIntelView } from "./AttackIntelView";
 import { TRIGGER_VISIBILITY_KEY } from "./TriggerVisibilityToggle";
 
 const SNOB_ICON = "https://dspt.innogamescdn.com/asset/b2fb8d33/graphic/unit/unit_snob.webp";
@@ -163,6 +164,7 @@ type View = { type: "list" } |
             { type: "autosender" } |
             { type: "twutils" } |
             { type: "telegram" } |
+            { type: "attack_intel" } |
             { type: "license" };
 
 /* ─── useSettings — lives in OverlayRoot, never unmounts ─────────────────── */
@@ -772,6 +774,8 @@ function Panel({
                     setViewP({ type: "twutils" });
                   } else if (mod.id === "mass_label_renamer") {
                     setViewP({ type: "label" });
+                  } else if (mod.id === "attack_intel") {
+                    setViewP({ type: "attack_intel" });
                   } else {
                     setViewP({ type: "config", id: mod.id });
                   }
@@ -856,6 +860,10 @@ function Panel({
       />
       <TelegramView
         visible={view.type === "telegram"}
+        onBack={() => setViewP({ type: "list" })}
+      />
+      <AttackIntelView
+        visible={view.type === "attack_intel"}
         onBack={() => setViewP({ type: "list" })}
       />
       <LicenseView
@@ -1079,6 +1087,7 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
     if (v === "autosender") return { type: "autosender" };
     if (v === "twutils")    return { type: "twutils" };
     if (v === "telegram")   return { type: "telegram" };
+    if (v === "attack_intel") return { type: "attack_intel" };
     if (v === "license")    return { type: "license" };
     return { type: "list" };
   });
@@ -1111,7 +1120,7 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
   const isGluer        = view.type === "gluer";
   const isInfoVillage  = /screen=info_village/.test(window.location.href);
   const isExchangePage = /screen=market.*mode=exchange/.test(window.location.href);
-  const isLabelPage    = /screen=overview_villages.*mode=incomings/.test(window.location.href);
+  const isIncomingsOverview = /screen=overview_villages.*mode=incomings/.test(window.location.href);
 
   // Resizable drawer — custom width persists in sessionStorage
   const [drawerWidth, setDrawerWidth] = useState<number | null>(() => {
@@ -1223,10 +1232,16 @@ export function OverlayRoot({ shadowHost }: { shadowHost: Element }) {
           </button>
         )}
 
-        {isLabelPage && isOn("mass_label_renamer") && triggerVisible("mass_label_renamer") && (
+        {isIncomingsOverview && isOn("mass_label_renamer") && triggerVisible("mass_label_renamer") && (
           <button className="trigger trigger--label"
             onClick={() => { setViewP({ type: "label" }); setOpen(true); }}
             title="Label + Renamer" aria-label="Label + Renamer">🏷️</button>
+        )}
+
+        {isIncomingsOverview && isOn("attack_intel") && triggerVisible("attack_intel") && (
+          <button className="trigger trigger--attackintel"
+            onClick={() => { setViewP({ type: "attack_intel" }); setOpen(true); }}
+            title="Attack Intel" aria-label="Attack Intel">🛰️</button>
         )}
 
         {isOn("tw_utils") && triggerVisible("tw_utils") && (

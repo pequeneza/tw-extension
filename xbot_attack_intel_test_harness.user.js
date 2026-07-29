@@ -51,13 +51,18 @@
 //   xbotTestAdvisory(srcVillageId)          — check one village's advisory
 //                                              state directly, no need to
 //                                              find an `unknown` row by eye
-//   xbotTestSeed(srcVillageId, size, inRange, arrivalOffsetMin)
+//   xbotTestSeed(srcVillageId, size, inRange, arrivalOffsetMin, world, asSelf)
 //                                            — POST a synthetic /report so
 //                                              you don't need two real
 //                                              accounts to actually be hit
 //                                              by the same attacking village
 //                                              at the same time to test the
-//                                              cross-account advisory logic
+//                                              cross-account advisory logic.
+//                                              asSelf=true seeds under THIS
+//                                              account's own reporterId, to
+//                                              confirm it's correctly
+//                                              excluded from confirming its
+//                                              own other unknown attacks.
 
 (function () {
     'use strict';
@@ -79,6 +84,16 @@
     }
     function realWorld() {
         return (typeof pageWindow.game_data !== 'undefined' && pageWindow.game_data.world) || 'unknown';
+    }
+
+    // Same key/value the real attack_intel.user.js reads via getReporterId()
+    // — this account's own stable identity for the cross-player advisory
+    // signal. Used both so xbotTestAdvisory() mirrors exactly what the real
+    // module would ask for, and so xbotTestSeed(..., { asSelf: true }) can
+    // deliberately simulate "this same account already reported this".
+    function reporterId() {
+        try { return localStorage.getItem('attack_intel_reporter_id') || ''; }
+        catch (e) { return ''; }
     }
 
     // Same sourcing as attack_intel.user.js's currentLicenseKey(): prefer the
@@ -130,12 +145,16 @@
 
     // Read-only — check one specific source village's advisory state
     // directly, without hunting for an `unknown` row in the table by eye.
+    // Sends this account's real reporterId, same as a live sync would, so
+    // the result reflects the actual cross-player exclusion (own reports
+    // never count as confirmation — see xbotTestSeed's asSelf option below).
     pageWindow.xbotTestAdvisory = async function (srcVillageId, windowHours, world) {
         if (!srcVillageId) { console.error('[xbot-test] usage: xbotTestAdvisory(srcVillageId[, windowHours][, world])'); return; }
         const qs = new URLSearchParams({
             world: world || realWorld(),
             srcVillageId: String(srcVillageId),
             windowHours: String(windowHours || settings().windowHours || 12),
+            reporterId: reporterId(),
         });
         try {
             const res = await fetch(`${serverUrl()}/advisory?${qs.toString()}`, { headers: authHeaders() });
@@ -157,9 +176,16 @@
     //   size:      "small" | "medium" | "large" | "unknown"
     //   inRange:   true/false — whether this counts as a FINAL classification
     //   arrivalOffsetMin: minutes from now (can be negative), default 0
-    pageWindow.xbotTestSeed = async function (srcVillageId, size, inRange, arrivalOffsetMin, world) {
+    //   asSelf:    false (default) — seeds under a fresh random reporterId,
+    //              i.e. simulates ANOTHER player's account, the normal case.
+    //              true — seeds under THIS account's own real reporterId,
+    //              letting you deliberately test that an account's own
+    //              report never counts as confirmation for its own other
+    //              unknown attacks from the same village (see /advisory's
+    //              own-reporter exclusion).
+    pageWindow.xbotTestSeed = async function (srcVillageId, size, inRange, arrivalOffsetMin, world, asSelf) {
         if (!srcVillageId || !size) {
-            console.error('[xbot-test] usage: xbotTestSeed(srcVillageId, size, inRange=true, arrivalOffsetMin=0, world?)');
+            console.error('[xbot-test] usage: xbotTestSeed(srcVillageId, size, inRange=true, arrivalOffsetMin=0, world?, asSelf=false)');
             return;
         }
         const w = world || TEST_WORLD;
@@ -174,7 +200,7 @@
             size,
             inRange: inRange !== false,
             arrivalMs,
-            reporterId: `test-reporter-${Math.random().toString(36).slice(2, 8)}`,
+            reporterId: asSelf ? reporterId() : `test-reporter-${Math.random().toString(36).slice(2, 8)}`,
         };
         try {
             const res = await fetch(`${serverUrl()}/report`, {

@@ -40,9 +40,13 @@ interface AttackIntelSettings {
   autoSyncMinutes: number;
   keepTracking: boolean;
   licenseKey: string;
+  tagText: string;
 }
 
 const MIN_AUTO_SYNC_MINUTES = 5;
+// Matches mass_label_renamer's own TAGS[9] ('[Fake]') — applied when the
+// player clicks a confirmed LARGE marker and hasn't set a custom tag text.
+const DEFAULT_TAG_TEXT = "[Fake]";
 
 type LicenseStatus = null | "ok" | "missing" | "invalid" | "unreachable";
 
@@ -63,6 +67,7 @@ const DEFAULT_SETTINGS: AttackIntelSettings = {
   autoSyncMinutes: 5,
   keepTracking: false,
   licenseKey: "",
+  tagText: "",
 };
 
 /* ─── Helpers ────────────────────────────────────────────────────────────── */
@@ -448,6 +453,26 @@ function SettingsTab({
                 if (Number.isFinite(n)) onChange("windowHours", Math.min(48, Math.max(1, n)));
               }}
             />
+          </div>
+          <div className="field">
+            <div className="field-top">
+              <span className="field-label">
+                Tag text
+                <Tip text="Clicking a confirmed LARGE marker icon tags that command's own label with this text — the same quickedit rename mechanism as the label renamer (base word + tag). The icon turns fully opaque once tagged. Leave blank to use the default." />
+              </span>
+            </div>
+            <input
+              className="input"
+              type="text"
+              spellCheck={false}
+              value={settings.tagText}
+              placeholder={DEFAULT_TAG_TEXT}
+              onChange={(e) => onChange("tagText", e.target.value)}
+            />
+            <span className="field-help">
+              Applied when you click a confirmed LARGE marker on the incomings table. Blank falls back to{" "}
+              <span style={{ fontFamily: "var(--mono)" }}>{DEFAULT_TAG_TEXT}</span>.
+            </span>
           </div>
         </div>
       </div>

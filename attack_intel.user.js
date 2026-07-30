@@ -55,7 +55,16 @@
         // Under the real extension this is ignored; router.ts's own
         // already-validated key always takes priority via currentLicenseKey().
         licenseKey: '',
+        // Text applied (via quickedit, same mechanism as mass_label_renamer)
+        // when the player clicks a confirmed LARGE marker icon. Empty/unset
+        // falls back to DEFAULT_TAG_TEXT at the point of use, not here, so a
+        // later change to the fallback doesn't require migrating settings.
+        tagText: '',
     };
+
+    // Matches mass_label_renamer's own TAGS[9] ('[Fake]') — used when the
+    // user hasn't configured a custom tag text of their own.
+    const DEFAULT_TAG_TEXT = '[Fake]';
 
     /* ── Settings ────────────────────────────────────────────────────────────*/
 
@@ -580,6 +589,86 @@
         return img;
     }
 
+    /* ── Click-to-tag on a confirmed LARGE marker ────────────────────────────
+       Applies the configured tag text to the command's own quickedit label —
+       the exact same UI-automation mechanism mass_label_renamer.user.js uses
+       (open the inline rename editor, type, save), reimplemented locally in
+       plain DOM so this module stays independent of whether that other
+       userscript is even installed. Medium markers are intentionally left
+       click-inert — this is only for LARGE per the feature request. ────────*/
+
+    function jitter(baseMs, spreadMs) {
+        return Math.max(0, Math.round(baseMs + (Math.random() * 2 - 1) * spreadMs));
+    }
+
+    function currentTagText(settings) {
+        const configured = (settings.tagText || '').trim();
+        return configured || DEFAULT_TAG_TEXT;
+    }
+
+    // Whether this row's OWN label already carries the tag — the label text
+    // itself is the source of truth for "already tagged", not a separate
+    // localStorage flag, so it stays correct across reloads/re-renders and
+    // in sync with whatever the player may have edited by hand since.
+    function rowHasTag(td0, tagText) {
+        const el = td0.querySelector('.quickedit-label');
+        return !!(el && el.textContent.indexOf(tagText) !== -1);
+    }
+
+    function setTagIconAppearance(icon, tagged) {
+        icon.style.opacity = tagged ? '1' : '.6';
+        icon.style.filter = tagged ? 'none' : 'grayscale(.3)';
+    }
+
+    // Mirrors mass_label_renamer.user.js's performRename: open the inline
+    // quickedit editor, type the new value, save — same minimal jittered
+    // pacing, reimplemented in plain DOM (this module has no jQuery
+    // dependency anywhere else, so none is introduced here either).
+    function performRename(row, buildValue, onDone) {
+        const renameIcon = row.querySelector('.rename-icon');
+        if (!renameIcon) { if (onDone) onDone(false); return; }
+        renameIcon.click();
+        setTimeout(() => {
+            const input = row.querySelector('input[type=text]');
+            if (!input) { if (onDone) onDone(false); return; }
+            input.value = buildValue(input.value);
+            setTimeout(() => {
+                const saveBtn = row.querySelector('input[type=button]');
+                if (saveBtn) saveBtn.click();
+                if (onDone) onDone(true);
+            }, jitter(100, 50));
+        }, jitter(200, 100));
+    }
+
+    // Wires the click-to-tag behavior onto an already-created LARGE marker
+    // icon: sets its initial appearance from current label state, and on
+    // click applies the tag (same "base word + tag" convention as
+    // mass_label_renamer's own bulk-fake) then turns the icon fully opaque.
+    // Settings are re-read at click time, not captured at render time, so a
+    // tag-text change takes effect on the very next click without needing a
+    // resync.
+    function wireLargeMarkerTagging(icon, entry) {
+        const settings = loadSettings();
+        const tagText = currentTagText(settings);
+        const tagged = rowHasTag(entry.td0, tagText);
+        setTagIconAppearance(icon, tagged);
+        icon.style.cursor = 'pointer';
+        icon.title += ' Click to tag this command "' + tagText + '" (like the label renamer).';
+
+        icon.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const row = entry.td0 && entry.td0.closest('tr');
+            if (!row) return;
+            const liveSettings = loadSettings();
+            const liveTagText = currentTagText(liveSettings);
+            if (rowHasTag(entry.td0, liveTagText)) return; // already tagged — nothing to do
+            performRename(row, (val) => val.split(' ')[0] + ' ' + liveTagText, (success) => {
+                if (success) setTagIconAppearance(icon, true);
+            });
+        });
+    }
+
     // Renders the raw sizes confirmed nearby in time from this village — never
     // a computed "likely X" guess. attack_large.webp = a large was confirmed,
     // attack_medium.webp = a medium was confirmed; both can show together.
@@ -606,7 +695,10 @@
         clearCell(cell); // replace the waiting dot, not stack on top of it
         if (hasLarge) {
             const icon = makeSizeIcon(entry, MARKER_LARGE_CLASS, 'attack_large.webp', 'LARGE');
-            if (icon) cell.appendChild(icon);
+            if (icon) {
+                wireLargeMarkerTagging(icon, entry);
+                cell.appendChild(icon);
+            }
         }
         if (hasMedium) {
             const icon = makeSizeIcon(entry, MARKER_MEDIUM_CLASS, 'attack_medium.webp', 'MEDIUM');

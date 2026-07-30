@@ -27,6 +27,7 @@ interface TelegramSettings {
   chatId: string;
   notifyOnCaptcha: boolean;
   notifyOnSend: boolean;
+  notifyOnNoble: boolean;
   cooldownMs: number;
 }
 
@@ -41,6 +42,7 @@ const DEFAULT_SETTINGS: TelegramSettings = {
   chatId: "",
   notifyOnCaptcha: true,
   notifyOnSend: true,
+  notifyOnNoble: true,
   cooldownMs: 5 * 60 * 1000,
 };
 
@@ -129,6 +131,7 @@ function MainTab({
   onTest: () => void;
 }) {
   const lastCaptcha = state.lastSentAt["captcha"];
+  const lastNoble = state.lastSentAt["noble"];
 
   const statusText = state.captchaDetected
     ? "Captcha detetado!"
@@ -185,6 +188,11 @@ function MainTab({
               {lastCaptcha && (
                 <div style={{ fontSize: 11, color: "var(--n400)" }}>
                   Último alerta de captcha: {fmtTime(lastCaptcha)}
+                </div>
+              )}
+              {lastNoble && (
+                <div style={{ fontSize: 11, color: "var(--n400)" }}>
+                  Último alerta de nobre: {fmtTime(lastNoble)}
                 </div>
               )}
             </div>
@@ -309,6 +317,23 @@ function SettingsTab({
               <span className="toggle-thumb" />
             </span>
           </label>
+          <label className="field-check">
+            <span className="field-check-text">
+              <span className="field-label">
+                Nobre detetado
+                <Tip text="Alerta assim que um comando com a etiqueta 'Nobre' aparecer nos incomings. Notifica uma vez por comando (não por cooldown), para nunca silenciar um nobre diferente que chegue logo a seguir." />
+              </span>
+              <span className="field-help">Notifica quando um Nobre for encontrado na tabela de incomings</span>
+            </span>
+            <span className="toggle" onClick={(e) => e.stopPropagation()}>
+              <input
+                type="checkbox"
+                checked={settings.notifyOnNoble ?? true}
+                onChange={(e) => onChange("notifyOnNoble", e.target.checked)}
+              />
+              <span className="toggle-thumb" />
+            </span>
+          </label>
         </div>
 
         <div className="cfg-section">
@@ -378,6 +403,7 @@ export function TelegramView({
         chatId: state.chatId,
         notifyOnCaptcha: state.notifyOnCaptcha,
         notifyOnSend: state.notifyOnSend ?? true,
+        notifyOnNoble: state.notifyOnNoble ?? true,
         cooldownMs: state.cooldownMs,
       });
       setDirty(false);

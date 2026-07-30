@@ -15,6 +15,7 @@
     chatId: "",
     notifyOnCaptcha: true,
     notifyOnSend: true,
+    notifyOnNoble: true,
     cooldownMs: 5 * 60 * 1000,
   };
 
@@ -42,6 +43,8 @@
         botToken: _settings.botToken,
         chatId: _settings.chatId,
         notifyOnCaptcha: _settings.notifyOnCaptcha,
+        notifyOnSend: _settings.notifyOnSend,
+        notifyOnNoble: _settings.notifyOnNoble,
         cooldownMs: _settings.cooldownMs,
         lastSentAt: { ..._lastSentAt },
         captchaDetected: _captchaDetected,
@@ -221,11 +224,102 @@
     maybeSend("autosend", buildSentMsg(ev.detail));
   });
 
+  // ── Nobre (noble) detection on the incomings overview ────────────────────
+  // Notified once per distinct command, not gated by cooldownMs: a blanket
+  // cooldown would silence a genuinely different noble arriving minutes
+  // after the first one, which defeats the point of the alert. Dedup is by
+  // command ID instead, persisted so a command already alerted on doesn't
+  // re-fire on the next poll or after a page reload.
+
+  const NOTIFIED_NOBLES_KEY = "tm_telegram_notified_nobles";
+  const NOBLE_NOTIFY_STALE_MS = 48 * 3600_000; // safety-net prune only
+
+  function loadNotifiedNobles() {
+    try {
+      const raw = localStorage.getItem(NOTIFIED_NOBLES_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return (parsed && typeof parsed === "object") ? parsed : {};
+    } catch (e) { return {}; }
+  }
+
+  function saveNotifiedNobles(map) {
+    const now = Date.now();
+    for (const [id, ts] of Object.entries(map)) {
+      if (typeof ts !== "number" || (now - ts) > NOBLE_NOTIFY_STALE_MS) delete map[id];
+    }
+    try { localStorage.setItem(NOTIFIED_NOBLES_KEY, JSON.stringify(map)); } catch (e) { /* ignore */ }
+  }
+
+  // Same table/row shape as attack_intel.user.js and mass_label_renamer.user.js
+  // (they all read the same incomings overview) — tr.nowrap marks a real
+  // command row, td[0] carries both the quickedit label and the
+  // data-command-id, td[2]/td[3]/td[5] are origin/player/arrival.
+  function parseNobleRow(row) {
+    const tds = row.querySelectorAll(":scope > td");
+    if (tds.length < 6) return null;
+
+    const td0 = tds[0];
+    const labelEl = td0.querySelector(".quickedit-label");
+    const label = labelEl ? labelEl.textContent.trim() : "";
+    if (label.toLowerCase() !== "nobre") return null;
+
+    const idEl = td0.querySelector("[data-command-id]");
+    const cmdId = idEl ? idEl.getAttribute("data-command-id") : null;
+    if (!cmdId) return null;
+
+    return {
+      cmdId,
+      srcText: tds[2] ? tds[2].textContent.trim().replace(/\s+/g, " ") : "?",
+      player: tds[3] ? tds[3].textContent.trim() : "?",
+      arrivalText: tds[5] ? tds[5].textContent.trim().replace(/\s+/g, " ") : "?",
+    };
+  }
+
+  function buildNobleMsg(n) {
+    const gd = window.game_data ?? {};
+    const world = gd.world ?? "?";
+    return `♟️ xBot: Nobre detetado nos incomings!\nMundo: ${world}\nOrigem: ${n.srcText}\nJogador: ${n.player}\nChegada: ${n.arrivalText}`;
+  }
+
+  function notifyNoble(n) {
+    _lastSentAt["noble"] = Date.now();
+    sendTelegram(buildNobleMsg(n));
+    broadcastState();
+  }
+
+  function scanForNobles() {
+    if (!_settings.active || !_settings.notifyOnNoble) return;
+    const rows = document.querySelectorAll("#incomings_table tr.nowrap");
+    if (!rows.length) return;
+
+    const notified = loadNotifiedNobles();
+    let changed = false;
+
+    rows.forEach((row) => {
+      const n = parseNobleRow(row);
+      if (!n || notified[n.cmdId]) return;
+      notified[n.cmdId] = Date.now();
+      changed = true;
+      notifyNoble(n);
+    });
+
+    if (changed) saveNotifiedNobles(notified);
+  }
+
+  const isIncomingsPage = /screen=overview_villages/.test(window.location.href) &&
+                          /mode=incomings/.test(window.location.href);
+  let _noblePollId = null;
+  if (isIncomingsPage) {
+    scanForNobles(); // instant check on load, don't wait for the first poll tick
+    _noblePollId = setInterval(scanForNobles, 5000);
+  }
+
   // Initial broadcast
   broadcastState();
 
   window.addEventListener("unload", () => {
     clearInterval(_pollId);
+    if (_noblePollId) clearInterval(_noblePollId);
     _observer.disconnect();
   });
 })();

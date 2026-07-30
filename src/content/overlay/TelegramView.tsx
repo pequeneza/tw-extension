@@ -34,6 +34,7 @@ interface TelegramSettings {
 interface TelegramState extends TelegramSettings {
   lastSentAt: Record<string, number>;
   captchaDetected: boolean;
+  lastError: string | null;
 }
 
 const DEFAULT_SETTINGS: TelegramSettings = {
@@ -63,6 +64,7 @@ function useTelegramState() {
     ...DEFAULT_SETTINGS,
     lastSentAt: {},
     captchaDetected: false,
+    lastError: null,
   });
   const [detected, setDetected] = useState(false);
 
@@ -193,6 +195,22 @@ function MainTab({
               {lastNoble && (
                 <div style={{ fontSize: 11, color: "var(--n400)" }}>
                   Último alerta de nobre: {fmtTime(lastNoble)}
+                </div>
+              )}
+              {state.lastError && (
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                  <span style={{
+                    display: "inline-block", width: 8, height: 8, borderRadius: "50%",
+                    background: "var(--r500)", flexShrink: 0, marginTop: 4,
+                  }} />
+                  <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                    <span style={{ fontSize: 12, color: "var(--r500)", fontWeight: 600 }}>
+                      A última mensagem falhou
+                    </span>
+                    <span style={{ fontSize: 11, color: "var(--n400)", lineHeight: 1.45, wordBreak: "break-word" }}>
+                      {state.lastError}
+                    </span>
+                  </div>
                 </div>
               )}
             </div>

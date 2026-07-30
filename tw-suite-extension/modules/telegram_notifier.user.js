@@ -22,6 +22,7 @@
   let _settings = loadSettings();
   let _captchaDetected = false;
   let _lastSentAt = {};
+  let _lastError = null; // last Telegram API rejection/failure, for visibility in the panel
 
   function loadSettings() {
     try {
@@ -48,21 +49,40 @@
         cooldownMs: _settings.cooldownMs,
         lastSentAt: { ..._lastSentAt },
         captchaDetected: _captchaDetected,
+        lastError: _lastError,
       },
     }));
   }
 
+  // Returns whether the message was actually accepted by Telegram — callers
+  // that need retry-on-failure (see the noble queue below) rely on this,
+  // since a resolved fetch() with a non-2xx/ok:false body previously looked
+  // identical to success here (only a network-level exception was ever
+  // caught), silently swallowing rate limits, a bad token, or an unknown
+  // chat_id with zero visibility into why a message never arrived.
   async function sendTelegram(text) {
     const { botToken, chatId } = _settings;
-    if (!botToken || !chatId) return;
+    if (!botToken || !chatId) return false;
     try {
-      await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ chat_id: chatId, text }),
       });
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        console.error("[xBot Telegram] send rejected", res.status, body);
+        _lastError = `HTTP ${res.status}: ${body.slice(0, 200)}`;
+        broadcastState();
+        return false;
+      }
+      _lastError = null;
+      return true;
     } catch (e) {
       console.error("[xBot Telegram] send failed", e);
+      _lastError = String(e && e.message || e);
+      broadcastState();
+      return false;
     }
   }
 
@@ -250,20 +270,36 @@
     try { localStorage.setItem(NOTIFIED_NOBLES_KEY, JSON.stringify(map)); } catch (e) { /* ignore */ }
   }
 
+  // Icon check first, same "snob"/"nobre" substring convention already
+  // proven for this exact purpose in mass_label_renamer.user.js's own
+  // isNoble() — the noble-train icon doesn't change no matter what happens
+  // to the label afterwards, unlike the text below. Label is only a
+  // fallback, and matched as a SUBSTRING, not an exact match: mass_label_
+  // renamer's own autoFake (or manual tagging, or anything else) can rename
+  // "Nobre" to "Nobre [Fake]" between one poll and the next, and an exact
+  // match would then silently and permanently stop matching that row —
+  // which is exactly how a message could go missing before this fix.
+  function isNobleRow(row) {
+    const imgs = row.querySelectorAll("img");
+    for (const img of imgs) {
+      const src = img.getAttribute("src") || "";
+      if (src.indexOf("snob") >= 0 || src.indexOf("nobre") >= 0) return true;
+    }
+    const labelEl = row.querySelector(":scope > td:first-child .quickedit-label");
+    const label = labelEl ? labelEl.textContent.trim().toLowerCase() : "";
+    return label.indexOf("nobre") >= 0;
+  }
+
   // Same table/row shape as attack_intel.user.js and mass_label_renamer.user.js
   // (they all read the same incomings overview) — tr.nowrap marks a real
-  // command row, td[0] carries both the quickedit label and the
-  // data-command-id, td[2]/td[3]/td[5] are origin/player/arrival.
+  // command row, td[0] carries the data-command-id, td[2]/td[3]/td[5] are
+  // origin/player/arrival.
   function parseNobleRow(row) {
     const tds = row.querySelectorAll(":scope > td");
     if (tds.length < 6) return null;
+    if (!isNobleRow(row)) return null;
 
-    const td0 = tds[0];
-    const labelEl = td0.querySelector(".quickedit-label");
-    const label = labelEl ? labelEl.textContent.trim() : "";
-    if (label.toLowerCase() !== "nobre") return null;
-
-    const idEl = td0.querySelector("[data-command-id]");
+    const idEl = tds[0].querySelector("[data-command-id]");
     const cmdId = idEl ? idEl.getAttribute("data-command-id") : null;
     if (!cmdId) return null;
 
@@ -281,10 +317,43 @@
     return `♟️ xBot: Nobre detetado nos incomings!\nMundo: ${world}\nOrigem: ${n.srcText}\nJogador: ${n.player}\nChegada: ${n.arrivalText}`;
   }
 
-  function notifyNoble(n) {
+  // Returns whether the send actually succeeded — the queue below only
+  // marks a command as notified once this is true, so a rejected/failed
+  // send (rate limit, transient network issue, etc.) leaves the command
+  // eligible to be retried on the very next poll instead of being silently
+  // dropped forever.
+  async function notifyNoble(n) {
     _lastSentAt["noble"] = Date.now();
-    sendTelegram(buildNobleMsg(n));
+    const ok = await sendTelegram(buildNobleMsg(n));
     broadcastState();
+    return ok;
+  }
+
+  // Sequential queue, ~700ms apart: Telegram recommends no more than ~1
+  // message/second to a single chat, and a page that just loaded with
+  // several already-pending nobles would otherwise fire all of them at
+  // once, risking exactly the kind of rate-limit rejection that used to be
+  // invisible before the sendTelegram fix above. _noblePending (in-memory,
+  // not persisted) stops the same command being queued twice while it's
+  // already queued or in flight — the persisted "notified" map is only
+  // updated on confirmed success.
+  const _noblePending = new Set();
+  let _nobleQueue = [];
+  let _nobleQueueRunning = false;
+
+  function drainNobleQueue() {
+    if (!_nobleQueue.length) { _nobleQueueRunning = false; return; }
+    _nobleQueueRunning = true;
+    const n = _nobleQueue.shift();
+    notifyNoble(n).then((ok) => {
+      _noblePending.delete(n.cmdId);
+      if (ok) {
+        const notified = loadNotifiedNobles();
+        notified[n.cmdId] = Date.now();
+        saveNotifiedNobles(notified);
+      }
+      setTimeout(drainNobleQueue, 700);
+    });
   }
 
   function scanForNobles() {
@@ -293,17 +362,15 @@
     if (!rows.length) return;
 
     const notified = loadNotifiedNobles();
-    let changed = false;
 
     rows.forEach((row) => {
       const n = parseNobleRow(row);
-      if (!n || notified[n.cmdId]) return;
-      notified[n.cmdId] = Date.now();
-      changed = true;
-      notifyNoble(n);
+      if (!n || notified[n.cmdId] || _noblePending.has(n.cmdId)) return;
+      _noblePending.add(n.cmdId);
+      _nobleQueue.push(n);
     });
 
-    if (changed) saveNotifiedNobles(notified);
+    if (_nobleQueue.length && !_nobleQueueRunning) drainNobleQueue();
   }
 
   const isIncomingsPage = /screen=overview_villages/.test(window.location.href) &&

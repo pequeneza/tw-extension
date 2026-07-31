@@ -15,6 +15,7 @@
 
 import { MODULE_CONFIGS, STORAGE_KEY, ModuleSettings, LICENSE_STORAGE_KEY, LICENSE_CACHE_KEY } from "../types/modules";
 import { MODULE_CONFIG_SCHEMAS } from "../types/config-schemas";
+import { initStorageBridge } from "./storage-bridge";
 
 const BOT_ENABLED_KEY = "xbot_enabled";
 const SESSION_CFG_KEY = "__xbot_cfg__";
@@ -120,6 +121,10 @@ document.addEventListener("xbot:tabs:armNextTab", () => {
     document.dispatchEvent(new CustomEvent("xbot:tabs:armed"));
   });
 });
+
+// Initialize storage bridge — main-world userscripts can now call
+// window.__twStorage.get/set/remove to access chrome.storage.local
+initStorageBridge();
 
 chrome.storage.sync.get(buildStorageKeys(), async (result) => {
   const botEnabled = (result[BOT_ENABLED_KEY] as boolean) === true;

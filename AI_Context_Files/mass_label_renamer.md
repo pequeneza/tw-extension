@@ -12,24 +12,34 @@ Adds **BITO colour-coded label buttons** to every row in the incomings table. Cl
 
 ## Tag palette (BITO labels)
 
-| Tag | Button label | Colour key | Two-tone (light / dark) |
-|-----|-------------|------------|------------------------|
-| `[Morto]` | M | green | `#31c908` / `#1f8a03` |
-| `[Desviado]` | D! | orange | `#ef8b10` / `#a85c06` |
-| `[Desviar]` | D | purple | `#9232a8` / `#611870` |
-| `[Reconquistar]` | R | gray | `#adb6c6` / `#717b8a` |
-| `[Reconquistado]` | RR | white | `#ffffff` / `#c8c8c8` (black text) |
-| `[Retirar]` | Re | teal | `#0d9488` / `#0a7a6e` |
-| `[Fake]` | F | yellow | `#ffd91c` / `#c9a808` |
-| `[OFF]` | O | blue | `#1a8fe3` / `#0d5fa3` |
-| … (configurable) | … | … | … |
+15 tags, defined in the `TAGS` array (`mass_label_renamer.user.js:145-162`). Each maps to a `PALETTE` colour key with a `[bg, priorityBg]` pair (`lines 123-140`); the 4 priority tags (marked ★) render with the darker `priorityBg` shade, all others use `bg`.
+
+| Tag | Button label | Colour key | bg / priorityBg |
+|-----|-------------|------------|------------------|
+| `[Morto]` ★ | M | green | `#CDEFCF` / `#B5DFBA` |
+| `[Desviado]` | D! | orange | `#F6D4A7` |
+| `[Desviar]` | D | purple | `#DCCEF6` |
+| `[Reconquistar]` | R | gray | `#E7E7E7` |
+| `[Reconquistado]` | RR | white | `#EEF0F5` |
+| `[Snipado]` | S! | lblue | `#CFEFF5` |
+| `[Snipar]` | S | blue | `#CFE2FF` |
+| `[Fubar]` | FU | dgreen | `#CEEED8` |
+| `[Snipe Cancel]` | SC | red | `#F2CACA` |
+| `[Fake]` | FA | Pink | `#F5D5E5` |
+| `[Possível Full]` ★ | PV | dblue | `#C8D4F5` / `#B5C4F0` |
+| `[Reforçar]` | RF | black | `#C8C8C8` |
+| ` \| Retirar` ★ | R! | teal | `#C0EAE7` / `#A8DDE0` |
+| ` \| Vigiar` ★ | V! | yellow | `#F8E8A6` / `#F0DA80` |
+| ` \| ✓` | ✓ | lgreen | `#D5EFCA` |
+
+The last three (`Retirar`, `Vigiar`, `✓`) are appended with a leading `" | "` rather than replacing the base tag, so they can stack alongside one of the other 12 tags.
 
 ## Highlight modes
 
 | Mode | Effect |
 |------|--------|
-| `'coluna'` | Paints only the label column cell. |
-| `'full'` | Paints the entire table row. |
+| `'coluna'` | Paints only the label column cell (default). |
+| `'linha'` | Paints the entire table row. |
 
 ## Config (from `window.__twSuiteCfg('mass_label_renamer')`)
 

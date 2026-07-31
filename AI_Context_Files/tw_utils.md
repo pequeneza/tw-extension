@@ -1,7 +1,7 @@
 # tw_utils
 
 **File:** `tw-suite-extension/modules/tw_utils.user.js`  
-**Version:** 1.2.0  
+**Version:** 1.3.0  
 **Trigger page:** Any `game.php`  
 **Re-entry guard:** `window.__twUtilsLoaded`
 

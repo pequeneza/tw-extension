@@ -1,7 +1,7 @@
 # mano_de_deus
 
 **File:** `tw-suite-extension/modules/mano_de_deus.user.js`  
-**Version:** 2.4.1  
+**Version:** 2.4.2  
 **Trigger page:** `screen=place&try=confirm`  
 **Re-entry guard:** None (page-specific; only one confirm page at a time)
 

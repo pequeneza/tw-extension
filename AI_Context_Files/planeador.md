@@ -1,7 +1,7 @@
 # planeador
 
 **File:** `tw-suite-extension/modules/planeador.user.js`  
-**Version:** 1.1.0  
+**Version:** 1.1.1  
 **Trigger page:** Any `game.php` (UI opens via button; active on `screen=memo` for watcher)  
 **Re-entry guard:** `window.__twPlaneadorLoaded`
 
@@ -94,7 +94,7 @@ Sigil is a game mechanic that makes **support commands arrive faster**. Attacks 
 overlay [name=sigilia] input
   → runCalc() reads sigilPct, stores in _lastCalc
   → reRenderTable() passes sigilPct to renderTable()
-  → renderTable() applies baseSec * (1 - sigilPct/100) for Support rows
+  → renderTable() applies baseMs / (1 + sigilPct/100) for Support rows (baseMs computed by travelMs())
   → kuminEntry.sigilPct / autosendEntry.sigilPct written to queue
 ```
 

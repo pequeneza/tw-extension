@@ -1,7 +1,7 @@
 # fakes
 
 **File:** `tw-suite-extension/modules/fakes.user.js`  
-**Version:** 7.1 (fetch mode + screen lock)  
+**Version:** 5.5 (fetch mode + screen lock)  
 **Module ID:** `fakes`  
 **Trigger page:** `screen=place` (not confirm)  
 **Re-entry guard:** None — script checks page URL and runs `runFetchLoop()` once

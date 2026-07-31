@@ -1,7 +1,7 @@
 # auto_sender
 
 **File:** `tw-suite-extension/modules/auto_sender.user.js`  
-**Version:** 2.0.0  
+**Version:** 2.1.0  
 **Trigger page:** Any `game.php`  
 **Re-entry guard:** `window.__twAutoSenderRunning`
 
@@ -47,6 +47,19 @@ Derives `_serverDateDiff` from `#serverDate` + `#serverTime` DOM elements, same 
 | `handleConfirmPage()` | Busy-waits to click confirm at the exact launch time. |
 | `measurePing()` | XHR round-trip to compute network offset (autoTimingOffset). |
 
+## Noble Train (NT) support
+
+Contrary to earlier versions, this module **does** fill noble-train unit counts on the confirm page — it isn't limited to plain attacks/support.
+
+- `NT_COUNT` (`auto_sender.user.js:28-36`) maps each Kumin NT template key (`noNT`, `twoNoblesSame`, `secondNobleWithRest`, `firstNobleRedNT`, etc. — noble counts taken directly from Kumin's `ntTemplates` object) to the number of nobles it expands to.
+- `startNT(cmd)` (line ~699, comment: "mirrors Kumin's startNT") — entry point on the confirm page; runs when `cmd.ntTemplate` is set or the `autoSendNobles` setting is on, and schedules `fillNT(nt)` ~1.2s later.
+- `fillNT(nt)` (line ~740) — fills the actual noble-count input(s) for the resolved NT template.
+- `cmd.catapultTarget`, when set, selects the catapult building target on the confirm page before the NT/attack fields are filled.
+
+## Snipe-cancel / gap-retry
+
+`cancelAfterMs`, `gapAfterMs`, and `gapBeforeMs` on a queue entry drive a recall/gap-retry flow (session keys `xbot_snipe_cancel_active` / `xbot_snipe_cancel_pending_*`) that can cancel a sent command and re-queue a retry aimed at the midpoint of a noble-train gap. This is the same feature documented in full in `snipe_cancel_session.md` — see that file for the mechanism; this doc only lists the fields so the queue-entry schema above isn't misleading about what they're for.
+
 ## Settings (localStorage `xbot_autosender_settings`)
 
 | Setting | Default | Description |
@@ -62,19 +75,42 @@ Derives `_serverDateDiff` from `#serverDate` + `#serverTime` DOM elements, same 
 
 ## Queue entry format (localStorage `xbot_autosender_queue`)
 
+`addToQueue()` (`auto_sender.user.js:221-243`) normalizes entries to this shape:
+
 ```json
 {
   "id": "unique-string",
-  "src": { "villageId": 12345, "x": 491, "y": 592 },
-  "tgt": { "x": 493, "y": 591 },
+  "src": "491|592",
+  "tgt": "493|591",
+  "srcVillageId": 12345,
+  "tgtVillageId": 67890,
+  "type": "attack",
   "launch": 1716000000000,
   "arrival": 1716003600000,
   "units": { "axe": 100, "spy": 10 },
+  "note": "",
+  "catapultTarget": null,
   "ntTemplate": null,
   "sigilPct": 0,
-  "leaveHome": false
+  "randomOffset": null,
+  "randomOffsetTime": null,
+  "cancelAfterMs": null,
+  "gapAfterMs": null,
+  "gapBeforeMs": null,
+  "travelMs": null,
+  "status": "pending",
+  "createdAt": 1716000000000
 }
 ```
+
+| Field | Description |
+|-------|-------------|
+| `type` | `"attack"` or `"support"` (lower-cased, defaults to `"attack"`). |
+| `catapultTarget` | Building target for catapult fire, if set. |
+| `ntTemplate` | Kumin noble-train template key (see NT support below) — `null` disables NT expansion for this entry. |
+| `randomOffset` / `randomOffsetTime` | Optional randomized-arrival jitter fields. |
+| `cancelAfterMs` / `gapAfterMs` / `gapBeforeMs` / `travelMs` | Snipe-cancel/gap-retry fields — see "Snipe-cancel / gap-retry" below. |
+| `status` | `"pending"` until the command is sent or cancelled. |
 
 ## localStorage / sessionStorage keys
 

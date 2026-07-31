@@ -83,8 +83,9 @@ const USERSCRIPT_MAP: Record<string, string> = {
   [`${MODULES_DIR}/tw_utils.user.js`]:              "tw_utils.user.js",
 };
 
-const BRIDGE_SRC  = "src/modules/tw-suite-config-bridge.js";
-const AS_MSGS_SRC = `${MODULES_DIR}/autosender_messages.json`;
+const BRIDGE_SRC          = "src/modules/tw-suite-config-bridge.js";
+const STORAGE_BRIDGE_SRC  = "src/modules/tw-suite-storage-bridge.js";
+const AS_MSGS_SRC         = `${MODULES_DIR}/autosender_messages.json`;
 const ICON_SIZES = [16, 48, 128] as const;
 const ICON_GOLD: [number, number, number] = [200, 144, 42];
 
@@ -137,7 +138,26 @@ function extensionAssetsPlugin(mode: string) {
         }
       }
 
+      if (existsSync(STORAGE_BRIDGE_SRC)) {
+        if (production) {
+          try {
+            const bridgeMin = await minify(readFileSync(STORAGE_BRIDGE_SRC, "utf8"), {
+              compress: { defaults: true },
+              mangle: true,
+              format: { comments: false },
+            });
+            writeFileSync("dist/modules/tw-suite-storage-bridge.js", bridgeMin.code ?? readFileSync(STORAGE_BRIDGE_SRC, "utf8"), "utf8");
+          } catch (err) {
+            console.warn("[tw-ext] Minify failed for tw-suite-storage-bridge.js, shipping unminified:", err);
+            copyFileSync(STORAGE_BRIDGE_SRC, "dist/modules/tw-suite-storage-bridge.js");
+          }
+        } else {
+          copyFileSync(STORAGE_BRIDGE_SRC, "dist/modules/tw-suite-storage-bridge.js");
+        }
+      }
+
       const bridge = existsSync(BRIDGE_SRC) ? readFileSync(BRIDGE_SRC, "utf8") : "";
+      const storageBridge = existsSync(STORAGE_BRIDGE_SRC) ? readFileSync(STORAGE_BRIDGE_SRC, "utf8") : "";
       const asMsgs = existsSync(AS_MSGS_SRC)
         ? `var __xbot_msgs = ${readFileSync(AS_MSGS_SRC, "utf8").trim()};\n`
         : "";
@@ -148,8 +168,9 @@ function extensionAssetsPlugin(mode: string) {
         }
         const original = readFileSync(srcFile, "utf8");
         const extras   = dstFile === "auto_sender.user.js" ? asMsgs : "";
-        const combined = bridge
-          ? `${bridge}\n\n${extras}/* ─── ${dstFile} ─── */\n\n${original}`
+        const bridges = [bridge, storageBridge].filter(Boolean).join("\n\n");
+        const combined = bridges
+          ? `${bridges}\n\n${extras}/* ─── ${dstFile} ─── */\n\n${original}`
           : extras + original;
 
         // This is the bridge-prepended copy consumed only via <script src>

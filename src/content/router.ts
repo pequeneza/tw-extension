@@ -138,13 +138,6 @@ chrome.storage.sync.get(buildStorageKeys(), async (result) => {
 
   setFpShieldEnabled(true);
 
-  try {
-    sessionStorage.setItem(SESSION_LICENSE_KEY, licenseKey);
-  } catch (_) {
-    // sessionStorage blocked — modules needing this fall back to their own
-    // manually-configured key, same as a bare Tampermonkey install would.
-  }
-
   const settings = (result[STORAGE_KEY] as ModuleSettings) ?? {};
 
   // Build per-module config map
@@ -154,18 +147,17 @@ chrome.storage.sync.get(buildStorageKeys(), async (result) => {
     cfgMap[modId] = (result[schema.storageKey] as Record<string, unknown>) ?? {};
   }
 
-  // Expose config via sessionStorage (CSP-safe alternative to inline <script>)
-  try {
-    sessionStorage.setItem(SESSION_CFG_KEY, JSON.stringify(cfgMap));
-  } catch (_) {
-    // sessionStorage blocked (e.g. private browsing) — userscripts fall back to {}
-  }
-
-  // Inject enabled + URL-matched modules
+  // Inject enabled + URL-matched modules via background service worker
+  // Config is baked directly into the main world (window.__xbotCfg), not sessionStorage
   for (const mod of MODULE_CONFIGS) {
     if (settings[mod.id] !== true) continue;
     if (!mod.matchPattern.test(window.location.href)) continue;
-    injectScript(chrome.runtime.getURL(`modules/${mod.scriptFile}`));
+    chrome.runtime.sendMessage({
+      type: "INJECT_MODULE",
+      moduleId: mod.id,
+      scriptFile: mod.scriptFile,
+      cfg: cfgMap[mod.id] ?? {},
+    });
   }
 });
 
@@ -183,7 +175,17 @@ chrome.storage.onChanged.addListener((changes, area) => {
     const wasEnabled = oldSettings[mod.id] === true;
     const nowEnabled = newSettings[mod.id] === true;
     if (!wasEnabled && nowEnabled && mod.matchPattern.test(window.location.href)) {
-      injectScript(chrome.runtime.getURL(`modules/${mod.scriptFile}`));
+      // Fetch current config for this module and inject via background
+      chrome.storage.sync.get([MODULE_CONFIG_SCHEMAS[mod.id]?.storageKey], (result) => {
+        const schema = MODULE_CONFIG_SCHEMAS[mod.id];
+        const cfg = (result[schema?.storageKey!] as Record<string, unknown>) ?? {};
+        chrome.runtime.sendMessage({
+          type: "INJECT_MODULE",
+          moduleId: mod.id,
+          scriptFile: mod.scriptFile,
+          cfg,
+        });
+      });
     }
   }
 });

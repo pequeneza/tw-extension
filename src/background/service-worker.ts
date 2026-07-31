@@ -20,7 +20,8 @@ type BgMessage =
   | { type: "GET_ACTIVE_TAB_URL" }
   | { type: "RELOAD_ACTIVE_TAB" }
   | { type: "VALIDATE_LICENSE"; key: string; installId?: string }
-  | { type: "ARM_NEXT_TAB" };
+  | { type: "ARM_NEXT_TAB" }
+  | { type: "INJECT_MODULE"; moduleId: string; scriptFile: string; cfg: Record<string, unknown> };
 
 type BgResponse =
   | { type: "ACTIVE_TAB_URL"; url: string | null }
@@ -179,6 +180,47 @@ chrome.runtime.onMessage.addListener(
             sendResponse({ type: "LICENSE_RESULT", valid: data.valid, expiresAt: data.expires_at ?? null }))
           .catch(() => sendResponse({ type: "LICENSE_RESULT", valid: false, expiresAt: null }));
         return true;
+
+      case "INJECT_MODULE": {
+        const tabId = _sender.tab?.id;
+        if (tabId == null) {
+          sendResponse({ type: "ACK" });
+          return true;
+        }
+
+        // Step 1: Inject config into the main world's window object
+        chrome.scripting.executeScript(
+          {
+            target: { tabId },
+            world: "MAIN",
+            func: (moduleId: string, cfg: Record<string, unknown>) => {
+              (window as any).__xbotCfg = (window as any).__xbotCfg || {};
+              (window as any).__xbotCfg[moduleId] = cfg;
+            },
+            args: [message.moduleId, message.cfg],
+          },
+          () => {
+            if (chrome.runtime.lastError) {
+              console.warn(`[xBot] Inject config failed for ${message.moduleId}:`, chrome.runtime.lastError.message);
+            }
+            // Step 2: Inject the module script itself
+            chrome.scripting.executeScript(
+              {
+                target: { tabId },
+                world: "MAIN",
+                files: [`modules/${message.scriptFile}`],
+              },
+              () => {
+                if (chrome.runtime.lastError) {
+                  console.warn(`[xBot] Inject script failed for ${message.scriptFile}:`, chrome.runtime.lastError.message);
+                }
+                sendResponse({ type: "ACK" });
+              }
+            );
+          }
+        );
+        return true;
+      }
 
       default:
         return undefined;

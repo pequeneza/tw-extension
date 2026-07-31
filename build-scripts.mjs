@@ -5,9 +5,10 @@
  * Vite is only used for the popup (see vite.config.ts).
  *
  * Outputs:
- *   dist/content/router.js             IIFE — content script
- *   dist/content/overlay.js            IIFE — in-page React overlay
- *   dist/background/service-worker.js  ESM  — background worker
+ *   dist/content/router.js              IIFE — content script
+ *   dist/content/overlay.js             IIFE — in-page React overlay
+ *   dist/content/fingerprint-shield.js  IIFE — MAIN-world, document_start
+ *   dist/background/service-worker.js   ESM  — background worker
  */
 
 import { rollup }          from "rollup";
@@ -116,6 +117,28 @@ async function buildOverlay() {
   console.log("[scripts] ✓ dist/content/overlay.js");
 }
 
+async function buildFingerprintShield() {
+  console.log("[scripts] Building content/fingerprint-shield.js (iife)…");
+  mkdirSync("dist/content", { recursive: true });
+
+  const bundle = await rollup({
+    input:   resolve(__dirname, "src/content/fingerprint-shield.ts"),
+    plugins: basePlugins(),
+  });
+
+  await bundle.write({
+    file:                 "dist/content/fingerprint-shield.js",
+    format:               "iife",
+    name:                 "TWFingerprintShield",
+    sourcemap:            !PRODUCTION,
+    inlineDynamicImports: true,
+    generatedCode:        { constBindings: true },
+  });
+
+  await bundle.close();
+  console.log("[scripts] ✓ dist/content/fingerprint-shield.js");
+}
+
 async function buildServiceWorker() {
   console.log("[scripts] Building background/service-worker.js (es)…");
   mkdirSync("dist/background", { recursive: true });
@@ -141,6 +164,7 @@ async function buildServiceWorker() {
 try {
   await buildRouter();
   await buildOverlay();
+  await buildFingerprintShield();
   await buildServiceWorker();
   console.log("[scripts] ✓ All scripts built successfully.");
 } catch (err) {

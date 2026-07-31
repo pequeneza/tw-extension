@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TW Planeador
 // @namespace    tw_planeador
-// @version      1.1.1
+// @version      1.2.1
 // @description  Planeador de ataques coordenados: busca velocidades do servidor, calcula Hora de Saída e gera links de ataque pré-preenchidos.
 // @match        https://*.tribalwars.com.pt/game.php*
 // ==/UserScript==
@@ -17,11 +17,43 @@
     const _screen = new URLSearchParams(window.location.search).get('screen');
     const isMemo  = _screen === 'memo';
 
+    // Per-profile multiplier (persisted once, same pattern as fingerprint-shield.ts's
+    // seed): without it, every xBot install shares the exact same base±spread
+    // ranges, which is a recognizable tool signature independent of the
+    // per-call Math.random() noise already applied below.
+    function getJitterMultiplier() {
+        try {
+            const existing = localStorage.getItem('xbot_jitter_mult_v1');
+            if (existing) { const n = parseFloat(existing); if (!isNaN(n)) return n; }
+        } catch (e) { /* ignore */ }
+        const mult = 0.8 + Math.random() * 0.5; // 0.8x - 1.3x, stable per profile
+        try { localStorage.setItem('xbot_jitter_mult_v1', String(mult)); } catch (e) { /* ignore */ }
+        return mult;
+    }
+    const _jitterMult = getJitterMultiplier();
+
     // Adds random jitter to fixed UI-automation delays so repeated runs (and
     // different installs of this script) don't produce an identical, mechanically
     // precise timing signature.
     function jitter(baseMs, spreadMs) {
-        return Math.max(0, Math.round(baseMs + (Math.random() * 2 - 1) * spreadMs));
+        return Math.max(0, Math.round(baseMs * _jitterMult + (Math.random() * 2 - 1) * spreadMs * _jitterMult));
+    }
+
+    // Opens `url` in a new background tab, pinned — same arm/pin bridge desviador
+    // uses: asks the background service worker (via router.ts) to pin+unfocus the
+    // next tab created in this window, waits for its ack, then opens. Falls back
+    // to a normal (unpinned/focused) tab if the extension bridge doesn't ack in time.
+    function openTabPinned(url) {
+        let launched = false;
+        function launch() {
+            if (launched) return;
+            launched = true;
+            document.removeEventListener('xbot:tabs:armed', launch);
+            window.open(url, '_blank');
+        }
+        document.addEventListener('xbot:tabs:armed', launch);
+        document.dispatchEvent(new CustomEvent('xbot:tabs:armNextTab'));
+        setTimeout(launch, jitter(200, 40));
     }
 
     /* ═══════════════════════════════════════════════════════════════════════
@@ -883,7 +915,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
                     const memoUrl = vid
                         ? `${location.origin}/game.php?${sitterPrefix()}village=${vid}&screen=memo`
                         : `${location.origin}/game.php?${sitterPrefix()}screen=memo`;
-                    window.open(memoUrl, '_blank', 'width=1000,height=600,noopener,noreferrer');
+                    setTimeout(() => openTabPinned(memoUrl), jitter(150, 50));
                 } catch (err) {
                     console.error('[Planeador] Kumin queue error:', err);
                 }
@@ -1121,7 +1153,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
                 window.__kuminQueueClaimed = false;
             }
         };
-        setTimeout(waitForForm, 600);
+        setTimeout(waitForForm, jitter(600, 120));
     }
 
     function processKuminQueue(queue) {
@@ -1171,7 +1203,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
                     onDone();
                 }
             }
-            setTimeout(check, 400);
+            setTimeout(check, jitter(400, 100));
         }
 
         function findCreateBtn() {

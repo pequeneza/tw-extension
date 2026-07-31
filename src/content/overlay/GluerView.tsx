@@ -12,7 +12,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { computeScheduledByVillage, fetchWorldSpeed } from "./queue-utils";
+import { computeScheduledByVillage, fetchWorldSpeed, openTabPinned } from "./queue-utils";
 import { TriggerVisibilityToggle } from "./TriggerVisibilityToggle";
 
 /* ─── Constants ───────────────────────────────────────────────────────────── */
@@ -869,7 +869,7 @@ export function GluerView({ visible, onBack }: { visible: boolean; onBack: () =>
     const url = villageId
       ? `${location.origin}/game.php?${sitterPrefix()}village=${villageId}&screen=memo`
       : `${location.origin}/game.php?${sitterPrefix()}screen=memo`;
-    window.open(url, "_blank", "width=1000,height=600,noopener,noreferrer");
+    openTabPinned(url);
     setQueueState([]);
   }
 

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Renomeador BITO v4
-// @version      4.2.0
+// @version      4.2.1
 // @description  BITO colour buttons on every incoming row + row painting.
 // @match        https://*.tribalwars.com.pt/game.php*screen=overview_villages*mode=incomings*
 // @match        https://*.tribalwars.com.pt/game.php*screen=overview*
@@ -19,11 +19,26 @@
   var minDelayMs    = (_cfg.minDelaySeconds  !== undefined ? _cfg.minDelaySeconds  : 120) * 1000;
   var randomExtraMs = (_cfg.randomExtraMax   !== undefined ? _cfg.randomExtraMax   : 30)  * 1000;
 
+  // Per-profile multiplier (persisted once, same pattern as fingerprint-shield.ts's
+  // seed): without it, every xBot install shares the exact same base±spread
+  // ranges, which is a recognizable tool signature independent of the
+  // per-call Math.random() noise already applied below.
+  function getJitterMultiplier() {
+    try {
+      const existing = localStorage.getItem('xbot_jitter_mult_v1');
+      if (existing) { const n = parseFloat(existing); if (!isNaN(n)) return n; }
+    } catch (e) { /* ignore */ }
+    const mult = 0.8 + Math.random() * 0.5; // 0.8x - 1.3x, stable per profile
+    try { localStorage.setItem('xbot_jitter_mult_v1', String(mult)); } catch (e) { /* ignore */ }
+    return mult;
+  }
+  const _jitterMult = getJitterMultiplier();
+
   // Adds random jitter to fixed UI-automation delays so repeated runs (and
   // different installs of this script) don't produce an identical, mechanically
   // precise timing signature.
   function jitter(baseMs, spreadMs) {
-    return Math.max(0, Math.round(baseMs + (Math.random() * 2 - 1) * spreadMs));
+    return Math.max(0, Math.round(baseMs * _jitterMult + (Math.random() * 2 - 1) * spreadMs * _jitterMult));
   }
 
   // Performs one quickedit rename with minimal pacing: open the inline

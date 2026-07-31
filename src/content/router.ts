@@ -26,6 +26,20 @@ const SESSION_CFG_KEY = "__xbot_cfg__";
 const SESSION_LICENSE_KEY = "__xbot_license_key__";
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+// Mirrors bot-enabled + license-valid into localStorage for fingerprint-shield.ts.
+// That script runs MAIN-world at document_start — before chrome.storage is
+// reachable and before this file (document_end) even starts on the same load —
+// so it can only ever read the state THIS callback wrote on the PREVIOUS load.
+const FP_ENABLED_LOCAL_KEY = "xbot_fp_enabled_v1";
+
+function setFpShieldEnabled(enabled: boolean): void {
+  try {
+    localStorage.setItem(FP_ENABLED_LOCAL_KEY, enabled ? "1" : "0");
+  } catch (_) {
+    // localStorage blocked — fingerprint-shield.ts fails open to real values
+  }
+}
+
 // Random UUID, generated once, sent alongside every license check so the
 // license server can tell how many distinct installs are using one key —
 // logging only for now, nothing here changes whether a check passes or
@@ -109,13 +123,15 @@ document.addEventListener("xbot:tabs:armNextTab", () => {
 
 chrome.storage.sync.get(buildStorageKeys(), async (result) => {
   const botEnabled = (result[BOT_ENABLED_KEY] as boolean) === true;
-  if (!botEnabled) return;
+  if (!botEnabled) { setFpShieldEnabled(false); return; }
 
   const licenseKey = (result[LICENSE_STORAGE_KEY] as string) ?? "";
-  if (!licenseKey) return;
+  if (!licenseKey) { setFpShieldEnabled(false); return; }
 
   const license = await checkLicense(licenseKey);
-  if (!license.valid) return;
+  if (!license.valid) { setFpShieldEnabled(false); return; }
+
+  setFpShieldEnabled(true);
 
   try {
     sessionStorage.setItem(SESSION_LICENSE_KEY, licenseKey);

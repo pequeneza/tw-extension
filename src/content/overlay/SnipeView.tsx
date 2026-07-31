@@ -12,7 +12,7 @@
 import React, {
   useCallback, useEffect, useMemo, useRef, useState,
 } from "react";
-import { computeScheduledByVillage, subtractScheduled } from "./queue-utils";
+import { computeScheduledByVillage, subtractScheduled, openTabPinned } from "./queue-utils";
 import { TriggerVisibilityToggle } from "./TriggerVisibilityToggle";
 
 /* ─── Constants ───────────────────────────────────────────────────────────── */
@@ -1513,7 +1513,7 @@ export function SnipeView({ visible, onBack }: {
     const url = vid
       ? `${location.origin}/game.php?${sitterPrefix()}village=${vid}&screen=memo`
       : `${location.origin}/game.php?${sitterPrefix()}screen=memo`;
-    window.open(url, "_blank", "noopener,noreferrer");
+    openTabPinned(url);
     setSnipeQueue([]);
     saveSnipeQueue([]);
   }

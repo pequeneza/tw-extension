@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Kumin Gluer
 // @namespace    tw_kumin_gluer
-// @version      1.1.0
+// @version      1.1.2
 // @description  Click an incoming attack on info_village to schedule a glue/snipe via Kumin autosender
 // @match        https://*.tribalwars.com.pt/game.php*
 // ==/UserScript==
@@ -15,11 +15,26 @@
     // Capture extension base URL synchronously before any async work
     const EXT_BASE = (document.currentScript?.src ?? '').replace(/\/modules\/[^/]+$/, '');
 
+    // Per-profile multiplier (persisted once, same pattern as fingerprint-shield.ts's
+    // seed): without it, every xBot install shares the exact same base±spread
+    // ranges, which is a recognizable tool signature independent of the
+    // per-call Math.random() noise already applied below.
+    function getJitterMultiplier() {
+        try {
+            const existing = localStorage.getItem('xbot_jitter_mult_v1');
+            if (existing) { const n = parseFloat(existing); if (!isNaN(n)) return n; }
+        } catch (e) { /* ignore */ }
+        const mult = 0.8 + Math.random() * 0.5; // 0.8x - 1.3x, stable per profile
+        try { localStorage.setItem('xbot_jitter_mult_v1', String(mult)); } catch (e) { /* ignore */ }
+        return mult;
+    }
+    const _jitterMult = getJitterMultiplier();
+
     // Adds random jitter to fixed UI-automation delays so repeated runs (and
     // different installs of this script) don't produce an identical, mechanically
     // precise timing signature.
     function jitter(baseMs, spreadMs) {
-        return Math.max(0, Math.round(baseMs + (Math.random() * 2 - 1) * spreadMs));
+        return Math.max(0, Math.round(baseMs * _jitterMult + (Math.random() * 2 - 1) * spreadMs * _jitterMult));
     }
 
     const QUEUE_KEY    = 'twKuminGluer_queue';
@@ -474,7 +489,7 @@
                 cacheKuminCommands();
             }
         };
-        setTimeout(waitForForm, 600);
+        setTimeout(waitForForm, jitter(600, 120));
     }
 
     const ALL_UNITS = ['spear','sword','axe','archer','spy','light','marcher','heavy','ram','catapult','snob','knight'];
@@ -637,9 +652,9 @@
                 localStorage.removeItem(QUEUE_KEY);
                 console.log('[KuminGluer] All entries processed.');
                 // Cache now that no popups will be opened by processQueue
-                setTimeout(cacheKuminCommands, 1000);
+                setTimeout(cacheKuminCommands, jitter(1000, 200));
                 // Auto-close if opened as a popup from the overlay
-                setTimeout(() => { try { window.close(); } catch {} }, 2500);
+                setTimeout(() => { try { window.close(); } catch {} }, jitter(2500, 400));
                 return;
             }
 
@@ -688,7 +703,7 @@
                     onDone();
                 }
             }
-            setTimeout(check, 400);
+            setTimeout(check, jitter(400, 100));
         }
 
         function findCreateNewButton() {

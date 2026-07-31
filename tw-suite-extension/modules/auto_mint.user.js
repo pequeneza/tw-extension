@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TribalWars Auto Mint Coins (stable + auto refresh)
 // @namespace    tribalwars_auto_mint
-// @version      1.3.0
+// @version      1.3.1
 // @description  Auto fill max + mint with countdown; refreshes page when mint becomes available again
 // @match        https://*.tribalwars.com.pt/game.php*screen=snob*
 // @grant        none
@@ -20,11 +20,26 @@
   const MINT_CLICK_DELAY = 500;
   const LS_NEXT_RUN = 'tw_auto_mint_next_run_at';
 
+  // Per-profile multiplier (persisted once, same pattern as fingerprint-shield.ts's
+  // seed): without it, every xBot install shares the exact same base±spread
+  // ranges, which is a recognizable tool signature independent of the
+  // per-call Math.random() noise already applied below.
+  function getJitterMultiplier() {
+    try {
+      const existing = localStorage.getItem('xbot_jitter_mult_v1');
+      if (existing) { const n = parseFloat(existing); if (!isNaN(n)) return n; }
+    } catch (e) { /* ignore */ }
+    const mult = 0.8 + Math.random() * 0.5; // 0.8x - 1.3x, stable per profile
+    try { localStorage.setItem('xbot_jitter_mult_v1', String(mult)); } catch (e) { /* ignore */ }
+    return mult;
+  }
+  const _jitterMult = getJitterMultiplier();
+
   // Adds random jitter to fixed UI-automation delays so repeated runs (and
   // different installs of this script) don't produce an identical, mechanically
   // precise timing signature.
   function jitter(baseMs, spreadMs) {
-    return Math.max(0, Math.round(baseMs + (Math.random() * 2 - 1) * spreadMs));
+    return Math.max(0, Math.round(baseMs * _jitterMult + (Math.random() * 2 - 1) * spreadMs * _jitterMult));
   }
   function nextIntervalMs() { return jitter(INTERVAL, 4000); }
 

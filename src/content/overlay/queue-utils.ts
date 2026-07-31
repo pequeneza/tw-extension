@@ -1,6 +1,27 @@
 const TERMINAL = new Set(["sent", "failed"]);
 
 /**
+ * Opens `url` in a new background tab, pinned — mirrors desviador.user.js's
+ * openPlaceTab bridge: arms the next tab created in this window via the
+ * background service worker (router.ts forwards ARM_NEXT_TAB over
+ * chrome.runtime, both isolated-world scripts share the same `document`),
+ * then opens. Falls back to a normal (unpinned/focused) tab if the
+ * extension bridge doesn't ack in time.
+ */
+export function openTabPinned(url: string): void {
+  let launched = false;
+  function launch() {
+    if (launched) return;
+    launched = true;
+    document.removeEventListener("xbot:tabs:armed", launch);
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+  document.addEventListener("xbot:tabs:armed", launch);
+  document.dispatchEvent(new CustomEvent("xbot:tabs:armNextTab"));
+  setTimeout(launch, 200);
+}
+
+/**
  * Aggregates pending units per source coord across all three scheduling queues:
  * xbot_autosender_queue, tw_snipe_queue_v1, twKuminGluer_queue.
  * Entries with status "sent" or "failed" in the autosender queue are excluded.

@@ -39,6 +39,13 @@
       ],
       "run_at": "document_end",
       "all_frames": false
+    },
+    {
+      "matches": ["https://*.tribalwars.com.pt/game.php*"],
+      "js": ["content/fingerprint-shield.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
     }
   ],
 
@@ -59,7 +66,8 @@
         "assets/*",
         "icons/*"
       ],
-      "matches": ["https://*.tribalwars.com.pt/*"]
+      "matches": ["https://*.tribalwars.com.pt/*"],
+      "use_dynamic_url": true
     }
   ]
 }

@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         TW PT - Noble Resource Sender + Trainer (Extension Patched)
-// @version      0.22-extpatch3
+// @version      0.22-extpatch4
 // @description  Sends resources for nobles + subtracts incoming (from market mode=call #res_sum) — patched for Chrome extension (localStorage + TW-themed sidebar UI)
 // @match        https://*.tribalwars.com.pt/game.php?*screen=snob*
 // @exclude      https://*.tribalwars.com.pt/game.php?*screen=snob*mode=coin*
@@ -127,6 +127,21 @@
     #shk-incoming-line { margin: 4px 0 2px; font-size: 11px; }
   `);
 
+  // Per-profile multiplier (persisted once, same pattern as fingerprint-shield.ts's
+  // seed): without it, every xBot install shares the exact same base±spread
+  // ranges, which is a recognizable tool signature independent of the
+  // per-call triangular noise already applied below.
+  function getJitterMultiplier() {
+    try {
+      const existing = localStorage.getItem('xbot_jitter_mult_v1');
+      if (existing) { const n = parseFloat(existing); if (!isNaN(n)) return n; }
+    } catch (e) { /* ignore */ }
+    const mult = 0.8 + Math.random() * 0.5; // 0.8x - 1.3x, stable per profile
+    try { localStorage.setItem('xbot_jitter_mult_v1', String(mult)); } catch (e) { /* ignore */ }
+    return mult;
+  }
+  const _jitterMult = getJitterMultiplier();
+
   // Adds random jitter to fixed UI-automation delays so repeated runs (and
   // automated detection) don't see identical timing every time. Uses the sum
   // of two uniform draws (triangular distribution) instead of one flat draw,
@@ -135,7 +150,7 @@
   // where the extremes are exactly as likely as the middle.
   function jitter(baseMs, spreadMs) {
     const tri = (Math.random() + Math.random() - 1); // -1..1, triangular
-    return Math.max(0, Math.round(baseMs + tri * spreadMs));
+    return Math.max(0, Math.round(baseMs * _jitterMult + tri * spreadMs * _jitterMult));
   }
 
   function $(s) { return document.querySelector(s); }

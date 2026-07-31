@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Desviador
 // @namespace    tw_desviador
-// @version      3.5.0
+// @version      3.5.1
 // @description  Desvio automático via place-screen tabs — isolados por cmdId
 // @match        https://*.tribalwars.com.pt/game.php*
 // ==/UserScript==
@@ -28,12 +28,27 @@
     const HISTORY_KEY          = 'twDesviador_history';  /* fired command log (last 50) */
     const POPUP_TIMEOUT_MS     = 6_000;  /* max wait for popup rows / support btn        */
 
+    /* Per-profile multiplier (persisted once, same pattern as fingerprint-shield.ts's
+       seed): without it, every xBot install shares the exact same base±spread
+       ranges, which is a recognizable tool signature independent of the
+       per-call Math.random() noise already applied below. */
+    function getJitterMultiplier() {
+        try {
+            const existing = localStorage.getItem('xbot_jitter_mult_v1');
+            if (existing) { const n = parseFloat(existing); if (!isNaN(n)) return n; }
+        } catch (e) { /* ignore */ }
+        const mult = 0.8 + Math.random() * 0.5; // 0.8x - 1.3x, stable per profile
+        try { localStorage.setItem('xbot_jitter_mult_v1', String(mult)); } catch (e) { /* ignore */ }
+        return mult;
+    }
+    const _jitterMult = getJitterMultiplier();
+
     /* Adds random jitter to fixed UI-automation delays so repeated runs (and
        different installs of this script) don't produce an identical, mechanically
        precise timing signature. Not used on the recall-trick's sentAt-derived math
        (doScheduleCancel's gap window), which needs ms-level fidelity to work. */
     function jitter(baseMs, spreadMs) {
-        return Math.max(0, Math.round(baseMs + (Math.random() * 2 - 1) * spreadMs));
+        return Math.max(0, Math.round(baseMs * _jitterMult + (Math.random() * 2 - 1) * spreadMs * _jitterMult));
     }
 
     const params    = new URLSearchParams(window.location.search);

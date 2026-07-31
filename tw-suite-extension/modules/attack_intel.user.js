@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TribalWars Attack Intel
 // @namespace    tw_attack_intel
-// @version      1.0.0
+// @version      1.1.1
 // @description  Reports incoming-attack metadata to a local xBot intel server and shows cross-report size advisories.
 // @match        https://*.tribalwars.com.pt/game.php*
 // @grant        unsafeWindow
@@ -106,17 +106,42 @@
         return out;
     }
 
+    // Derived from world+player.id (SHA-256, truncated) rather than a random
+    // value stashed in localStorage. localStorage is scoped per browser
+    // origin (per world subdomain here), not per game account — a random
+    // per-browser id means two different accounts sharing a browser/sitter
+    // session on the same world submit the IDENTICAL reporter_id to the
+    // shared server, directly linking them in the raw attacks table. Hashing
+    // world+player.id instead keeps the field's actual purpose (excluding an
+    // account's OWN past reports from counting as independent corroborating
+    // evidence — see the v1->v2 note below) while making two different
+    // accounts on the same browser get two different, unlinked ids.
+    let _reporterIdPromise = null;
     function getReporterId() {
-        try {
-            const existing = localStorage.getItem(REPORTER_ID_KEY);
-            if (existing) return existing;
-        } catch (e) { /* ignore */ }
-        const id = randomId();
-        try { localStorage.setItem(REPORTER_ID_KEY, id); } catch (e) { /* ignore */ }
-        return id;
+        if (_reporterIdPromise) return _reporterIdPromise;
+        _reporterIdPromise = (async () => {
+            try {
+                const world    = pageWindow.game_data && pageWindow.game_data.world;
+                const playerId = pageWindow.game_data && pageWindow.game_data.player && pageWindow.game_data.player.id;
+                if (world && playerId != null && pageWindow.crypto && pageWindow.crypto.subtle) {
+                    const enc    = new TextEncoder().encode(`${world}:${playerId}`);
+                    const digest = await pageWindow.crypto.subtle.digest('SHA-256', enc);
+                    return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('').slice(0, 24);
+                }
+            } catch (e) { /* fall through to legacy id below */ }
+            // Fallback (player id / SubtleCrypto unavailable at this point):
+            // old per-browser random id — still functional, just not
+            // account-scoped, matching pre-fix behaviour.
+            try {
+                const existing = localStorage.getItem(REPORTER_ID_KEY);
+                if (existing) return existing;
+            } catch (e) { /* ignore */ }
+            const id = randomId();
+            try { localStorage.setItem(REPORTER_ID_KEY, id); } catch (e) { /* ignore */ }
+            return id;
+        })();
+        return _reporterIdPromise;
     }
-
-    const reporterId = getReporterId();
 
     /* ── License key sourcing ────────────────────────────────────────────────
        server-attack-intel requires a valid xBot license on every data-bearing
@@ -347,7 +372,8 @@
 
     const reported = new Set(); // per-page-load dedup only, not the source of truth
 
-    function report(entry, settings) {
+    async function report(entry, settings) {
+        const reporterId = await getReporterId();
         const body = JSON.stringify({
             world: pageWindow.game_data.world,
             cmdId: entry.cmdId,
@@ -597,8 +623,23 @@
        userscript is even installed. Medium markers are intentionally left
        click-inert — this is only for LARGE per the feature request. ────────*/
 
+    // Per-profile multiplier (persisted once, same pattern as fingerprint-shield.ts's
+    // seed): without it, every xBot install shares the exact same base±spread
+    // ranges, which is a recognizable tool signature independent of the
+    // per-call Math.random() noise already applied below.
+    function getJitterMultiplier() {
+        try {
+            const existing = localStorage.getItem('xbot_jitter_mult_v1');
+            if (existing) { const n = parseFloat(existing); if (!isNaN(n)) return n; }
+        } catch (e) { /* ignore */ }
+        const mult = 0.8 + Math.random() * 0.5; // 0.8x - 1.3x, stable per profile
+        try { localStorage.setItem('xbot_jitter_mult_v1', String(mult)); } catch (e) { /* ignore */ }
+        return mult;
+    }
+    const _jitterMult = getJitterMultiplier();
+
     function jitter(baseMs, spreadMs) {
-        return Math.max(0, Math.round(baseMs + (Math.random() * 2 - 1) * spreadMs));
+        return Math.max(0, Math.round(baseMs * _jitterMult + (Math.random() * 2 - 1) * spreadMs * _jitterMult));
     }
 
     function currentTagText(settings) {
@@ -720,6 +761,7 @@
 
         const cache = loadAdvisoryCache();
         let cacheDirty = false;
+        const reporterId = await getReporterId();
 
         for (const [srcVillageId, entries] of bySrc) {
             const qs = new URLSearchParams({

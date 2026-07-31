@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Kumin Gluer
 // @namespace    tw_kumin_gluer
-// @version      1.1.2
+// @version      1.1.3
 // @description  Click an incoming attack on info_village to schedule a glue/snipe via Kumin autosender
 // @match        https://*.tribalwars.com.pt/game.php*
 // ==/UserScript==
@@ -744,6 +744,31 @@
                 nativeSet(sigilEl, String(entry.sigilPct));
                 console.log('[KuminGluer] Set sigil =', entry.sigilPct);
             }
+
+            // Own small jittered delay, separate from the units/sigil fill above —
+            // guaranteed to resolve before the caller's jitter(400,100) wait-then-click
+            // (max 200ms here vs. min 300ms there), so it never races the submit click.
+            setTimeout(() => selectNtTemplate(entry), jitter(150, 50));
+        }
+
+        // Options in #popupNtTemplate carry the template key as their `id`
+        // attribute (not `value`), e.g. <option id="noNT">no NT</option> —
+        // so the right option is found by id, not by matching .value. Always
+        // explicitly applies a template (defaulting to noNT when the entry
+        // doesn't carry one) rather than leaving whatever was last selected —
+        // Kumin's popup can retain a stale selection from a previous command.
+        function selectNtTemplate(entry) {
+            const key = entry.ntTemplate || 'noNT';
+            const select = document.getElementById('popupNtTemplate');
+            if (!select) return;
+            const option = select.querySelector(`option[id="${key}"]`);
+            if (!option) {
+                console.warn('[KuminGluer] Unknown ntTemplate:', key);
+                return;
+            }
+            option.selected = true;
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            console.log('[KuminGluer] Set NT template =', key);
         }
 
         function findUnitInput(unit) {

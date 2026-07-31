@@ -37,7 +37,14 @@
       "Bash(git add *)",
       "Bash(git commit *)",
       "Bash(git merge *)",
-      "Bash(echo \"EXIT:$?\")"
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(grep -E \"^\\\\-.*\\( \\\\{|\\\\\\(|\\\\{,\\)\")",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(git restore *)",
+      "Bash(rm -f \"server/25\" \"td\" \"td.'\" \"void\")",
+      "Bash(npm install *)",
+      "Bash(xxd)",
+      "Bash(grep -v \"^ M .claude\\\\|^?? server-attack-intel/$\")"
     ]
   },
   "enabledPlugins": {

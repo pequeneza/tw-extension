@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TW Planeador
 // @namespace    tw_planeador
-// @version      1.2.1
+// @version      1.3.0
 // @description  Planeador de ataques coordenados: busca velocidades do servidor, calcula Hora de Saída e gera links de ataque pré-preenchidos.
 // @match        https://*.tribalwars.com.pt/game.php*
 // ==/UserScript==
@@ -69,6 +69,33 @@
 
     const UNIT_ORDER   = ['spear','sword','axe','archer','spy','light','marcher','heavy','ram','catapult','snob','knight'];
     const UNIT_LABEL   = { spear:'Lança', sword:'Espada', axe:'Machado', archer:'Arqueiro', spy:'Espião', light:'Cav. Leve', marcher:'Arq. Cavalo', heavy:'Cav. Pesada', ram:'Ariete', catapult:'Catapulta', snob:'Nobre', knight:'Paladino' };
+
+    /* Kumin's own NT template keys/labels — must match the option `id`s in
+       Kumin's #popupNtTemplate select exactly, since that's how the popup
+       gets auto-filled (see selectNtTemplate() near the queue processor). */
+    const NT_TEMPLATES = [
+        ['noNT', 'no NT'],
+        ['twoNoblesSame', '2 Commands Same of Selected'],
+        ['threeNoblesSame', '3 Commands Same of Selected'],
+        ['fourNoblesSame', '4 Commands Same of Selected'],
+        ['fiveNoblesSame', '5 Commands Same of Selected'],
+        ['secondNobleWithRest', '2 Nobles Selected/Rest'],
+        ['thirdNobleWithRest', '3 Nobles Selected/Rest'],
+        ['fourNobleWithRest', '4 Nobles Selected/Rest'],
+        ['fiveNobleWithRest', '5 Nobles Selected/Rest'],
+        ['splitSecondThirdNobleNT', 'Split in 2nd&3rd Noble NT'],
+        ['secondNobleBuffNT', '2nd Noble Buff NT'],
+        ['thirdNobleBuffNT', '3rd Noble Buff NT'],
+        ['secondNobleBuffWith5NoblesNT', '2nd Noble Buff With 5 Nobles NT'],
+        ['secondNobleBuffWith2NoblesNT', '2nd Noble Buff With 2 Nobles NT'],
+        ['firstNobleRedNT', '1st Noble Red NT'],
+        ['secondNobleRedNT', '2nd Noble Red NT'],
+        ['thirdNobleRedNT', '3rd Noble Red NT'],
+        ['fourthNobleRedNT', '4th Noble Red NT'],
+        ['firstNobleRed5NT', '1st Noble Red 5NT'],
+        ['secondNobleRed5NT', '2nd Noble Red 5NT'],
+        ['thirdNobleRed5NT', '3rd Noble Red 5NT'],
+    ];
 
     /* ═══════════════════════════════════════════════════════════════════════
        HELPERS
@@ -494,6 +521,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
             time:        overlay.querySelector('[name=time]').value,
             group:       overlay.querySelector('[name=group]').value,
             sigilia:     overlay.querySelector('[name=sigilia]').value,
+            ntTemplate:  overlay.querySelector('[name=ntTemplate]').value,
             commandType: overlay.querySelector('[name=commandType]').value,
         };
         try { localStorage.setItem(SIM_STORAGE_KEY, JSON.stringify(data)); } catch {}
@@ -519,6 +547,10 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
             `<option value="${g.id}"${saved.group === g.id ? ' selected' : ''}>${g.name}</option>`
         ).join('');
 
+        const ntOptions = NT_TEMPLATES.map(([key, label]) =>
+            `<option value="${key}"${(saved.ntTemplate || 'noNT') === key ? ' selected' : ''}>${label}</option>`
+        ).join('');
+
         return `
 <div id="sim-overlay">
   <div id="sim-titlebar">
@@ -540,6 +572,8 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
     <select name="group">${groupOptions}</select>
     <label>Sigilia(%)</label>
     <input name="sigilia" type="number" value="${saved.sigilia ?? 0}" min="0" max="100" />
+    <label>NT</label>
+    <select name="ntTemplate" title="Noble Train template aplicado ao popup do Kumin ao usar + Kumin">${ntOptions}</select>
     <div style="display:flex;align-items:center;gap:4px;flex-shrink:0;">
       <button type="button" id="sim-calcular">CALCULAR</button>
       <button type="button" class="sim-cmd-btn${(saved.commandType||'Attack')==='Attack' ? ' sim-cmd-active' : ''}" data-type="Attack" title="Ataque"><img src="https://dspt.innogamescdn.com/asset/48a2d4fb/graphic/command/attack.webp"></button>
@@ -587,7 +621,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
         return m;
     }
 
-    function renderTable(villages, usedUnits, targetX, targetY, targetVillageId, arrivalMs, cfg, selUnits, sigilPct) {
+    function renderTable(villages, usedUnits, targetX, targetY, targetVillageId, arrivalMs, cfg, selUnits, sigilPct, ntTemplate) {
         const active       = selUnits && selUnits.size ? selUnits : new Set(UNIT_ORDER);
         const now          = serverNowMs();
         const scheduledMap = computeScheduledByVillage();
@@ -649,7 +683,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
             const kuminDate = `${arrDate.getFullYear()}-${pad2(arrDate.getMonth()+1)}-${pad2(arrDate.getDate())}`
                             + `T${pad2(arrDate.getHours())}:${pad2(arrDate.getMinutes())}:${pad2(arrDate.getSeconds())}`
                             + `.${String(arrivalMs % 1000).padStart(3,'0')}`;
-            const kuminEntry = { name: r.name, source: `${r.x}|${r.y}`, target: `${targetX}|${targetY}`, date: kuminDate, commandType: _cmdType, units: troopsForUrl, sendMs: depMs, sigilPct: sigilPct || 0 };
+            const kuminEntry = { name: r.name, source: `${r.x}|${r.y}`, target: `${targetX}|${targetY}`, date: kuminDate, commandType: _cmdType, units: troopsForUrl, sendMs: depMs, sigilPct: sigilPct || 0, ntTemplate: ntTemplate || 'noNT' };
 
             /* AutoSender entry */
             const _sitterT = new URLSearchParams(window.location.search).get('t') || null;
@@ -695,10 +729,10 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
 
     function reRenderTable() {
         if (!_lastCalc) return;
-        const { villages, usedUnits, tx, ty, targetVillageId, arrivalMs, cfg, sigilPct } = _lastCalc;
+        const { villages, usedUnits, tx, ty, targetVillageId, arrivalMs, cfg, sigilPct, ntTemplate } = _lastCalc;
         const bodyEl = document.getElementById('sim-body');
         const pageEl = document.getElementById('sim-pagination');
-        bodyEl.innerHTML = renderTable(villages, usedUnits, tx, ty, targetVillageId, arrivalMs, cfg, _selUnits, sigilPct || 0);
+        bodyEl.innerHTML = renderTable(villages, usedUnits, tx, ty, targetVillageId, arrivalMs, cfg, _selUnits, sigilPct || 0, ntTemplate || 'noNT');
         const shown = bodyEl.querySelectorAll('#sim-table tbody tr').length;
         pageEl.textContent = `${shown} aldeias com partida futura · Chegada: ${fmtDatetime(arrivalMs)}`;
         startCountdown();
@@ -988,6 +1022,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
         const rawTime   = overlay.querySelector('[name=time]').value.trim();
         const groupId   = overlay.querySelector('[name=group]').value;
         const sigilPct  = Math.max(0, Math.min(100, parseInt(overlay.querySelector('[name=sigilia]').value || '0', 10)));
+        const ntTemplate = overlay.querySelector('[name=ntTemplate]')?.value || 'noNT';
 
         /* Validate target coords */
         const coordM = rawTarget.match(/(\d+)[|,\s]+(\d+)/);
@@ -1032,7 +1067,7 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
         _selUnits = new Set(usedUnits);
 
         /* Store for re-render on unit toggle */
-        _lastCalc = { villages, usedUnits, tx, ty, targetVillageId, arrivalMs: arrivalMsFull, cfg, sigilPct };
+        _lastCalc = { villages, usedUnits, tx, ty, targetVillageId, arrivalMs: arrivalMsFull, cfg, sigilPct, ntTemplate };
 
         reRenderTable();
         statusEl.textContent = `✓ ${villages.length} aldeias · gameSpeed=${cfg.gameSpeed} · unitSpeed=${cfg.unitSpeed} · clica nos ícones para filtrar unidades`;
@@ -1228,6 +1263,27 @@ td.sim-countdown.sim-urgent { color:#b00; animation:sim-pulse 0.8s infinite alte
             });
             const sigilEl = document.getElementById('popupSigil');
             if (sigilEl && entry.sigilPct != null) nativeSet(sigilEl, String(entry.sigilPct));
+
+            // Own small jittered delay, separate from the units/sigil fill above —
+            // guaranteed to resolve before the caller's jitter(400,100) wait-then-click
+            // (max 200ms here vs. min 300ms there), so it never races the submit click.
+            setTimeout(() => selectNtTemplate(entry), jitter(150, 50));
+        }
+
+        // Options in #popupNtTemplate carry the template key as their `id`
+        // attribute (not `value`), e.g. <option id="noNT">no NT</option> —
+        // so the right option is found by id, not by matching .value. Always
+        // explicitly applies a template (defaulting to noNT when the entry
+        // doesn't carry one) rather than leaving whatever was last selected —
+        // Kumin's popup can retain a stale selection from a previous command.
+        function selectNtTemplate(entry) {
+            const key = entry.ntTemplate || 'noNT';
+            const select = document.getElementById('popupNtTemplate');
+            if (!select) return;
+            const option = select.querySelector(`option[id="${key}"]`);
+            if (!option) return;
+            option.selected = true;
+            select.dispatchEvent(new Event('change', { bubbles: true }));
         }
 
         fillNext();
